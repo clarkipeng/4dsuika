@@ -285,18 +285,140 @@ struct ViewState {
     
 } state;
 
+
+// Result structure for ray intersection
+struct RayIntersectionResult {
+    bool hit = false;
+    float distance = FLT_MAX;
+    glm::vec3 point = glm::vec3(0.0f);
+    PhysicsObject* gameObject = nullptr;
+    
+    RayIntersectionResult() = default;
+    
+    RayIntersectionResult(bool h, float d, glm::vec3 p, PhysicsObject* obj)
+        : hit(h), distance(d), point(p), gameObject(obj) {}
+};
+
+RayIntersectionResult testRaySphereIntersection(const glm::vec3& rayOrigin, 
+                                                const glm::vec3& rayDirection, 
+                                                PhysicsObject* gameObject) {
+    RayIntersectionResult result;
+    
+    glm::vec3 oc = rayOrigin - glm::vec3(gameObject->position);
+    float a = glm::dot(rayDirection, rayDirection);
+    float b = 2.0f * glm::dot(oc, rayDirection);
+    float c = glm::dot(oc, oc) - (gameObject->radius * gameObject->radius - (gameObject->position.w - state.w)*(gameObject->position.w - state.w));
+    
+    float discriminant = b * b - 4 * a * c;
+
+    
+    if (discriminant < 0) {
+        return result; // No intersection, hit remains false
+    }
+    
+    // Calculate the two intersection points
+    float sqrt_discriminant = sqrt(discriminant);
+    float t1 = (-b - sqrt_discriminant) / (2.0f * a);
+    float t2 = (-b + sqrt_discriminant) / (2.0f * a);
+    
+    // We want the closest positive intersection
+    float t = -1.0f;
+    if (t1 > 0 && t2 > 0) {
+        t = std::min(t1, t2); // Both positive, take closest
+    } else if (t1 > 0) {
+        t = t1; // Only t1 is positive
+    } else if (t2 > 0) {
+        t = t2; // Only t2 is positive
+    }
+    
+    if (t > 0) {
+        result.hit = true;
+        result.distance = t;
+        result.point = rayOrigin + t * rayDirection;
+        result.gameObject = gameObject;
+    }
+    
+    return result;
+}
+
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
     state.onMouseButton(button, action, xpos, ypos);
 
-    if (button == GLFW_MOUSE_BUTTON_LEFT) {
-        if (action == GLFW_PRESS) {
-            place_object=true;
-        } else if (action == GLFW_RELEASE) {
+    glm::mat4 view_matrix = state.getViewMatrix();
+
+    // Get window dimensions
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    glm::mat4 projection_matrix = glm::perspective(
+        glm::radians(45.0f),
+        (float)windowWidth / (float)windowHeight,  // Fixed: use actual window dimensions
+        0.1f,
+        100.0f
+    );
+
+    // Ray casting calculation (only do this when we actually need it)
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        // Convert mouse coordinates to normalized device coordinates
+        float x = (2.0f * (float)xpos) / (float)windowWidth - 1.0f;
+        float y = 1.0f - (2.0f * (float)ypos) / (float)windowHeight;
+        
+        glm::vec3 ray_nds = glm::vec3(x, y, 1.0f);
+        glm::vec4 ray_clip = glm::vec4(ray_nds.x, ray_nds.y, -1.0f, 1.0f);
+        
+        // Transform to eye space
+        glm::vec4 ray_eye = glm::inverse(projection_matrix) * ray_clip;
+        ray_eye = glm::vec4(ray_eye.x, ray_eye.y, 1.0f, 0.0f);
+        
+        // Transform to world space
+        glm::vec3 ray_world = glm::vec3(glm::inverse(view_matrix) * ray_eye);
+        ray_world = glm::normalize(ray_world);  // Fixed: use glm::normalize
+        
+        // Ray origin is camera position
+        glm::vec3 ray_origin = state.getCameraPosition();
+        
+        // Now you can do intersection tests
+        // Example: Test against sphere
+        RayIntersectionResult closestResult;
+        for (int i=0;i<MAX_OBJECTS;i++) {
+            if (!physics_solver->has_obj[i]) continue;
+            RayIntersectionResult result = testRaySphereIntersection(ray_origin, ray_world, &physics_solver->objects[i]);
+            
+            if (result.hit && result.distance < closestResult.distance) {
+                closestResult = result;
+            }
+        }
+        std::cout << "Ray origin: " << ray_origin.x << ", " << ray_origin.y << ", " << ray_origin.z << std::endl;
+        std::cout << "Ray direction: " << ray_world.x << ", " << ray_world.y << ", " << ray_world.z << std::endl;
+
+        
+        if (closestResult.hit) {
+            std::cout<<"HIT"<<std::endl;
+            physics_solver->addObject(
+                PhysicsObject(glm::vec4(closestResult.point, 0.0f), 1, true, false
+                )
+            );
+        } else {
+            // if (objects.)
+
+            physics_solver->addObject(
+                PhysicsObject(glm::vec4(0.0f), 1, true, false
+                )
+            );
         }
     }
+    
+    // if (button == GLFW_MOUSE_BUTTON_LEFT) {
+    //     if (action == GLFW_PRESS) {
+    //         // place_object=true;
+    //     } else if (action == GLFW_RELEASE) {
+    //         // Handle release
+    //     }
+    // }
 }
+
 
 void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     state.onCursorPos(xpos, ypos);
@@ -321,7 +443,8 @@ Game::Game(unsigned int width, unsigned int height) {
     thread_pool = new tp::ThreadPool(4); // Adjust the number of threads as needed
 
     // glm::vec3 center, float radius, float angleDegrees = 90.0f, float margin = 0.01f
-    physics_solver = new PhysicSolver(*thread_pool, &boundary);
+    // physics_solver = new PhysicSolver(*thread_pool, &boundary);
+    physics_solver = new PhysicSolver(*thread_pool);
 }
 Game::~Game(){
     delete b_rend;
@@ -377,22 +500,22 @@ void Game::ProcessInput(float dt){
     // if (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_D) == GLFW_PRESS) {
     //     state.orbitTarget.x += 1.0f * dt; // Move right
     // }
-    if (place_object){
-        std::cout<<"OBJECT PLACED"<<std::endl;
+    // if (place_object){
+    //     std::cout<<"OBJECT PLACED"<<std::endl;
 
-        // Somewhere in your code where you're adding the physics object:
-        glm::vec3 randomOffset3D(
-            getRandomFloat(-0.5f, 0.5f),
-            getRandomFloat(-0.5f, 0.5f),
-            getRandomFloat(-0.5f, 0.5f)
-        );
+    //     // Somewhere in your code where you're adding the physics object:
+    //     glm::vec3 randomOffset3D(
+    //         getRandomFloat(-0.5f, 0.5f),
+    //         getRandomFloat(-0.5f, 0.5f),
+    //         getRandomFloat(-0.5f, 0.5f)
+    //     );
 
-        physics_solver->addObject(
-            PhysicsObject(glm::vec4(state.sphereCenter+randomOffset3D, 0.0f), 1, true, false
-            )
-        );
-        place_object = false;
-    }
+    //     physics_solver->addObject(
+    //         PhysicsObject(glm::vec4(state.sphereCenter+randomOffset3D, 0.0f), 1, true, false
+    //         )
+    //     );
+    //     place_object = false;
+    // }
 }
 void Game::Update(float dt){
     physics_solver->update(dt);

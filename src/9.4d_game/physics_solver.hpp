@@ -20,18 +20,25 @@ struct PhysicSolver
 
     std::vector<Boundary*> boundary;
 
-    glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
+    // glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
+    glm::vec4                   gravity = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Simulation solving pass count
     uint32_t        sub_steps;
 
     tp::ThreadPool& thread_pool;
 
+    PhysicSolver(tp::ThreadPool& tp): sub_steps{8}, thread_pool{tp}
+    {
+        for(int i=0;i<MAX_OBJECTS;i++) {
+            no_obj.insert(i);
+        }
+    }
+
     PhysicSolver(tp::ThreadPool& tp, Boundary *bound): sub_steps{8}, thread_pool{tp}
     {
         for(int i=0;i<MAX_OBJECTS;i++) {
             no_obj.insert(i);
-            // has_obj[i] = false;
         }
         boundary.push_back(bound);
     }
@@ -52,13 +59,20 @@ struct PhysicSolver
 
         if (dist2 < combined_radius * combined_radius && dist2 > EPS) {
             const float dist = std::sqrt(dist2);
-            const float penetration = (combined_radius - dist) / combined_radius;
+            const float penetration = (combined_radius - dist);// / combined_radius;
 
             if (penetration > 0.0f) {
-                const float delta = RESPONSE_COEF * 0.5f * penetration;
-                const glm::vec4 col_vec = (o2_o1 / dist) * delta;
-                obj_1.position += col_vec;
-                obj_2.position -= col_vec;
+                const float w1 = obj_1.dynamic ? obj_1.radius*obj_1.radius*obj_1.radius*obj_1.radius : 0.0f;
+                const float w2 = obj_2.dynamic ? obj_2.radius*obj_2.radius*obj_2.radius*obj_2.radius : 0.0f;
+
+                const float delta = RESPONSE_COEF * penetration;
+                obj_1.position += o2_o1 * (RESPONSE_COEF * penetration * w2) / ((w1+w2)*dist);
+                obj_2.position -= o2_o1 * (RESPONSE_COEF * penetration * w1) / ((w1+w2)*dist);
+
+                // if (obj_1.just_spawned || obj_2.just_spawned){
+                //     obj_1.last_position = obj_1.position;
+                //     obj_2.last_position = obj_2.position;
+                // }
             }
         }
     }

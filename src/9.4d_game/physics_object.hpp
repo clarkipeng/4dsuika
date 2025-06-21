@@ -15,15 +15,20 @@ public:
     glm::vec4 last_position;
     glm::vec4 acceleration;
 
-    float radius;
-    bool    dynamic;
-    bool    hidden;
+    float  target_radius;
+    float  radius;
+    bool   dynamic;
+    bool   hidden;
+    bool   growing; // used to prevent artificial velocity on first update
     // constructor(s)
     PhysicsObject(){
 
     }
-    PhysicsObject(glm::vec4 pos, float rad, bool dyn, bool hid): position(pos),last_position(pos), radius(rad), acceleration(0.0f, 0.0f, 0.0f, 0.0f),  dynamic(dyn), hidden(hid)
+    PhysicsObject(glm::vec4 pos, float rad, bool dyn, bool hid): position(pos),last_position(pos), acceleration(0.0f, 0.0f, 0.0f, 0.0f),  dynamic(dyn), hidden(hid)
     {
+        radius = 0;
+        target_radius = rad;
+        growing=true;
     }
     
     
@@ -35,7 +40,15 @@ public:
 
     void update(float dt)
     {
+        if (growing){
+            radius += target_radius * dt;
+            if (radius>target_radius){
+                radius=target_radius;
+                growing=false;
+            }
+        }
         glm::vec4 last_update_move = position - last_position;
+
         glm::vec4 new_position = position + last_update_move + (acceleration - last_update_move * VELOCITY_DAMPING) * (dt * dt);
         last_position           = position;
         position                = new_position;
