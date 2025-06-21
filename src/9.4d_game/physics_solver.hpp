@@ -2,6 +2,7 @@
 
 #include "globals.h"
 #include "physics_object.hpp"
+// #include "boundary.hpp"
 #include "boundary.hpp"
 #include "threadpool.hpp"
 #include <glm/glm.hpp>
@@ -15,22 +16,24 @@ struct PhysicSolver
     std::array<std::mutex,MAX_OBJECTS> object_locks;
     std::array<bool,MAX_OBJECTS> has_obj;
     std::set<int> no_obj;
+    
 
-    std::vector<Boundary> boundary;
+    std::vector<Boundary*> boundary;
 
-    glm::vec4                   gravity = {0.0f, 20.0f, 0.0f, 0.0f};
+    glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
 
     // Simulation solving pass count
     uint32_t        sub_steps;
 
     tp::ThreadPool& thread_pool;
 
-    PhysicSolver(tp::ThreadPool& tp): sub_steps{8}, thread_pool{tp}
+    PhysicSolver(tp::ThreadPool& tp, Boundary *bound): sub_steps{8}, thread_pool{tp}
     {
         for(int i=0;i<MAX_OBJECTS;i++) {
             no_obj.insert(i);
             // has_obj[i] = false;
         }
+        boundary.push_back(bound);
     }
 
     // Checks if two atoms are colliding and if so create a new contact
@@ -49,7 +52,7 @@ struct PhysicSolver
 
         if (dist2 < combined_radius * combined_radius && dist2 > EPS) {
             const float dist = std::sqrt(dist2);
-            const float penetration = combined_radius - dist;
+            const float penetration = (combined_radius - dist) / combined_radius;
 
             if (penetration > 0.0f) {
                 const float delta = RESPONSE_COEF * 0.5f * penetration;
@@ -148,10 +151,16 @@ struct PhysicSolver
 
     void updateBoundary_multi(float dt)
     {
+        thread_pool.dispatch(static_cast<uint32_t>(objects.size()), [&](uint32_t start, uint32_t end) {
+            for (uint32_t i = start; i < end; ++i) {
+                objects[i].acceleration += gravity;
+                objects[i].update(dt);
+            }
+        });
         for (const auto& bound_obj : boundary) {
             thread_pool.dispatch(static_cast<uint32_t>(objects.size()), [&](uint32_t start, uint32_t end) {
                 for (uint32_t i = start; i < end; ++i) {
-                    bound_obj.enforce(objects[i], dt, gravity);
+                    bound_obj->enforce(objects[i]);
                 }
             });
         }

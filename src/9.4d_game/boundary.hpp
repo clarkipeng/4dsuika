@@ -9,5 +9,5 @@ public:
     virtual ~Boundary() = default;
 
     // Called per object during boundary update
-    virtual void enforce(PhysicsObject& obj, float dt, const glm::vec3& gravity) const = 0;
+    virtual void enforce(PhysicsObject& obj) const = 0;
 };

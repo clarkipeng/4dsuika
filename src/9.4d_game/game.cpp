@@ -8,6 +8,7 @@
 #include "learnopengl/shader.h"
 #include "learnopengl/filesystem.h"
 
+#include "hemisphere_boundary.hpp"
 #include <random>
 
 //debug
@@ -29,6 +30,9 @@ const float max_height = light_radius*sin(angle_in_sky); // height of the sun at
 const glm::vec3 light_color(300.0f);
 
 
+HemisphereBoundary boundary(
+    glm::vec4(0.0f), // Center of the hemisphere
+    6);
 // GameObject        *Player;
 // BallObject        *Ball;
 // ParticleGenerator *Particles;
@@ -315,7 +319,9 @@ Game::Game(unsigned int width, unsigned int height) {
 
     // Initialize the physics solver and thread pool
     thread_pool = new tp::ThreadPool(4); // Adjust the number of threads as needed
-    physics_solver = new PhysicSolver(*thread_pool);
+
+    // glm::vec3 center, float radius, float angleDegrees = 90.0f, float margin = 0.01f
+    physics_solver = new PhysicSolver(*thread_pool, &boundary);
 }
 Game::~Game(){
     delete b_rend;
