@@ -1,4 +1,5 @@
 #include "game.h"
+#include "globals.h"
 #include "threadpool.hpp"
 #include "physics_solver.hpp"
 // #include "resource_manager.h"
@@ -9,6 +10,8 @@
 #include "learnopengl/filesystem.h"
 
 #include "hemisphere_boundary.hpp"
+#include "hemisphere_renderer.hpp"
+#include "shape.hpp"
 #include <random>
 
 //debug
@@ -18,6 +21,7 @@
 
 // Game-related State data
 BallRenderer    *b_rend;
+HemisphereRenderer    *h_rend;
 PhysicSolver *physics_solver;
 tp::ThreadPool *thread_pool;
 Shader *background_shader;
@@ -31,8 +35,7 @@ const glm::vec3 light_color(300.0f);
 
 
 HemisphereBoundary boundary(
-    glm::vec4(0.0f), // Center of the hemisphere
-    6);
+    glm::vec4(0.0f), 3);
 // GameObject        *Player;
 // BallObject        *Ball;
 // ParticleGenerator *Particles;
@@ -239,11 +242,6 @@ struct ViewState {
         return glm::lookAt(eye, orbitTarget, glm::vec3(0, 1, 0));
     }
 
-    // glm::mat4 getViewMatrix() const {
-    //     glm::vec3 camPos = getCameraPosition();
-    //     return glm::lookAt(camPos, orbitTarget, glm::vec3(0,1,0));
-    // }
-
     // Call on mouse button press/release
     void onMouseButton(int button, int action, double xpos, double ypos) {
         if (button == GLFW_MOUSE_BUTTON_RIGHT) {
@@ -285,61 +283,6 @@ struct ViewState {
     
 } state;
 
-
-// Result structure for ray intersection
-struct RayIntersectionResult {
-    bool hit = false;
-    float distance = FLT_MAX;
-    glm::vec3 point = glm::vec3(0.0f);
-    PhysicsObject* gameObject = nullptr;
-    
-    RayIntersectionResult() = default;
-    
-    RayIntersectionResult(bool h, float d, glm::vec3 p, PhysicsObject* obj)
-        : hit(h), distance(d), point(p), gameObject(obj) {}
-};
-
-RayIntersectionResult testRaySphereIntersection(const glm::vec3& rayOrigin, 
-                                                const glm::vec3& rayDirection, 
-                                                PhysicsObject* gameObject) {
-    RayIntersectionResult result;
-    
-    glm::vec3 oc = rayOrigin - glm::vec3(gameObject->position);
-    float a = glm::dot(rayDirection, rayDirection);
-    float b = 2.0f * glm::dot(oc, rayDirection);
-    float c = glm::dot(oc, oc) - (gameObject->radius * gameObject->radius - (gameObject->position.w - state.w)*(gameObject->position.w - state.w));
-    
-    float discriminant = b * b - 4 * a * c;
-
-    
-    if (discriminant < 0) {
-        return result; // No intersection, hit remains false
-    }
-    
-    // Calculate the two intersection points
-    float sqrt_discriminant = sqrt(discriminant);
-    float t1 = (-b - sqrt_discriminant) / (2.0f * a);
-    float t2 = (-b + sqrt_discriminant) / (2.0f * a);
-    
-    // We want the closest positive intersection
-    float t = -1.0f;
-    if (t1 > 0 && t2 > 0) {
-        t = std::min(t1, t2); // Both positive, take closest
-    } else if (t1 > 0) {
-        t = t1; // Only t1 is positive
-    } else if (t2 > 0) {
-        t = t2; // Only t2 is positive
-    }
-    
-    if (t > 0) {
-        result.hit = true;
-        result.distance = t;
-        result.point = rayOrigin + t * rayDirection;
-        result.gameObject = gameObject;
-    }
-    
-    return result;
-}
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     double xpos_d, ypos_d;
     glfwGetCursorPos(window, &xpos_d, &ypos_d);
@@ -387,20 +330,11 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
         glm::vec3 ray_origin    = nearPoint;
         glm::vec3 ray_direction = glm::normalize(farPoint - nearPoint);
 
-        std::cout << "Ray origin:    "
-                  << ray_origin.x << ", "
-                  << ray_origin.y << ", "
-                  << ray_origin.z << "\n";
-        std::cout << "Ray direction: "
-                  << ray_direction.x << ", "
-                  << ray_direction.y << ", "
-                  << ray_direction.z << "\n";
-
         // 5) Intersection test
-        RayIntersectionResult closestResult;
+        RayInter closestResult = boundary.checkRay(state.w,ray_origin,ray_direction);
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             if (!physics_solver->has_obj[i]) continue;
-            auto result = testRaySphereIntersection(ray_origin, ray_direction, &physics_solver->objects[i]);
+            auto result = physics_solver->objects[i].testRay(state.w, ray_origin, ray_direction);
             if (result.hit && result.distance < closestResult.distance) {
                 closestResult = result;
             }
@@ -408,22 +342,22 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 
         // 6) Spawn
         if (closestResult.hit) {
-            std::cout << "HIT\n";
+            // std::cout << "HIT\n";
             physics_solver->addObject(
-                PhysicsObject(glm::vec4(closestResult.point, 0.0f),
+                PhysicsObject(glm::vec4(closestResult.point, state.w),
                               /* radius: */ 1,
                               /* dynamic: */ true,
                               /* hidden: */ false)
             );
         } else {
-            // Place at some default distance in front of camera, e.g. 10 units
-            glm::vec3 spawnPos = ray_origin + ray_direction * 10.0f;
-            physics_solver->addObject(
-                PhysicsObject(glm::vec4(0.0f),
-                              /* radius: */ 1,
-                              /* dynamic: */ true,
-                              /* hidden: */ false)
-            );
+            // // Place at some default distance in front of camera, e.g. 10 units
+            // glm::vec3 spawnPos = ray_origin + ray_direction * 10.0f;
+            // physics_solver->addObject(
+            //     PhysicsObject(glm::vec4(0.0f),
+            //                   /* radius: */ 1,
+            //                   /* dynamic: */ true,
+            //                   /* hidden: */ false)
+            // );
         }
     }
 }
@@ -451,11 +385,12 @@ Game::Game(unsigned int width, unsigned int height) {
     thread_pool = new tp::ThreadPool(4); // Adjust the number of threads as needed
 
     // glm::vec3 center, float radius, float angleDegrees = 90.0f, float margin = 0.01f
-    // physics_solver = new PhysicSolver(*thread_pool, &boundary);
-    physics_solver = new PhysicSolver(*thread_pool);
+    physics_solver = new PhysicSolver(*thread_pool, &boundary);
+    // physics_solver = new PhysicSolver(*thread_pool);
 }
 Game::~Game(){
     delete b_rend;
+    delete h_rend;
     delete physics_solver;
     delete thread_pool;
 }
@@ -473,7 +408,8 @@ void Game::Init(GLFWwindow* window){
         glGetShaderInfoLog(ballshader->ID, 512, NULL, infoLog);
         std::cerr << "[ballshader] Link error:\n" << infoLog << std::endl;
     }
-    b_rend = new BallRenderer(ballshader, 5, SPHERE);
+    b_rend = new BallRenderer(ballshader, SPHERE, 5);
+    h_rend = new HemisphereRenderer(ballshader, SPHERE, 5);
 
     background_shader = new Shader("2.2.2.background.vs", "2.2.2.background.fs");
 
@@ -490,9 +426,8 @@ void Game::Init(GLFWwindow* window){
         FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // front
         FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // back
     };
-    simpleCubemap = loadCubemap(faces);
-    balltexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/metallic.png").c_str());
-
+    backgroundTexture = loadCubemap(faces);
+    defaultTexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/metallic.png").c_str());
 }
 void Game::ProcessInput(float dt){
     // // Handle input for camera movement
@@ -551,12 +486,10 @@ void Game::Render(){
     b_rend->shader->setMat4("projection", projection);
     b_rend->shader->setVec3("camPos", cameraPos);
     
-
-
     b_rend->shader->setFloat("metallic", 0.0f);
     b_rend->shader->setFloat("roughness", 0.5f);
     b_rend->shader->setFloat("ao", 1.0f);
-    b_rend->shader->setVec3("albedo", glm::vec3(1.0f, 0.5f, 0.5f)); // Set albedo color
+    // b_rend->shader->setVec3("albedo", glm::vec3(1.0f, 0.5f, 0.5f)); // Set albedo color
 
     float theta = 3.1415*(state.w-state.w_min) / (state.w_max-state.w_min); // or use glfwGetTime(), animating from 0 to 2π
     float x = light_radius * cos(theta);
@@ -609,7 +542,7 @@ void Game::Render(){
         // }
         
         // Render the object
-        b_rend->Draw4d(state.w, balltexture, obj.position, obj.radius, 
+        b_rend->Draw4d(state.w, defaultTexture, obj.position, obj.radius, 
                        glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
         // GLenum err;
         // while ((err = glGetError()) != GL_NO_ERROR) {
@@ -621,6 +554,17 @@ void Game::Render(){
     if (frameCount % 60 == 0) {
         std::cout << "Actually rendered: " << renderedCount << " objects" << std::endl;
     }
+
+
+    h_rend->shader->use();
+    h_rend->shader->setMat4("view", view);
+    h_rend->shader->setMat4("projection", projection);
+    h_rend->shader->setVec3("camPos", cameraPos);
+    h_rend->shader->setFloat("metallic", 0.0f);
+    h_rend->shader->setFloat("roughness", 0.5f);
+    h_rend->shader->setFloat("ao", 1.0f);
+
+    h_rend->Draw4d(state.w, defaultTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
 
     // Render skybox LAST (after all objects)
     glDepthFunc(GL_LEQUAL); // Change depth function so skybox renders behind everything
@@ -634,7 +578,7 @@ void Game::Render(){
     background_shader->setInt("environmentMap", 0);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, simpleCubemap);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
     renderCube();
     
     // Restore default depth function

@@ -30,6 +30,46 @@ public:
         target_radius = rad;
         growing=true;
     }
+
+    RayInter testRay(float w, const glm::vec3& rayOrigin, const glm::vec3& rayDirection){
+        RayInter out;
+        if (abs(position.w-w)>radius) return out;
+        
+        glm::vec3 oc = rayOrigin - glm::vec3(position);
+        float a = glm::dot(rayDirection, rayDirection);
+        float b = 2.0f * glm::dot(oc, rayDirection);
+        float c = glm::dot(oc, oc) - (radius * radius - (position.w - w)*(position.w - w));
+        
+        float discriminant = b * b - 4 * a * c;
+
+        
+        if (discriminant < 0) {
+            return out; // No intersection, hit remains false
+        }
+        
+        // Calculate the two intersection points
+        float sqrt_discriminant = sqrt(discriminant);
+        float t1 = (-b - sqrt_discriminant) / (2.0f * a);
+        float t2 = (-b + sqrt_discriminant) / (2.0f * a);
+        
+        // We want the closest positive intersection
+        float t = -1.0f;
+        if (t1 > 0 && t2 > 0) {
+            t = std::min(t1, t2); // Both positive, take closest
+        } else if (t1 > 0) {
+            t = t1; // Only t1 is positive
+        } else if (t2 > 0) {
+            t = t2; // Only t2 is positive
+        }
+        
+        if (t > 0) {
+            out.hit = true;
+            out.distance = t;
+            out.point = rayOrigin + t * rayDirection;
+        }
+        
+        return out;
+    }
     
     
     void setPosition(glm::vec4 pos)
@@ -41,7 +81,7 @@ public:
     void update(float dt)
     {
         if (growing){
-            radius += target_radius * dt;
+            radius += target_radius * dt * GROW_SPEED;
             if (radius>target_radius){
                 radius=target_radius;
                 growing=false;

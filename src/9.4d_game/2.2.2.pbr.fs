@@ -5,7 +5,8 @@ in vec3 WorldPos;
 in vec3 Normal;
 
 // material parameters
-uniform vec3 albedo;
+// uniform vec3 albedo;
+uniform sampler2D albedoMap;   // <-- your texture
 uniform float metallic;
 uniform float roughness;
 uniform float ao;
@@ -68,6 +69,7 @@ void main()
 {		
     // FragColor = vec4(normalize(Normal) * 0.5 + 0.5, 1.0);
     // return;
+    vec3 albedo = texture(albedoMap, TexCoords).rgb;
 
     vec3 N = normalize(Normal);
     vec3 V = normalize(camPos - WorldPos);

@@ -20,8 +20,8 @@ struct PhysicSolver
 
     std::vector<Boundary*> boundary;
 
-    // glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
-    glm::vec4                   gravity = {0.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
+    // glm::vec4                   gravity = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Simulation solving pass count
     uint32_t        sub_steps;
@@ -174,7 +174,7 @@ struct PhysicSolver
         for (const auto& bound_obj : boundary) {
             thread_pool.dispatch(static_cast<uint32_t>(objects.size()), [&](uint32_t start, uint32_t end) {
                 for (uint32_t i = start; i < end; ++i) {
-                    bound_obj->enforce(objects[i]);
+                    bound_obj->checkSphere(objects[i]);
                 }
             });
         }

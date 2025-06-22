@@ -1,3 +1,5 @@
+#pragma once
+
 #include <vector>
 #include <unordered_map>
 #include <cmath>
@@ -30,7 +32,7 @@ void generateSphereMesh(int stacks, int slices, std::vector<float>& vertices, st
             vertices.push_back(x);     // pos.x
             vertices.push_back(y);     // pos.y
             vertices.push_back(z);     // pos.z
-            
+
             vertices.push_back(x);     // pos.x
             vertices.push_back(y);     // pos.y
             vertices.push_back(z);     // pos.z
@@ -145,124 +147,211 @@ void generateBall(
     std::vector<unsigned int>& indices
     ){
     if (shape == ICOSPHERE) {
-        generateIcosphere(fidelity*4, vertices, indices);
+        generateIcosphere(fidelity, vertices, indices);
     } else {
         generateSphereMesh(fidelity*12, fidelity*12, vertices, indices);
     }
 }
-void generateBowl(
-    ShapeType shape,
-    int fidelity,
-    float sigma,     // clipping angle from top in radians, 0 = tip, PI = full sphere
+void generateBowlMesh(
+    int stacks,
+    int slices,
+    float sigma,              // Clipping angle from top, in radians (0 = tip, PI = hemisphere)
     float innerRadius,
     float outerRadius,
     std::vector<float>& vertices,
     std::vector<unsigned int>& indices
 ) {
-    std::vector<float> fullVerts;
-    std::vector<unsigned int> fullIndices;
+    vertices.clear();
+    indices.clear();
 
-    // Generate full sphere mesh first
-    if (shape == ICOSPHERE) {
-        generateIcosphere(fidelity, fullVerts, fullIndices);
-    } else {
-        generateSphereMesh(fidelity*12, fidelity*12, fullVerts, fullIndices);
-    }
+    int bowlStacks = std::max(1, int((sigma / glm::pi<float>()) * stacks));
 
-    // Maps old vertex index to new vertex index for outer and inner surfaces
-    std::vector<unsigned int> outerMap(fullVerts.size() / 3, std::numeric_limits<unsigned int>::max());
-    std::vector<unsigned int> innerMap(fullVerts.size() / 3, std::numeric_limits<unsigned int>::max());
-    std::vector<float> bowlVerts;
-    std::vector<unsigned int> bowlIndices;
+    // Outer & inner shell
+    for (int shell = 0; shell < 2; ++shell) {
+        float radius = (shell == 0) ? outerRadius : innerRadius;
+        bool flip = (shell == 1);
 
-    // Precompute cosine of sigma for clipping by angle from top (y-axis)
-    float cosSigma = std::cos(sigma);
+        for (int i = 0; i <= bowlStacks; ++i) {
+            float v = (float)i / bowlStacks;
+            float phi = sigma * v;
 
-    // Keep vertices only where angle between vertex pos and +Y axis is >= sigma
-    // Equivalently, keep vertices where y <= cosSigma (since normalized vertices)
-    for (size_t i = 0; i < fullVerts.size(); i += 3) {
-        glm::vec3 pos(fullVerts[i], fullVerts[i + 1], fullVerts[i + 2]);
-        float y = pos.y;
+            for (int j = 0; j <= slices; ++j) {
+                float u = (float)j / slices;
+                float theta = 2.0f * glm::pi<float>() * u;
 
-        if (y <= cosSigma) {
-            glm::vec3 norm = glm::normalize(pos);
+                float x = sin(phi) * cos(theta);
+                float y = -cos(phi);
+                float z = sin(phi) * sin(theta);
 
-            // Outer vertex
-            unsigned int outerIdx = static_cast<unsigned int>(bowlVerts.size() / 3);
-            outerMap[i / 3] = outerIdx;
-            glm::vec3 outerPos = norm * outerRadius;
-            bowlVerts.push_back(outerPos.x);
-            bowlVerts.push_back(outerPos.y);
-            bowlVerts.push_back(outerPos.z);
+                glm::vec3 pos = radius * glm::vec3(x, y, z);
+                glm::vec3 norm = glm::normalize(glm::vec3(x, y, z));
+                if (flip) norm = -norm;
 
-            // Inner vertex (norm reversed)
-            unsigned int innerIdx = static_cast<unsigned int>(bowlVerts.size() / 3);
-            innerMap[i / 3] = innerIdx;
-            glm::vec3 innerPos = norm * innerRadius;
-            bowlVerts.push_back(innerPos.x);
-            bowlVerts.push_back(innerPos.y);
-            bowlVerts.push_back(innerPos.z);
-        }
-    }
-
-    // Outer surface triangles + inner surface triangles (reversed winding)
-    for (size_t i = 0; i < fullIndices.size(); i += 3) {
-        unsigned int a = fullIndices[i];
-        unsigned int b = fullIndices[i + 1];
-        unsigned int c = fullIndices[i + 2];
-
-        if (outerMap[a] != std::numeric_limits<unsigned int>::max() &&
-            outerMap[b] != std::numeric_limits<unsigned int>::max() &&
-            outerMap[c] != std::numeric_limits<unsigned int>::max()) {
-            bowlIndices.push_back(outerMap[a]);
-            bowlIndices.push_back(outerMap[b]);
-            bowlIndices.push_back(outerMap[c]);
-        }
-
-        if (innerMap[a] != std::numeric_limits<unsigned int>::max() &&
-            innerMap[b] != std::numeric_limits<unsigned int>::max() &&
-            innerMap[c] != std::numeric_limits<unsigned int>::max()) {
-            // reversed winding order for inner surface
-            bowlIndices.push_back(innerMap[c]);
-            bowlIndices.push_back(innerMap[b]);
-            bowlIndices.push_back(innerMap[a]);
-        }
-    }
-
-    // Side wall stitching along the cutoff rim (where vertex.y approx equals cosSigma)
-    const float epsilon = 0.01f;
-    for (size_t i = 0; i < fullVerts.size(); i += 3) {
-        float y = fullVerts[i + 1];
-        if (std::abs(y - cosSigma) <= epsilon) {
-            unsigned int outerIdx = outerMap[i / 3];
-            unsigned int innerIdx = innerMap[i / 3];
-            if (outerIdx == std::numeric_limits<unsigned int>::max() || innerIdx == std::numeric_limits<unsigned int>::max())
-                continue;
-
-            // Try to find a neighbor vertex near rim to create quad
-            // For simplicity, loop through all vertices again, connect closest in rim neighborhood
-            for (size_t j = i + 3; j < fullVerts.size(); j += 3) {
-                float y2 = fullVerts[j + 1];
-                if (std::abs(y2 - cosSigma) <= epsilon) {
-                    unsigned int outerNext = outerMap[j / 3];
-                    unsigned int innerNext = innerMap[j / 3];
-                    if (outerNext == std::numeric_limits<unsigned int>::max() || innerNext == std::numeric_limits<unsigned int>::max())
-                        continue;
-
-                    // Build two triangles for side wall quad: outerIdx, outerNext, innerNext, innerIdx
-                    bowlIndices.push_back(outerIdx);
-                    bowlIndices.push_back(outerNext);
-                    bowlIndices.push_back(innerNext);
-
-                    bowlIndices.push_back(innerNext);
-                    bowlIndices.push_back(innerIdx);
-                    bowlIndices.push_back(outerIdx);
-                    break;
-                }
+                vertices.push_back(pos.x);
+                vertices.push_back(pos.y);
+                vertices.push_back(pos.z);
+                vertices.push_back(norm.x);
+                vertices.push_back(norm.y);
+                vertices.push_back(norm.z);
+                vertices.push_back(u);       // tex.u
+                vertices.push_back(v);       // tex.v
             }
         }
     }
 
-    vertices = std::move(bowlVerts);
-    indices = std::move(bowlIndices);
+    int ringVerts = slices + 1;
+    int outerOffset = 0;
+    int innerOffset = (bowlStacks + 1) * ringVerts;
+
+    // Outer shell indices
+    for (int i = 0; i < bowlStacks; ++i) {
+        for (int j = 0; j < slices; ++j) {
+            int a = outerOffset + i * ringVerts + j;
+            int b = a + ringVerts;
+            int c = a + 1;
+            int d = b + 1;
+
+            indices.push_back(a);
+            indices.push_back(b);
+            indices.push_back(c);
+
+            indices.push_back(b);
+            indices.push_back(d);
+            indices.push_back(c);
+        }
+    }
+
+    // Inner shell indices (reverse winding)
+    for (int i = 0; i < bowlStacks; ++i) {
+        for (int j = 0; j < slices; ++j) {
+            int a = innerOffset + i * ringVerts + j;
+            int b = a + ringVerts;
+            int c = a + 1;
+            int d = b + 1;
+
+            indices.push_back(c);
+            indices.push_back(b);
+            indices.push_back(a);
+
+            indices.push_back(c);
+            indices.push_back(d);
+            indices.push_back(b);
+        }
+    }
+
+    // Rim stitching
+    for (int j = 0; j < slices; ++j) {
+        int o0 = outerOffset + bowlStacks * ringVerts + j;
+        int o1 = o0 + 1;
+        int i0 = innerOffset + bowlStacks * ringVerts + j;
+        int i1 = i0 + 1;
+
+        // Outer to inner rim
+        indices.push_back(o0);
+        indices.push_back(o1);
+        indices.push_back(i1);
+
+        indices.push_back(i1);
+        indices.push_back(i0);
+        indices.push_back(o0);
+    }
 }
+
+
+// void generateBowl(
+//     ShapeType shape,
+//     int fidelity,
+//     float sigma,         // clipping angle from top in radians, 0 = tip, PI = full sphere
+//     float innerRadius,
+//     float outerRadius,
+//     std::vector<float>& vertices,
+//     std::vector<unsigned int>& indices
+// ) {
+//     std::vector<float> fullVerts;
+//     std::vector<unsigned int> fullIndices;
+
+//     if (shape == ICOSPHERE) {
+//         generateIcosphere(fidelity, fullVerts, fullIndices);
+//     } else {
+//         generateSphereMesh(fidelity * 12, fidelity * 12, fullVerts, fullIndices);
+//     }
+
+//     float cosSigma = std::cos(sigma);
+//     size_t vertCount = fullVerts.size() / 8;
+
+//     std::vector<unsigned int> outerMap(vertCount, UINT_MAX);
+//     std::vector<unsigned int> innerMap(vertCount, UINT_MAX);
+    
+//     std::vector<unsigned int> outerRim, innerRim;
+
+//     for (size_t i = 0; i < vertCount; ++i) {
+//         glm::vec3 pos(fullVerts[8 * i], fullVerts[8 * i + 1], fullVerts[8 * i + 2]);
+//         if (pos.y <= cosSigma) {
+//             glm::vec3 n = glm::normalize(pos);
+
+//             glm::vec3 op = n * outerRadius;
+//             unsigned int outerIndex = vertices.size() / 8;
+//             outerMap[i] = outerIndex;
+//             vertices.insert(vertices.end(), {op.x, op.y, op.z, n.x, n.y, n.z, (n.x + 1) * 0.5f, (n.y + 1) * 0.5f});
+
+//             glm::vec3 ip = n * innerRadius;
+//             unsigned int innerIndex = vertices.size() / 8;
+//             innerMap[i] = innerIndex;
+//             vertices.insert(vertices.end(), {ip.x, ip.y, ip.z, -n.x, -n.y, -n.z, (n.x + 1) * 0.5f, (n.y + 1) * 0.5f});
+//         }
+//         if (std::abs(pos.y - cosSigma) < 0.01f) {
+//             glm::vec2 dir = glm::normalize(glm::vec2(pos.x, pos.z)); // radial direction
+//             float y = cosSigma;
+//             glm::vec3 op(dir.x * outerRadius, y, dir.y * outerRadius);
+//             glm::vec3 on = glm::normalize(glm::vec3(dir.x, 0, dir.y));
+//             unsigned int oIdx = vertices.size() / 8;
+//             vertices.insert(vertices.end(), {
+//                 op.x, op.y, op.z,
+//                 on.x, on.y, on.z,
+//                 (on.x + 1) * 0.5f, (on.z + 1) * 0.5f
+//             });
+//             outerRim.push_back(oIdx);
+
+//             // Inner rim vertex
+//             glm::vec3 ip(dir.x * innerRadius, y, dir.y * innerRadius);
+//             glm::vec3 in = -on;
+//             unsigned int iIdx = vertices.size() / 8;
+//             vertices.insert(vertices.end(), {
+//                 ip.x, ip.y, ip.z,
+//                 in.x, in.y, in.z,
+//                 (in.x + 1) * 0.5f, (in.z + 1) * 0.5f
+//             });
+//             innerRim.push_back(iIdx);
+//         }
+//     }
+
+//     // Shell triangles
+//     for (size_t i = 0; i < fullIndices.size(); i += 3) {
+//         unsigned int a = fullIndices[i];
+//         unsigned int b = fullIndices[i + 1];
+//         unsigned int c = fullIndices[i + 2];
+
+//         if (outerMap[a] != UINT_MAX && outerMap[b] != UINT_MAX && outerMap[c] != UINT_MAX) {
+//             indices.insert(indices.end(), {outerMap[a], outerMap[b], outerMap[c]});
+//         }
+//         if (innerMap[a] != UINT_MAX && innerMap[b] != UINT_MAX && innerMap[c] != UINT_MAX) {
+//             indices.insert(indices.end(), {innerMap[c], innerMap[b], innerMap[a]});
+//         }
+//     }
+//     size_t count = outerRim.size();
+//     for (size_t i = 0; i < count; ++i) {
+//         size_t j = (i + 1) % count;
+
+//         // Outer shell to rim
+//         indices.insert(indices.end(), {
+//             outerRim[i], outerRim[j], outerMap[i],
+//             outerMap[i], outerMap[j], outerRim[j]
+//         });
+
+//         // Inner shell to rim (reverse winding)
+//         indices.insert(indices.end(), {
+//             innerMap[j], innerMap[i], innerRim[i],
+//             innerRim[i], innerRim[j], innerMap[j]
+//         });
+//     }
+// }

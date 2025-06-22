@@ -39,8 +39,8 @@ public:
     bool                    KeysProcessed[1024];
     unsigned int            Width, Height;
 
-    unsigned int simpleCubemap;
-    unsigned int balltexture;
+    unsigned int backgroundTexture;
+    unsigned int defaultTexture;
 
 
     // constructor/destructor

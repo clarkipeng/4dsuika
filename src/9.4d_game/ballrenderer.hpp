@@ -7,11 +7,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "learnopengl/shader.h"
+
 #include "shape.hpp"
 
 class BallRenderer
 {
-private:
+protected:
     ShapeType shape_type;
     int fidelity = 2;
     int vertices_count, indices_count;
@@ -20,7 +21,7 @@ private:
 public:
     Shader *shader;
     
-    BallRenderer(Shader *shader, int fidelity_ = 1, ShapeType shape_type = ICOSPHERE)
+    BallRenderer(Shader *shader, ShapeType shape_type = ICOSPHERE, int fidelity_ = 1)
         : shader(shader), shape_type(shape_type), fidelity(fidelity_)
     {
         this->initRenderData();
@@ -33,7 +34,7 @@ public:
         glDeleteBuffers(1, &this->ebo);
     }
 
-    void Draw4d(float w_coord, unsigned int texture, glm::vec4 position, float scale, 
+    void virtual Draw4d(float w_coord, unsigned int texture, glm::vec4 position, float scale, 
                 glm::vec3 rotation = glm::vec3(0.0f), glm::vec3 color = glm::vec3(1.0f))
     {
         glm::mat4 model = glm::mat4(1.0f);
@@ -69,7 +70,7 @@ public:
         glBindVertexArray(0);
     }
 
-    void Draw3d(glm::vec3 position, unsigned int texture, float scale, 
+    void virtual Draw3d(glm::vec3 position, unsigned int texture, float scale, 
                 glm::vec3 rotation = glm::vec3(0.0f), glm::vec3 color = glm::vec3(1.0f))
     {
         glm::mat4 model = glm::mat4(1.0f);
@@ -98,8 +99,8 @@ public:
         glBindVertexArray(0);
     }
 
-private:
-    void initRenderData()
+protected:
+    virtual void initRenderData()
     {
         std::vector<float> vertices;
         std::vector<unsigned int> indices;
