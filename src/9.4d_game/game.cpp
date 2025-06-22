@@ -340,85 +340,93 @@ RayIntersectionResult testRaySphereIntersection(const glm::vec3& rayOrigin,
     
     return result;
 }
-
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    double xpos, ypos;
-    glfwGetCursorPos(window, &xpos, &ypos);
+    double xpos_d, ypos_d;
+    glfwGetCursorPos(window, &xpos_d, &ypos_d);
+    float xpos = static_cast<float>(xpos_d);
+    float ypos = static_cast<float>(ypos_d);
+
     state.onMouseButton(button, action, xpos, ypos);
 
+    // Build view & projection
     glm::mat4 view_matrix = state.getViewMatrix();
 
-    // Get window dimensions
     int windowWidth, windowHeight;
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
 
     glm::mat4 projection_matrix = glm::perspective(
         glm::radians(45.0f),
-        (float)windowWidth / (float)windowHeight,  // Fixed: use actual window dimensions
-        0.1f,
+        float(windowWidth) / float(windowHeight),
+        0.1f, 
         100.0f
     );
 
-    // Ray casting calculation (only do this when we actually need it)
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        // Convert mouse coordinates to normalized device coordinates
-        float x = (2.0f * (float)xpos) / (float)windowWidth - 1.0f;
-        float y = 1.0f - (2.0f * (float)ypos) / (float)windowHeight;
-        
-        glm::vec3 ray_nds = glm::vec3(x, y, 1.0f);
-        glm::vec4 ray_clip = glm::vec4(ray_nds.x, ray_nds.y, -1.0f, 1.0f);
-        
-        // Transform to eye space
-        glm::vec4 ray_eye = glm::inverse(projection_matrix) * ray_clip;
-        ray_eye = glm::vec4(ray_eye.x, ray_eye.y, 1.0f, 0.0f);
-        
-        // Transform to world space
-        glm::vec3 ray_world = glm::vec3(glm::inverse(view_matrix) * ray_eye);
-        ray_world = glm::normalize(ray_world);  // Fixed: use glm::normalize
-        
-        // Ray origin is camera position
-        glm::vec3 ray_origin = state.getCameraPosition();
-        
-        // Now you can do intersection tests
-        // Example: Test against sphere
+        // 1) Flip Y for OpenGL coords
+        float winX = xpos;
+        float winY = windowHeight - ypos;
+
+        // 2) Viewport
+        glm::vec4 viewport(0, 0, windowWidth, windowHeight);
+
+        // 3) Unproject near & far
+        glm::vec3 nearPoint = glm::unProject(
+            glm::vec3(winX, winY, 0.0f),
+            view_matrix,
+            projection_matrix,
+            viewport
+        );
+        glm::vec3 farPoint = glm::unProject(
+            glm::vec3(winX, winY, 1.0f),
+            view_matrix,
+            projection_matrix,
+            viewport
+        );
+
+        // 4) Build ray
+        glm::vec3 ray_origin    = nearPoint;
+        glm::vec3 ray_direction = glm::normalize(farPoint - nearPoint);
+
+        std::cout << "Ray origin:    "
+                  << ray_origin.x << ", "
+                  << ray_origin.y << ", "
+                  << ray_origin.z << "\n";
+        std::cout << "Ray direction: "
+                  << ray_direction.x << ", "
+                  << ray_direction.y << ", "
+                  << ray_direction.z << "\n";
+
+        // 5) Intersection test
         RayIntersectionResult closestResult;
-        for (int i=0;i<MAX_OBJECTS;i++) {
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
             if (!physics_solver->has_obj[i]) continue;
-            RayIntersectionResult result = testRaySphereIntersection(ray_origin, ray_world, &physics_solver->objects[i]);
-            
+            auto result = testRaySphereIntersection(ray_origin, ray_direction, &physics_solver->objects[i]);
             if (result.hit && result.distance < closestResult.distance) {
                 closestResult = result;
             }
         }
-        std::cout << "Ray origin: " << ray_origin.x << ", " << ray_origin.y << ", " << ray_origin.z << std::endl;
-        std::cout << "Ray direction: " << ray_world.x << ", " << ray_world.y << ", " << ray_world.z << std::endl;
 
-        
+        // 6) Spawn
         if (closestResult.hit) {
-            std::cout<<"HIT"<<std::endl;
+            std::cout << "HIT\n";
             physics_solver->addObject(
-                PhysicsObject(glm::vec4(closestResult.point, 0.0f), 1, true, false
-                )
+                PhysicsObject(glm::vec4(closestResult.point, 0.0f),
+                              /* radius: */ 1,
+                              /* dynamic: */ true,
+                              /* hidden: */ false)
             );
         } else {
-            // if (objects.)
-
+            // Place at some default distance in front of camera, e.g. 10 units
+            glm::vec3 spawnPos = ray_origin + ray_direction * 10.0f;
             physics_solver->addObject(
-                PhysicsObject(glm::vec4(0.0f), 1, true, false
-                )
+                PhysicsObject(glm::vec4(0.0f),
+                              /* radius: */ 1,
+                              /* dynamic: */ true,
+                              /* hidden: */ false)
             );
         }
     }
-    
-    // if (button == GLFW_MOUSE_BUTTON_LEFT) {
-    //     if (action == GLFW_PRESS) {
-    //         // place_object=true;
-    //     } else if (action == GLFW_RELEASE) {
-    //         // Handle release
-    //     }
-    // }
 }
-
 
 void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     state.onCursorPos(xpos, ypos);
