@@ -6,10 +6,10 @@ const int MAX_OBJECTS = 100;
 const float VELOCITY_DAMPING = 1000.0f;
 // const float RESPONSE_COEF = 1.0f;
 // const float VELOCITY_DAMPING = 10000.0f;
-const float RESPONSE_COEF = 1.0f;
+// const float RESPONSE_COEF = 1.0f;
+const float RESPONSE_COEF = 0.5f;
 const float GROW_SPEED = 5.0f;
 const float EPS           = 0.0001f;
-
 
 // Result structure for ray intersection
 struct RayInter{
@@ -21,6 +21,27 @@ struct RayInter{
     
     RayInter(bool h, float d, glm::vec3 p)
         : hit(h), distance(d), point(p) {}
+};
+
+enum Fruit{
+    CHERRY,
+    STRAWBERRY,
+    GRAPE,
+    DEKOPON,
+    PERSIMMON,
+    APPLE,
+    PEAR,
+    PEACH,
+    PINEAPPLE,
+    MELON,
+    WATERMELON,
+};
+struct FruitProperties{
+    float metallic;
+    float roughness;
+    float ao;
+    float alpha;
+    glm::vec3 albedo;
 };
 
 #endif

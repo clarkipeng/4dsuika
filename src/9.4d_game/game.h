@@ -41,6 +41,7 @@ public:
 
     unsigned int backgroundTexture;
     unsigned int defaultTexture;
+    unsigned int bowlTexture;
 
 
     // constructor/destructor

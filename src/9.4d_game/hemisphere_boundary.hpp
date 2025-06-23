@@ -18,42 +18,84 @@ public:
         cutoffAngle = glm::radians(angleDegrees);
     }
     void checkSphere(PhysicsObject& obj) const override {
-        glm::vec4 pos4 = obj.position;
-        glm::vec4 prev_pos4 = obj.last_position;
+        const float inner_radius = radius - margin;
+        const float outer_radius = radius + margin;
+        const float required_dist = obj.radius;
 
-        glm::vec4 offset4 = pos4 - center;
-        float dist = glm::length(offset4);
+        glm::vec4 pos = obj.position;
+        glm::vec4 prev = obj.last_position;
+
+        glm::vec4 offset = pos - center;
+        float dist = glm::length(offset);
         if (dist < 1e-6f) return;
 
-        glm::vec4 normal4 = offset4 / dist;
-        bool hit = false;
+        glm::vec4 normal = offset / dist;
+        glm::vec4 down = glm::vec4(0, -1, 0, 0);
+        float cos_theta = glm::clamp(glm::dot(normal, down), -1.0f, 1.0f);
+        float angle = glm::acos(cos_theta);
 
-        // Define your 4D "down" direction - this example uses y-axis only
-        glm::vec4 down4 = glm::vec4(0, -1, 0, 0);
-        
-        float angle = glm::acos(glm::clamp(glm::dot(normal4, down4), -1.0f, 1.0f));
-
-        // 4D sphere boundaries - these are 4D radii, not projected 3D distances
-        float outer_4d_radius = radius + margin + obj.radius;
-        float inner_4d_radius = radius - margin - obj.radius;
-
-        if (dist > inner_4d_radius && dist < outer_4d_radius && angle < cutoffAngle) {
-            // Push to appropriate boundary based on which side object is on
-            float target_dist = (dist < radius) ? inner_4d_radius : outer_4d_radius;
-            offset4 = normal4 * target_dist;
-            pos4 = center + offset4;
-            hit = true;
+        // Clamp normal to cutoffAngle cone (if above it)
+        if (angle > cutoffAngle) {
+            float clamped_cos = glm::cos(cutoffAngle);
+            glm::vec4 perp = normal - cos_theta * down;
+            float perp_len = glm::length(perp);
+            if (perp_len > 1e-6f) {
+                perp /= perp_len;
+                normal = clamped_cos * down + glm::sqrt(1.0f - clamped_cos * clamped_cos) * perp;
+            } else {
+                normal = glm::vec4(glm::sin(cutoffAngle), -glm::cos(cutoffAngle), 0.0f, 0.0f);
+            }
+            normal = glm::normalize(normal);
         }
 
-        if (hit) {
-            // Keep all 4D components
-            obj.position = pos4;
+        // Points on inner/outer shell
+        glm::vec4 inner_point = center + normal * inner_radius;
+        glm::vec4 outer_point = center + normal * outer_radius;
 
-            glm::vec4 velocity = pos4 - prev_pos4;
-            glm::vec4 tangent = velocity - glm::dot(velocity, normal4) * normal4;
-            obj.last_position = pos4 - tangent;
+        // Rim edge point
+        float rim_y = center.y - inner_radius * glm::cos(cutoffAngle);
+        float rim_rad = inner_radius * glm::sin(cutoffAngle);
+        glm::vec4 rim_offset = offset;
+        rim_offset.y = 0;  // Flatten to horizontal rim plane
+
+        float rim_len = glm::length(rim_offset);
+        if (rim_len > 1e-6f) rim_offset = rim_offset / rim_len * rim_rad;
+        else rim_offset = glm::vec4(rim_rad, 0, 0, 0); // Default rim direction
+
+        glm::vec4 rim_point = glm::vec4(center.x + rim_offset.x, rim_y, center.z + rim_offset.z, center.w + rim_offset.w);
+
+        // Find closest surface point
+        float d_inner = glm::length(pos - inner_point);
+        float d_outer = glm::length(pos - outer_point);
+        float d_rim   = glm::length(pos - rim_point);
+
+        glm::vec4 closest = inner_point;
+        float min_dist = d_inner;
+
+        if (d_outer < min_dist) {
+            min_dist = d_outer;
+            closest = outer_point;
+        }
+        if (d_rim < min_dist) {
+            min_dist = d_rim;
+            closest = rim_point;
+        }
+
+        if (min_dist < required_dist) {
+            glm::vec4 push_dir = pos - closest;
+            float len = glm::length(push_dir);
+            push_dir = (len > 1e-6f) ? push_dir / len : glm::vec4(0, 1, 0, 0);
+            pos = closest + push_dir * required_dist;
+
+            obj.position = pos;
+
+            glm::vec4 velocity = pos - prev;
+            glm::vec4 tangent = velocity - glm::dot(velocity, push_dir) * push_dir;
+            obj.last_position = pos - tangent;
         }
     }
+
+
 
     RayInter checkRay(float w, const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const override {
         RayInter out;

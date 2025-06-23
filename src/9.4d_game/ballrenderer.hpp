@@ -10,6 +10,7 @@
 
 #include "shape.hpp"
 
+
 class BallRenderer
 {
 protected:
@@ -70,7 +71,7 @@ public:
         glBindVertexArray(0);
     }
 
-    void virtual Draw3d(glm::vec3 position, unsigned int texture, float scale, 
+    void virtual Draw3d(unsigned int texture, glm::vec3 position, float scale, 
                 glm::vec3 rotation = glm::vec3(0.0f), glm::vec3 color = glm::vec3(1.0f))
     {
         glm::mat4 model = glm::mat4(1.0f);

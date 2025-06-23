@@ -33,7 +33,6 @@ const float angle_in_sky = glm::radians(30.0f);
 const float max_height = light_radius*sin(angle_in_sky); // height of the sun at its peak (noon)
 const glm::vec3 light_color(300.0f);
 
-
 HemisphereBoundary boundary(
     glm::vec4(0.0f), 3);
 // GameObject        *Player;
@@ -48,6 +47,10 @@ float                   angle=0;
 float                   angle_speed=10;
 float                   dim4=0;
 bool place_object = false;
+
+// enum FRUIT{
+//     CHER
+// }
 
 float getRandomFloat(float min, float max) {
     static std::random_device rd;
@@ -224,6 +227,15 @@ struct ViewState {
     bool rotating = false;
     double lastX = 0.0, lastY = 0.0;
 
+    int windowWidth, windowHeight;
+    float m_xpos, m_ypos;
+
+    bool initialized=false;
+    bool mouseMoved=false;
+    void Init(GLFWwindow *window){
+        glfwGetWindowSize(window,&windowWidth,&windowHeight);
+        initialized=true;
+    }
     // Update camera position based on current yaw, pitch, radius
     glm::vec3 getCameraPosition() const {
         float x = radius * cos(pitch) * cos(yaw);
@@ -257,6 +269,10 @@ struct ViewState {
 
     // Call on mouse move
     void onCursorPos(double xpos, double ypos) {
+        m_xpos = xpos;
+        m_ypos = ypos;
+        mouseMoved=true;
+
         if (!rotating) return;
 
         float sensitivity = 0.005f;
@@ -283,91 +299,86 @@ struct ViewState {
     
 } state;
 
-void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    double xpos_d, ypos_d;
-    glfwGetCursorPos(window, &xpos_d, &ypos_d);
-    float xpos = static_cast<float>(xpos_d);
-    float ypos = static_cast<float>(ypos_d);
-
-    state.onMouseButton(button, action, xpos, ypos);
-
-    // Build view & projection
+RayInter getPlacementMouse(){
+    float winX = state.m_xpos;
+    float winY = state.windowHeight - state.m_ypos;
     glm::mat4 view_matrix = state.getViewMatrix();
-
-    int windowWidth, windowHeight;
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
-
     glm::mat4 projection_matrix = glm::perspective(
         glm::radians(45.0f),
-        float(windowWidth) / float(windowHeight),
+        float(state.windowWidth) / float(state.windowHeight),
         0.1f, 
         100.0f
     );
 
-    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        // 1) Flip Y for OpenGL coords
-        float winX = xpos;
-        float winY = windowHeight - ypos;
+    glm::vec4 viewport(0, 0, state.windowWidth, state.windowHeight);
 
-        // 2) Viewport
-        glm::vec4 viewport(0, 0, windowWidth, windowHeight);
+    // 3) Unproject near & far
+    glm::vec3 nearPoint = glm::unProject(
+        glm::vec3(winX, winY, 0.0f),
+        view_matrix,
+        projection_matrix,
+        viewport
+    );
+    glm::vec3 farPoint = glm::unProject(
+        glm::vec3(winX, winY, 1.0f),
+        view_matrix,
+        projection_matrix,
+        viewport
+    );
 
-        // 3) Unproject near & far
-        glm::vec3 nearPoint = glm::unProject(
-            glm::vec3(winX, winY, 0.0f),
-            view_matrix,
-            projection_matrix,
-            viewport
-        );
-        glm::vec3 farPoint = glm::unProject(
-            glm::vec3(winX, winY, 1.0f),
-            view_matrix,
-            projection_matrix,
-            viewport
-        );
+    // 4) Build ray
+    glm::vec3 ray_origin    = nearPoint;
+    glm::vec3 ray_direction = glm::normalize(farPoint - nearPoint);
 
-        // 4) Build ray
-        glm::vec3 ray_origin    = nearPoint;
-        glm::vec3 ray_direction = glm::normalize(farPoint - nearPoint);
-
-        // 5) Intersection test
-        RayInter closestResult = boundary.checkRay(state.w,ray_origin,ray_direction);
-        for (int i = 0; i < MAX_OBJECTS; ++i) {
-            if (!physics_solver->has_obj[i]) continue;
-            auto result = physics_solver->objects[i].testRay(state.w, ray_origin, ray_direction);
-            if (result.hit && result.distance < closestResult.distance) {
-                closestResult = result;
-            }
+    // 5) Intersection test
+    RayInter closestResult = boundary.checkRay(state.w,ray_origin,ray_direction);
+    for (int i = 0; i < MAX_OBJECTS; ++i) {
+        if (!physics_solver->has_obj[i]) continue;
+        auto result = physics_solver->objects[i].testRay(state.w, ray_origin, ray_direction);
+        if (result.hit && result.distance < closestResult.distance) {
+            closestResult = result;
         }
+    }
 
-        // 6) Spawn
+    return closestResult;
+}
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    // double xpos_d, ypos_d;
+    // glfwGetCursorPos(window,&xpos_d,&ypos_d);
+    // state.m_xpos = static_cast<float>(xpos_d);
+    // state.m_ypos = static_cast<float>(ypos_d);
+    
+    state.onMouseButton(button, action, state.m_xpos, state.m_ypos);
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        RayInter closestResult = getPlacementMouse();
+
         if (closestResult.hit) {
             // std::cout << "HIT\n";
             physics_solver->addObject(
-                PhysicsObject(glm::vec4(closestResult.point, state.w),
+                PhysicsObject(glm::vec4(closestResult.point, state.w)+ glm::vec4(0,3.0f,0,0),
                               /* radius: */ 1,
                               /* dynamic: */ true,
                               /* hidden: */ false)
             );
         } else {
-            // // Place at some default distance in front of camera, e.g. 10 units
-            // glm::vec3 spawnPos = ray_origin + ray_direction * 10.0f;
-            // physics_solver->addObject(
-            //     PhysicsObject(glm::vec4(0.0f),
-            //                   /* radius: */ 1,
-            //                   /* dynamic: */ true,
-            //                   /* hidden: */ false)
-            // );
         }
     }
 }
 
 void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+    if (!state.initialized) state.Init(window);
     state.onCursorPos(xpos, ypos);
 }
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    if (!state.initialized) state.Init(window);
     state.onScroll(yoffset);
+}
+void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight){
+    if (!state.initialized) state.Init(window);
+    state.windowHeight = windowHeight;
+    state.windowWidth = windowWidth;
 }
 
 Game::Game(unsigned int width, unsigned int height) {
@@ -397,10 +408,6 @@ Game::~Game(){
 void Game::Init(GLFWwindow* window){
     ballshader = new Shader("2.2.2.pbr.vs", "2.2.2.pbr.fs");
 
-    ballshader->use();
-    ballshader->setInt("texture_diffuse", 0);    // or whatever your sampler is named
-    ballshader->setInt("environmentMap", 0);
-
     GLint success;
     char infoLog[512];
     glGetShaderiv(ballshader->ID, GL_LINK_STATUS, &success);
@@ -413,9 +420,11 @@ void Game::Init(GLFWwindow* window){
 
     background_shader = new Shader("2.2.2.background.vs", "2.2.2.background.fs");
 
+    glfwSetWindowSizeCallback(window, windowSizeCallback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     glfwSetCursorPosCallback(window, cursorPosCallback);
     glfwSetScrollCallback(window, scrollCallback);
+    state.Init(window);
 
     std::vector<std::string> faces
     {
@@ -427,7 +436,39 @@ void Game::Init(GLFWwindow* window){
         FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // back
     };
     backgroundTexture = loadCubemap(faces);
-    defaultTexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/metallic.png").c_str());
+
+    defaultTexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/albedo.png").c_str());
+    bowlTexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/albedo.png").c_str());
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, defaultTexture);
+
+    ballshader->use();
+    ballshader->setInt("albedoMap", 0);
+
+    // glActiveTexture(GL_TEXTURE1);
+    // glBindTexture(GL_TEXTURE_2D, metallicTex);
+
+    // glActiveTexture(GL_TEXTURE2);
+    // glBindTexture(GL_TEXTURE_2D, roughnessTex);
+
+    // glActiveTexture(GL_TEXTURE3);
+    // glBindTexture(GL_TEXTURE_2D, aoTex);
+
+    // glActiveTexture(GL_TEXTURE4);
+    // glBindTexture(GL_TEXTURE_2D, alphaTex);
+
+    // ballshader->use();
+    // ballshader->setInt("albedoMap", 0);
+    // ballshader->setInt("metallicMap", 1);
+    // ballshader->setInt("roughnessMap", 2);
+    // ballshader->setInt("aoMap", 3);
+    // ballshader->setInt("alphaMap", 4);
+
+    // GLuint albedoTex, metallicTex, roughnessTex, aoTex, alphaTex;
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 void Game::ProcessInput(float dt){
     // // Handle input for camera movement
@@ -437,28 +478,6 @@ void Game::ProcessInput(float dt){
     if (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_S) == GLFW_PRESS) {
         state.w -= 1.0f * dt; // Move down
     }
-    // if (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_A) == GLFW_PRESS) {
-    //     state.orbitTarget.x -= 1.0f * dt; // Move left
-    // }
-    // if (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_D) == GLFW_PRESS) {
-    //     state.orbitTarget.x += 1.0f * dt; // Move right
-    // }
-    // if (place_object){
-    //     std::cout<<"OBJECT PLACED"<<std::endl;
-
-    //     // Somewhere in your code where you're adding the physics object:
-    //     glm::vec3 randomOffset3D(
-    //         getRandomFloat(-0.5f, 0.5f),
-    //         getRandomFloat(-0.5f, 0.5f),
-    //         getRandomFloat(-0.5f, 0.5f)
-    //     );
-
-    //     physics_solver->addObject(
-    //         PhysicsObject(glm::vec4(state.sphereCenter+randomOffset3D, 0.0f), 1, true, false
-    //         )
-    //     );
-    //     place_object = false;
-    // }
 }
 void Game::Update(float dt){
     physics_solver->update(dt);
@@ -469,6 +488,11 @@ void Game::Render(){
     // Clear buffers
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
+    
+    // Enable blending for transparency
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Setup shader and matrices
@@ -489,6 +513,7 @@ void Game::Render(){
     b_rend->shader->setFloat("metallic", 0.0f);
     b_rend->shader->setFloat("roughness", 0.5f);
     b_rend->shader->setFloat("ao", 1.0f);
+    b_rend->shader->setFloat("alpha", 1.0f);
     // b_rend->shader->setVec3("albedo", glm::vec3(1.0f, 0.5f, 0.5f)); // Set albedo color
 
     float theta = 3.1415*(state.w-state.w_min) / (state.w_max-state.w_min); // or use glfwGetTime(), animating from 0 to 2π
@@ -549,12 +574,12 @@ void Game::Render(){
         //     std::cerr << "[Draw4d] GL ERROR: " << err << std::endl;
         // }
         renderedCount++;
+        
     }
     
     if (frameCount % 60 == 0) {
         std::cout << "Actually rendered: " << renderedCount << " objects" << std::endl;
     }
-
 
     h_rend->shader->use();
     h_rend->shader->setMat4("view", view);
@@ -563,26 +588,51 @@ void Game::Render(){
     h_rend->shader->setFloat("metallic", 0.0f);
     h_rend->shader->setFloat("roughness", 0.5f);
     h_rend->shader->setFloat("ao", 1.0f);
+    h_rend->shader->setFloat("alpha", 1.0f);
 
-    h_rend->Draw4d(state.w, defaultTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+    h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+
+
+    // glDepthFunc(GL_LEQUAL);  // Same as skybox, allows rendering at same depth
+    // glDepthMask(GL_FALSE);   // Don't write to depth buffer
+    // Re-enable depth testing and writing
+    // glDepthFunc(GL_LESS);    // Reset to normal
+    // glDepthMask(GL_TRUE);
 
     // Render skybox LAST (after all objects)
     glDepthFunc(GL_LEQUAL); // Change depth function so skybox renders behind everything
-    
+    glDepthMask(GL_FALSE);
     background_shader->use();
-    
     // Remove translation from view matrix for skybox
     glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
     background_shader->setMat4("view", skyboxView);
     background_shader->setMat4("projection", projection);
     background_shader->setInt("environmentMap", 0);
-
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
     renderCube();
-    
     // Restore default depth function
+    glDepthMask(GL_TRUE);
     glDepthFunc(GL_LESS);
+
+    
+    // Set up shader for transparent object
+    b_rend->shader->use();  // Make sure we're using the right shader
+    b_rend->shader->setMat4("view", view);           // Reset view matrix
+    b_rend->shader->setMat4("projection", projection); // Reset projection matrix  
+    b_rend->shader->setVec3("camPos", cameraPos);    // Reset camera position
+    b_rend->shader->setFloat("metallic", 0.0f);
+    b_rend->shader->setFloat("roughness", 0.5f);
+    b_rend->shader->setFloat("ao", 1.0f);
+    b_rend->shader->setFloat("alpha", 0.5f);
+    RayInter mousePos = getPlacementMouse();
+    if (mousePos.hit){
+        b_rend->Draw3d(defaultTexture, mousePos.point+glm::vec3(0,3,0), 1, 
+                        glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+    }
+    state.mouseMoved=false;
+    // glDepthMask(GL_FALSE);   // Don't write to depth buffer
+    // glDepthMask(GL_TRUE);
 }
 // void Game::ResetLevel(){
 
