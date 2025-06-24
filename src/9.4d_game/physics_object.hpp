@@ -6,6 +6,8 @@
 #include "texture.h"
 #include "globals.h"
 
+#include "fruit.hpp"
+
 
 class PhysicsObject
 {
@@ -20,14 +22,15 @@ public:
     bool   dynamic;
     bool   hidden;
     bool   growing; // used to prevent artificial velocity on first update
+    Fruit fruit;
     // constructor(s)
     PhysicsObject(){
 
     }
-    PhysicsObject(glm::vec4 pos, float rad, bool dyn, bool hid): position(pos),last_position(pos), acceleration(0.0f, 0.0f, 0.0f, 0.0f),  dynamic(dyn), hidden(hid)
+    PhysicsObject(glm::vec4 pos, Fruit f, bool dyn, bool hid): position(pos),last_position(pos), fruit(f), acceleration(0.0f, 0.0f, 0.0f, 0.0f),  dynamic(dyn), hidden(hid)
     {
         radius = 0;
-        target_radius = rad;
+        target_radius = fm.getFruitProperties(fruit).radius;
         growing=true;
     }
 
@@ -71,6 +74,12 @@ public:
         return out;
     }
     
+    void upgrade_fruit(){
+        fruit = fm.getNextFruit(fruit);
+        // radius=0;
+        target_radius = fm.getFruitProperties(fruit).radius;
+        growing=true;
+    }
     
     void setPosition(glm::vec4 pos)
     {

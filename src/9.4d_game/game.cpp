@@ -12,6 +12,9 @@
 #include "hemisphere_boundary.hpp"
 #include "hemisphere_renderer.hpp"
 #include "shape.hpp"
+#include "helper.hpp"
+#include "fruit.hpp"
+
 #include <random>
 
 //debug
@@ -25,7 +28,6 @@ HemisphereRenderer    *h_rend;
 PhysicSolver *physics_solver;
 tp::ThreadPool *thread_pool;
 Shader *background_shader;
-
 Shader *ballshader;
 
 const float light_radius = 20.0f;
@@ -33,8 +35,7 @@ const float angle_in_sky = glm::radians(30.0f);
 const float max_height = light_radius*sin(angle_in_sky); // height of the sun at its peak (noon)
 const glm::vec3 light_color(300.0f);
 
-HemisphereBoundary boundary(
-    glm::vec4(0.0f), 3);
+HemisphereBoundary boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f);
 // GameObject        *Player;
 // BallObject        *Ball;
 // ParticleGenerator *Particles;
@@ -47,167 +48,12 @@ float                   angle=0;
 float                   angle_speed=10;
 float                   dim4=0;
 bool place_object = false;
+Fruit nextFruit;
 
 // enum FRUIT{
 //     CHER
 // }
 
-float getRandomFloat(float min, float max) {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(min, max);
-    return dist(gen);
-}
-
-unsigned int loadCubemap(std::vector<std::string> faces)
-{
-    unsigned int textureID;
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
-
-    int width, height, nrChannels;
-    for (unsigned int i = 0; i < faces.size(); i++)
-    {
-        unsigned char *data = stbi_load(faces[i].c_str(), &width, &height, &nrChannels, 0);
-        if (data)
-        {
-            GLenum format;
-            if (nrChannels == 1)
-                format = GL_RED;
-            else if (nrChannels == 3)
-                format = GL_RGB;
-            else if (nrChannels == 4)
-                format = GL_RGBA;
-
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-            stbi_image_free(data);
-        }
-        else
-        {
-            std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
-            stbi_image_free(data);
-        }
-    }
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-
-    return textureID;
-}
-
-// utility function for loading a 2D texture from file
-// ---------------------------------------------------
-unsigned int loadTexture(char const * path)
-{
-    unsigned int textureID;
-    glGenTextures(1, &textureID);
-
-    int width, height, nrComponents;
-    unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
-    if (data)
-    {
-        GLenum format;
-        if (nrComponents == 1)
-            format = GL_RED;
-        else if (nrComponents == 3)
-            format = GL_RGB;
-        else if (nrComponents == 4)
-            format = GL_RGBA;
-
-        glBindTexture(GL_TEXTURE_2D, textureID);
-        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        stbi_image_free(data);
-    }
-    else
-    {
-        std::cout << "Texture failed to load at path: " << path << std::endl;
-        stbi_image_free(data);
-    }
-
-    return textureID;
-}
-
-unsigned int cubeVAO = 0;
-unsigned int cubeVBO = 0;
-void renderCube()
-{
-    // initialize (if necessary)
-    if (cubeVAO == 0)
-    {
-        float vertices[] = {
-            // back face
-            -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 0.0f, 0.0f, // bottom-left
-             1.0f,  1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 1.0f, 1.0f, // top-right
-             1.0f, -1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 1.0f, 0.0f, // bottom-right         
-             1.0f,  1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 1.0f, 1.0f, // top-right
-            -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 0.0f, 0.0f, // bottom-left
-            -1.0f,  1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 0.0f, 1.0f, // top-left
-            // front face
-            -1.0f, -1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f, 0.0f, // bottom-left
-             1.0f, -1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f, 0.0f, // bottom-right
-             1.0f,  1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f, 1.0f, // top-right
-             1.0f,  1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f, 1.0f, // top-right
-            -1.0f,  1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f, 1.0f, // top-left
-            -1.0f, -1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f, 0.0f, // bottom-left
-            // left face
-            -1.0f,  1.0f,  1.0f, -1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-right
-            -1.0f,  1.0f, -1.0f, -1.0f,  0.0f,  0.0f, 1.0f, 1.0f, // top-left
-            -1.0f, -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-left
-            -1.0f, -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-left
-            -1.0f, -1.0f,  1.0f, -1.0f,  0.0f,  0.0f, 0.0f, 0.0f, // bottom-right
-            -1.0f,  1.0f,  1.0f, -1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-right
-            // right face
-             1.0f,  1.0f,  1.0f,  1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-left
-             1.0f, -1.0f, -1.0f,  1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-right
-             1.0f,  1.0f, -1.0f,  1.0f,  0.0f,  0.0f, 1.0f, 1.0f, // top-right         
-             1.0f, -1.0f, -1.0f,  1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-right
-             1.0f,  1.0f,  1.0f,  1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-left
-             1.0f, -1.0f,  1.0f,  1.0f,  0.0f,  0.0f, 0.0f, 0.0f, // bottom-left     
-            // bottom face
-            -1.0f, -1.0f, -1.0f,  0.0f, -1.0f,  0.0f, 0.0f, 1.0f, // top-right
-             1.0f, -1.0f, -1.0f,  0.0f, -1.0f,  0.0f, 1.0f, 1.0f, // top-left
-             1.0f, -1.0f,  1.0f,  0.0f, -1.0f,  0.0f, 1.0f, 0.0f, // bottom-left
-             1.0f, -1.0f,  1.0f,  0.0f, -1.0f,  0.0f, 1.0f, 0.0f, // bottom-left
-            -1.0f, -1.0f,  1.0f,  0.0f, -1.0f,  0.0f, 0.0f, 0.0f, // bottom-right
-            -1.0f, -1.0f, -1.0f,  0.0f, -1.0f,  0.0f, 0.0f, 1.0f, // top-right
-            // top face
-            -1.0f,  1.0f, -1.0f,  0.0f,  1.0f,  0.0f, 0.0f, 1.0f, // top-left
-             1.0f,  1.0f , 1.0f,  0.0f,  1.0f,  0.0f, 1.0f, 0.0f, // bottom-right
-             1.0f,  1.0f, -1.0f,  0.0f,  1.0f,  0.0f, 1.0f, 1.0f, // top-right     
-             1.0f,  1.0f,  1.0f,  0.0f,  1.0f,  0.0f, 1.0f, 0.0f, // bottom-right
-            -1.0f,  1.0f, -1.0f,  0.0f,  1.0f,  0.0f, 0.0f, 1.0f, // top-left
-            -1.0f,  1.0f,  1.0f,  0.0f,  1.0f,  0.0f, 0.0f, 0.0f  // bottom-left        
-        };
-        glGenVertexArrays(1, &cubeVAO);
-        glGenBuffers(1, &cubeVBO);
-        // fill buffer
-        glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-        // link vertex attributes
-        glBindVertexArray(cubeVAO);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-    }
-    // render Cube
-    glBindVertexArray(cubeVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 36);
-    glBindVertexArray(0);
-}
 struct ViewState {
     float w=0.0f;
     const float w_min=-5.0f, w_max=5.0f;
@@ -357,10 +203,9 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
             // std::cout << "HIT\n";
             physics_solver->addObject(
                 PhysicsObject(glm::vec4(closestResult.point, state.w)+ glm::vec4(0,3.0f,0,0),
-                              /* radius: */ 1,
-                              /* dynamic: */ true,
-                              /* hidden: */ false)
+                nextFruit, true, false)
             );
+            nextFruit = fm.getRandomFruit();
         } else {
         }
     }
@@ -407,6 +252,7 @@ Game::~Game(){
 }
 void Game::Init(GLFWwindow* window){
     ballshader = new Shader("2.2.2.pbr.vs", "2.2.2.pbr.fs");
+    background_shader = new Shader("2.2.2.background.vs", "2.2.2.background.fs");
 
     GLint success;
     char infoLog[512];
@@ -415,10 +261,13 @@ void Game::Init(GLFWwindow* window){
         glGetShaderInfoLog(ballshader->ID, 512, NULL, infoLog);
         std::cerr << "[ballshader] Link error:\n" << infoLog << std::endl;
     }
-    b_rend = new BallRenderer(ballshader, SPHERE, 5);
-    h_rend = new HemisphereRenderer(ballshader, SPHERE, 5);
+    
 
-    background_shader = new Shader("2.2.2.background.vs", "2.2.2.background.fs");
+    b_rend = new BallRenderer(ballshader, SPHERE, 5);
+    h_rend = new HemisphereRenderer(ballshader, SPHERE, 5, 90.0f, 1.0f, boundary.margin/boundary.radius);
+
+    fm.initializeFruits();
+    nextFruit = fm.getRandomFruit();
 
     glfwSetWindowSizeCallback(window, windowSizeCallback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
@@ -567,8 +416,7 @@ void Game::Render(){
         // }
         
         // Render the object
-        b_rend->Draw4d(state.w, defaultTexture, obj.position, obj.radius, 
-                       glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+        b_rend->Draw4d(state.w, obj.fruit, obj.position, glm::vec3(0.0f));
         // GLenum err;
         // while ((err = glGetError()) != GL_NO_ERROR) {
         //     std::cerr << "[Draw4d] GL ERROR: " << err << std::endl;
@@ -590,7 +438,7 @@ void Game::Render(){
     h_rend->shader->setFloat("ao", 1.0f);
     h_rend->shader->setFloat("alpha", 1.0f);
 
-    h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+    h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f));
 
 
     // glDepthFunc(GL_LEQUAL);  // Same as skybox, allows rendering at same depth
@@ -625,10 +473,10 @@ void Game::Render(){
     b_rend->shader->setFloat("roughness", 0.5f);
     b_rend->shader->setFloat("ao", 1.0f);
     b_rend->shader->setFloat("alpha", 0.5f);
+
     RayInter mousePos = getPlacementMouse();
     if (mousePos.hit){
-        b_rend->Draw3d(defaultTexture, mousePos.point+glm::vec3(0,3,0), 1, 
-                        glm::vec3(0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+        b_rend->Draw3d(nextFruit, mousePos.point+glm::vec3(0,3,0),glm::vec3(0.0f));
     }
     state.mouseMoved=false;
     // glDepthMask(GL_FALSE);   // Don't write to depth buffer

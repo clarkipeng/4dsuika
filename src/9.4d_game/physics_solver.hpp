@@ -28,7 +28,7 @@ struct PhysicSolver
 
     tp::ThreadPool& thread_pool;
 
-    PhysicSolver(tp::ThreadPool& tp): sub_steps{8}, thread_pool{tp}
+    PhysicSolver(tp::ThreadPool& tp): sub_steps{1}, thread_pool{tp}
     {
         for(int i=0;i<MAX_OBJECTS;i++) {
             no_obj.insert(i);
@@ -58,6 +58,12 @@ struct PhysicSolver
         const float combined_radius = obj_1.radius + obj_2.radius;
 
         if (dist2 < combined_radius * combined_radius && dist2 > EPS) {
+            if (obj_1.fruit == obj_2.fruit){// && atom_1_idx<atom_2_idx
+                removeObject(atom_2_idx);
+                obj_1.setPosition((obj_1.position + obj_2.position)/2.0f);
+                obj_1.upgrade_fruit();
+            }
+
             const float dist = std::sqrt(dist2);
             const float penetration = (combined_radius - dist);// / combined_radius;
 

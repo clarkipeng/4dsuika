@@ -55,6 +55,7 @@
         "variant": "cpp",
         "algorithm": "cpp",
         "tuple": "cpp",
-        "set": "cpp"
+        "set": "cpp",
+        "random": "cpp"
     }
 }

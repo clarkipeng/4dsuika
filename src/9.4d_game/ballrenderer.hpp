@@ -10,7 +10,6 @@
 
 #include "shape.hpp"
 
-
 class BallRenderer
 {
 protected:
@@ -36,7 +35,7 @@ public:
     }
 
     void virtual Draw4d(float w_coord, unsigned int texture, glm::vec4 position, float scale, 
-                glm::vec3 rotation = glm::vec3(0.0f), glm::vec3 color = glm::vec3(1.0f))
+                glm::vec3 rotation = glm::vec3(0.0f))
     {
         glm::mat4 model = glm::mat4(1.0f);
         glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z);
@@ -46,19 +45,7 @@ public:
         glm::vec3 scale3d = glm::vec3(abs(projected_scale));
 
         model = glm::translate(model, pos3d);
-        
-        // // Apply rotations if needed
-        // if (rotation.x != 0.0f)
-        //     model = glm::rotate(model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-        // if (rotation.y != 0.0f)
-        //     model = glm::rotate(model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        // if (rotation.z != 0.0f)
-        //     model = glm::rotate(model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-            
         model = glm::scale(model, scale3d);
-
-        // this->shader->setMat4("model", model);
-        // this->shader->setVec3("objectColor", color);
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         this->shader->setMat4("model", model); // also needed!
         this->shader->setMat3("normalMatrix", normalMatrix);
@@ -71,26 +58,67 @@ public:
         glBindVertexArray(0);
     }
 
-    void virtual Draw3d(unsigned int texture, glm::vec3 position, float scale, 
-                glm::vec3 rotation = glm::vec3(0.0f), glm::vec3 color = glm::vec3(1.0f))
+    void virtual Draw3d(glm::vec3 position, unsigned int texture, float scale, 
+                glm::vec3 rotation = glm::vec3(0.0f))
     {
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, position);
         
-        // // Apply rotations if needed
-        // if (rotation.x != 0.0f)
-        //     model = glm::rotate(model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-        // if (rotation.y != 0.0f)
-        //     model = glm::rotate(model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        // if (rotation.z != 0.0f)
-        //     model = glm::rotate(model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-            
         model = glm::scale(model, glm::vec3(scale));
 
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         this->shader->setMat4("model", model); // also needed!
         this->shader->setMat3("normalMatrix", normalMatrix);
-        // this->shader->setVec3("objectColor", color);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+
+        glBindVertexArray(this->vao);
+        glDrawElements(GL_TRIANGLES, indices_count, GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+    }
+
+    void virtual Draw4d(float w_coord, Fruit fruit, glm::vec4 position,glm::vec3 rotation = glm::vec3(0.0f))
+    {
+        const float scale = fm.getFruitProperties(fruit).radius;
+        const unsigned int texture = fm.getFruitProperties(fruit).texture;
+
+        glm::mat4 model = glm::mat4(1.0f);
+        glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z);
+        
+        // Prevent division by zero
+        float projected_scale = sqrt(scale*scale - (w_coord - position.w)*(w_coord - position.w));
+        glm::vec3 scale3d = glm::vec3(abs(projected_scale));
+
+        model = glm::translate(model, pos3d);
+        
+        model = glm::scale(model, scale3d);
+        glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
+        this->shader->setMat4("model", model); // also needed!
+        this->shader->setMat3("normalMatrix", normalMatrix);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+
+        glBindVertexArray(this->vao);
+        glDrawElements(GL_TRIANGLES, indices_count, GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+    }
+
+    void virtual Draw3d(Fruit fruit, glm::vec3 position,
+                glm::vec3 rotation = glm::vec3(0.0f))
+    {
+        const float scale = fm.getFruitProperties(fruit).radius;
+        const unsigned int texture = fm.getFruitProperties(fruit).texture;
+
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, position);
+        
+        model = glm::scale(model, glm::vec3(scale));
+
+        glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
+        this->shader->setMat4("model", model); // also needed!
+        this->shader->setMat3("normalMatrix", normalMatrix);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
