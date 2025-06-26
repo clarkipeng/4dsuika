@@ -328,10 +328,11 @@ void Game::ProcessInput(float dt){
         state.w -= 1.0f * dt; // Move down
     }
 }
-void Game::Update(float dt){
+void Game::FixedUpdate(float dt){
     physics_solver->update(dt);
 }
-
+void Game::Update(float dt){
+}
 
 void Game::Render(){
     // Clear buffers

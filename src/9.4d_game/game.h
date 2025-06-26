@@ -51,6 +51,7 @@ public:
     void Init(GLFWwindow* window);
     // game loop
     void ProcessInput(float dt);
+    void FixedUpdate(float dt);
     void Update(float dt);
     void Render();
     // void DoCollisions();

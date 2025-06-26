@@ -14,6 +14,17 @@
 
 #include <iostream>
 
+#include <thread>  // for std::this_thread::sleep_for
+#include <chrono>  // for std::chrono::duration
+
+// At the top of your file
+const float TARGET_FPS = 60.0f;
+const float FRAME_TIME = 1.0f / TARGET_FPS;
+
+// For fixed timestep
+const float FIXED_TIMESTEP = 1.0f / 60.0f; // 60 updates per second
+float fixedUpdateAccumulator = 0.0f;
+
 // GLFW function declarations
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 // void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode);
@@ -56,7 +67,7 @@ int main(int argc, char *argv[])
     int fbWidth, fbHeight;
     glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
     glViewport(0, 0, fbWidth, fbHeight);
-    
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -71,29 +82,40 @@ int main(int argc, char *argv[])
 
     while (!glfwWindowShouldClose(window))
     {
-        // calculate delta time
-        // --------------------
+        // Calculate delta time
         float currentFrame = glfwGetTime();
-        deltaTime = currentFrame - lastFrame;
+        float deltaTime = currentFrame - lastFrame;
+        if (deltaTime > 0.25f) deltaTime = 0.25f; // clamp delta to prevent spiral of death
         lastFrame = currentFrame;
+
         glfwPollEvents();
 
-        // manage user input
-        // -----------------
         game.ProcessInput(deltaTime);
 
-        // update game state
-        // -----------------
-        game.Update(deltaTime);
+        // Fixed update loop
+        fixedUpdateAccumulator += deltaTime;
+        while (fixedUpdateAccumulator >= FIXED_TIMESTEP)
+        {
+            game.FixedUpdate(FIXED_TIMESTEP);  // You'll need to add this to your Game class
+            fixedUpdateAccumulator -= FIXED_TIMESTEP;
+        }
 
-        // render
-        // ------
+        // Render
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         game.Render();
 
         glfwSwapBuffers(window);
+
+        // Frame rate cap
+        float frameEnd = glfwGetTime();
+        float frameDuration = frameEnd - currentFrame;
+        if (frameDuration < FRAME_TIME)
+        {
+            std::this_thread::sleep_for(std::chrono::duration<float>(FRAME_TIME - frameDuration));
+        }
     }
+
 
     // delete all resources as loaded using the resource manager
     // ---------------------------------------------------------
