@@ -50,7 +50,7 @@
 //         growing(true) // Original behavior: starts growing
 //     {
 //         radius = 0; // Starts with zero radius
-//         target_radius = fm.getFruitProperties(fruit).radius;
+//         target_radius = FruitManager::getFruitProperties(fruit).radius;
 //     }
 
 //     // Copy constructor - as in your original
@@ -102,8 +102,8 @@
 //     }
 
 //     void upgrade_fruit() {
-//         fruit = fm.getNextFruit(fruit);
-//         target_radius = fm.getFruitProperties(fruit).radius;
+//         fruit = FruitManager::getNextFruit(fruit);
+//         target_radius = FruitManager::getFruitProperties(fruit).radius;
 //         growing = true;
 //     }
 
@@ -247,7 +247,7 @@ public:
     PhysicsObject(glm::vec4 pos, Fruit f, bool dyn, bool hid): position(pos),last_position(pos), fruit(f), acceleration(0.0f, 0.0f, 0.0f, 0.0f),  dynamic(dyn), hidden(hid)
     {
         radius = 0;
-        target_radius = fm.getFruitProperties(fruit).radius;
+        target_radius = FruitManager::getFruitProperties(fruit).radius;
         growing=true;
     }
 
@@ -292,9 +292,9 @@ public:
     }
     
     void upgrade_fruit(){
-        fruit = fm.getNextFruit(fruit);
+        fruit = FruitManager::getNextFruit(fruit);
         // radius=0;
-        target_radius = fm.getFruitProperties(fruit).radius;
+        target_radius = FruitManager::getFruitProperties(fruit).radius;
         growing=true;
     }
     

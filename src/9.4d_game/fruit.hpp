@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <string>
 #include "learnopengl/filesystem.h"
-#include "helper.hpp"
+#include "render_helper.hpp"
 
 enum Fruit {
     CHERRY,
@@ -27,11 +27,12 @@ struct FruitProperties {
     float ao;
     float alpha;
     unsigned int texture;
+    int merge_points;
 };
 
 class FruitManager {
 private:
-    std::unordered_map<Fruit, FruitProperties> fruitPropertiesMap;
+    inline static std::unordered_map<Fruit, FruitProperties> fruitPropertiesMap;
     
     
 public:
@@ -43,7 +44,7 @@ public:
     }
     
     // Initialize all fruit properties and load textures
-    void initializeFruits() {
+    static void initializeFruits() {
         // Initialize fruit properties with radii from 0.33 to 2.0
         // Each fruit gets progressively larger
         
@@ -53,7 +54,8 @@ public:
             0.8f,   // roughness
             1.0f,   // ao
             1.0f,   // alpha
-            loadTexture(FileSystem::getPath("resources/textures/fruits/cherry.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/cherry.png").c_str()),
+            1,
         };
         
         fruitPropertiesMap[STRAWBERRY] = {
@@ -62,7 +64,8 @@ public:
             0.7f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/strawberry.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/strawberry.png").c_str()),
+            3,
         };
         
         fruitPropertiesMap[GRAPE] = {
@@ -71,7 +74,8 @@ public:
             0.6f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/grape.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/grape.png").c_str()),
+            6,
         };
         
         fruitPropertiesMap[DEKOPON] = {
@@ -80,7 +84,8 @@ public:
             0.5f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/dekopon.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/dekopon.png").c_str()),
+            10,
         };
         
         fruitPropertiesMap[PERSIMMON] = {
@@ -89,7 +94,8 @@ public:
             0.6f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/persimmon.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/persimmon.png").c_str()),
+            15,
         };
         
         fruitPropertiesMap[APPLE] = {
@@ -98,7 +104,8 @@ public:
             0.4f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/apple.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/apple.png").c_str()),
+            21,
         };
         
         fruitPropertiesMap[PEAR] = {
@@ -107,7 +114,8 @@ public:
             0.5f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/pear.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/pear.png").c_str()),
+            28,
         };
         
         fruitPropertiesMap[PEACH] = {
@@ -116,7 +124,8 @@ public:
             0.3f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/peach.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/peach.png").c_str()),
+            36,
         };
         
         fruitPropertiesMap[PINEAPPLE] = {
@@ -125,7 +134,8 @@ public:
             0.7f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/pineapple.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/pineapple.png").c_str()),
+            45,
         };
         
         fruitPropertiesMap[MELON] = {
@@ -134,7 +144,8 @@ public:
             0.4f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/melon.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/melon.png").c_str()),
+            55,
         };
         
         fruitPropertiesMap[WATERMELON] = {
@@ -143,17 +154,18 @@ public:
             0.5f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/watermelon.png").c_str())
+            loadTexture(FileSystem::getPath("resources/textures/fruits/watermelon.png").c_str()),
+            66,
         };
     }
     
     // Get properties for a specific fruit
-    const FruitProperties& getFruitProperties(Fruit fruit) const {
+    static const FruitProperties& getFruitProperties(Fruit fruit) {
         return fruitPropertiesMap.at(fruit);
     }
     
     // Get the next evolution fruit (for merging)
-    Fruit getNextFruit(Fruit currentFruit) const {
+    static Fruit getNextFruit(Fruit currentFruit) {
         switch(currentFruit) {
             case CHERRY: return STRAWBERRY;
             case STRAWBERRY: return GRAPE;
@@ -171,12 +183,12 @@ public:
     }
     
     // Check if fruit can evolve further
-    bool canEvolve(Fruit fruit) const {
+    static bool canEvolve(Fruit fruit) {
         return fruit != WATERMELON;
     }
     
     // Merge two fruits of the same type
-    Fruit mergeFruits(Fruit fruit1, Fruit fruit2) {
+    static Fruit mergeFruits(Fruit fruit1, Fruit fruit2) {
         // Only merge if both fruits are the same type
         if (fruit1 == fruit2 && canEvolve(fruit1)) {
             return getNextFruit(fruit1);
@@ -185,7 +197,7 @@ public:
     }
     
     // Get fruit name as string (useful for debugging)
-    std::string getFruitName(Fruit fruit) const {
+    static std::string getFruitName(Fruit fruit) {
         switch(fruit) {
             case CHERRY: return "Cherry";
             case STRAWBERRY: return "Strawberry";
@@ -203,7 +215,7 @@ public:
     }
     
     // Get a random fruit from the first 5 fruits (cherry through persimmon)
-    Fruit getRandomFruit() const {
+    static Fruit getRandomFruit(){
         static const Fruit randomFruits[] = {
             CHERRY,
             STRAWBERRY, 
@@ -216,13 +228,13 @@ public:
     }
 
     // Cleanup textures
-    void cleanup() {
+    static void cleanup() {
         // Delete all loaded textures
         for (auto& pair : fruitPropertiesMap) {
             glDeleteTextures(1, &pair.second.texture);
         }
         fruitPropertiesMap.clear();
     }
-} fm;
+};
 
 #endif // FRUIT_MANAGER_HPP

@@ -16,7 +16,7 @@ enum ShapeType {
     SPHERE
 };
 
-void generateSphereMesh(int stacks, int slices, std::vector<float>& vertices, std::vector<unsigned int>& indices) {
+inline void generateSphereMesh(int stacks, int slices, std::vector<float>& vertices, std::vector<unsigned int>& indices) {
     for (int i = 0; i <= stacks; ++i) {
         float v = (float)i / stacks;
         float phi = glm::pi<float>() * v;
@@ -65,7 +65,7 @@ inline unsigned long long cantorPair(unsigned int a, unsigned int b) {
     return (unsigned long long)(x + y) * (x + y + 1) / 2 + y;
 }
 
-void generateIcosphere(int subdivisions, std::vector<float>& vertices, std::vector<unsigned int>& indices) {
+inline void generateIcosphere(int subdivisions, std::vector<float>& vertices, std::vector<unsigned int>& indices) {
     const float t = (1.0f + std::sqrt(5.0f)) / 2.0f;
 
     // Initial 12 vertices of icosahedron
@@ -140,7 +140,7 @@ void generateIcosphere(int subdivisions, std::vector<float>& vertices, std::vect
     }
 }
 
-void generateBall(
+inline void generateBall(
     ShapeType shape,
     int fidelity,
     std::vector<float>& vertices,
@@ -152,7 +152,7 @@ void generateBall(
         generateSphereMesh(fidelity*12, fidelity*12, vertices, indices);
     }
 }
-void generateBowlMesh(
+inline void generateBowlMesh(
     int stacks,
     int slices,
     float sigma,              // Clipping angle from top, in radians (0 = tip, PI = hemisphere)

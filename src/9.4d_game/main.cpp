@@ -9,7 +9,12 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
-#include "game.h"
+#include "game.hpp"
+
+#include "globals.h"
+#include "render_helper.hpp"
+#include "state_helper.hpp"
+#include "physics_solver.hpp"
 // #include "resource_manager.h"
 
 #include <iostream>
@@ -27,7 +32,11 @@ float fixedUpdateAccumulator = 0.0f;
 
 // GLFW function declarations
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-// void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode);
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode);
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
+void cursorPosCallback(GLFWwindow* window, double xpos, double ypos);
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
+void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight);
 
 // The Width of the screen
 const unsigned int SCREEN_WIDTH = 800;
@@ -58,8 +67,12 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // glfwSetKeyCallback(window, key_callback);
+    glfwSetKeyCallback(window, key_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetWindowSizeCallback(window, windowSizeCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetCursorPosCallback(window, cursorPosCallback);
+    glfwSetScrollCallback(window, scrollCallback);
 
     // OpenGL configuration
     // --------------------
@@ -126,27 +139,60 @@ int main(int argc, char *argv[])
 }
 
 
-// void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
-// {
-//     // when a user presses the escape key, we set the WindowShouldClose property to true, closing the application
-//     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-//         glfwSetWindowShouldClose(window, true);
-//     if (key >= 0 && key < 1024)
-//     {
-//         if (action == GLFW_PRESS)
-//             game.Keys[key] = true;
-//         else if (action == GLFW_RELEASE)
-//         {
-//             game.Keys[key] = false;
-//             game.KeysProcessed[key] = false;
-//         }
-//     }
-// }
-
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
     // make sure the viewport matches the new window dimensions; note that width and 
     // height will be significantly larger than specified on retina displays.
     glfwGetFramebufferSize(window, &width, &height);
     glViewport(0, 0, width, height);
+}
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
+{
+    // // when a user presses the escape key, we set the WindowShouldClose property to true, closing the application
+    // if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+    //     glfwSetWindowShouldClose(window, true);
+    if (key >= 0 && key < 1024)
+    {
+        if (action == GLFW_PRESS)
+            game.Keys[key] = true;
+        else if (action == GLFW_RELEASE)
+        {
+            game.Keys[key] = false;
+            game.KeysProcessed[key] = false;
+        }
+    }
+}
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    game.state.onMouseButton(button, action, game.state.m_xpos, game.state.m_ypos);
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        RayInter closestResult = getPlacementMouse(&game.state, &game.boundary, game.physics_solver);
+
+        if (closestResult.hit) {
+            // std::cout << "HIT\n";
+            game.physics_solver->addObject(
+                PhysicsObject(glm::vec4(closestResult.point, game.state.w)+ glm::vec4(0,3.0f,0,0),
+                game.nextFruit, true, false)
+            );
+            game.nextFruit = FruitManager::getRandomFruit();
+        } else {
+        }
+    }
+}
+
+void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+    if (!game.state.initialized) game.state.Init(window);
+    game.state.onCursorPos(xpos, ypos);
+}
+
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    if (!game.state.initialized) game.state.Init(window);
+    game.state.onScroll(yoffset);
+}
+void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight){
+    if (!game.state.initialized) game.state.Init(window);
+    game.state.windowHeight = windowHeight;
+    game.state.windowWidth = windowWidth;
 }

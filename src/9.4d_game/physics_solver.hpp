@@ -13,14 +13,18 @@
 struct PhysicSolver
 {
     std::array<PhysicsObject,MAX_OBJECTS> objects;
+
     std::array<std::mutex,MAX_OBJECTS> object_locks;
+    std::mutex no_obj_mutex;
+
     std::array<bool,MAX_OBJECTS> has_obj;
     std::set<int> no_obj;
     
-
     std::vector<Boundary*> boundary;
 
     glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
+
+    std::atomic<int> total_points = 0;
     // glm::vec4                   gravity = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Simulation solving pass count
@@ -63,6 +67,7 @@ struct PhysicSolver
                 glm::vec4 vel_1 = obj_1.position - obj_1.last_position;
                 glm::vec4 vel_2 = obj_2.position - obj_2.last_position;
                 
+                total_points += FruitManager::getFruitProperties(obj_2.fruit).merge_points;
                 removeObject(atom_2_idx);
                 obj_1.setPosition((obj_1.position + obj_2.position) / 2.0f);
                 obj_1.upgrade_fruit();
@@ -141,20 +146,23 @@ struct PhysicSolver
     // Add a new object to the solver
     void addObject(const PhysicsObject& object)
     {
-        int i = *no_obj.begin();
-        if (no_obj.begin()!=no_obj.end()) {
+        std::lock_guard<std::mutex> lock(no_obj_mutex);
+        if (!no_obj.empty()) {
+            int i = *no_obj.begin();
             no_obj.erase(no_obj.begin());
+            objects[i] = object;
+            has_obj[i] = true;
         }
-        objects[i] = object;
-        has_obj[i] = true;
     }
+    
     void removeObject(int i)
     {
-        // no_obj.erase(no_obj.find(i));
-        auto it = no_obj.find(i);
-        if (it != no_obj.end()) {
-            no_obj.erase(it);
-        }
+        std::lock_guard<std::mutex> lock(no_obj_mutex);
+        // auto it = no_obj.find(i);
+        // if (it != no_obj.end()) {
+        //     no_obj.erase(it);
+        // }
+        no_obj.insert(i);
         objects[i].disable();
         has_obj[i] = false;
     }

@@ -9,6 +9,7 @@
 #include "learnopengl/shader.h"
 
 #include "shape.hpp"
+#include "fruit.hpp"
 
 class BallRenderer
 {
@@ -80,8 +81,8 @@ public:
 
     void virtual Draw4d(float w_coord, Fruit fruit, glm::vec4 position,glm::vec3 rotation = glm::vec3(0.0f))
     {
-        const float scale = fm.getFruitProperties(fruit).radius;
-        const unsigned int texture = fm.getFruitProperties(fruit).texture;
+        const float scale = FruitManager::getFruitProperties(fruit).radius;
+        const unsigned int texture = FruitManager::getFruitProperties(fruit).texture;
 
         glm::mat4 model = glm::mat4(1.0f);
         glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z);
@@ -108,8 +109,8 @@ public:
     void virtual Draw3d(Fruit fruit, glm::vec3 position,
                 glm::vec3 rotation = glm::vec3(0.0f))
     {
-        const float scale = fm.getFruitProperties(fruit).radius;
-        const unsigned int texture = fm.getFruitProperties(fruit).texture;
+        const float scale = FruitManager::getFruitProperties(fruit).radius;
+        const unsigned int texture = FruitManager::getFruitProperties(fruit).texture;
 
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, position);

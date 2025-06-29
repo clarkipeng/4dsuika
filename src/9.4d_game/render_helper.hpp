@@ -12,14 +12,14 @@
 #include "learnopengl/shader.h"
 #include "learnopengl/filesystem.h"
 
-float getRandomFloat(float min, float max) {
+inline float getRandomFloat(float min, float max) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dist(min, max);
     return dist(gen);
 }
 
-unsigned int loadCubemap(std::vector<std::string> faces)
+inline unsigned int loadCubemap(std::vector<std::string> faces)
 {
     unsigned int textureID;
     glGenTextures(1, &textureID);
@@ -59,7 +59,7 @@ unsigned int loadCubemap(std::vector<std::string> faces)
 
 // utility function for loading a 2D texture from file
 // ---------------------------------------------------
-unsigned int loadTexture(char const * path)
+inline unsigned int loadTexture(char const * path)
 {
     unsigned int textureID;
     glGenTextures(1, &textureID);
@@ -96,10 +96,10 @@ unsigned int loadTexture(char const * path)
     return textureID;
 }
 
-unsigned int cubeVAO = 0;
-unsigned int cubeVBO = 0;
-void renderCube()
+inline void renderCube()
 {
+    unsigned int cubeVAO = 0;
+    unsigned int cubeVBO = 0;
     // initialize (if necessary)
     if (cubeVAO == 0)
     {
