@@ -12,7 +12,7 @@
 
 #include <learnopengl/filesystem.h>
 
-#include <irrklang/irrKlang.h>
+#include <irrKlang/irrKlang.h>
 using namespace irrklang;
 
 #include "game.h"

@@ -48,4 +48,5 @@ public:
     void Load(std::string fontPath, unsigned int fontSize);
 
     void RenderText(const std::string& text, float x, float y, float scale, glm::vec3 color);
+    float GetTextWidth(const std::string& text, float scale);
 };

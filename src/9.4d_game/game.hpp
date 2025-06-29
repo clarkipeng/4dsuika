@@ -9,6 +9,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <SDL.h>
+#include <SDL_mixer.h>
+
 #include "globals.h"
 #include "stb_image.h"
 
@@ -46,17 +49,6 @@ float                   angle_speed=10;
 float                   dim4=0;
 bool place_object = false;
 
-class BallRenderer;
-class HemisphereRenderer;
-class TextRenderer;
-class PhysicSolver;
-namespace tp { class ThreadPool; }
-class Shader;
-class HemisphereBoundary;
-// enum Fruit : int;
-// class FruitManager;
-#include "fruit.hpp"
-struct ViewState; // or just 'class ViewState;' if it's a class
 
 class Game
 {
@@ -81,6 +73,10 @@ public:
     Shader *ball_shader;
     Shader *text_shader;
 
+    Mix_Chunk* mergeSound;
+    Mix_Chunk* loseSound;
+    Mix_Chunk* placeSound;
+
     HemisphereBoundary boundary;   
     Fruit nextFruit;
     FruitManager fm;
@@ -93,14 +89,14 @@ public:
 
     // constructor/destructor
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
-        this->State = GAME_MENU;
-        this->Width = width;
-        this->Height = height;
+        State = GAME_MENU;
+        Width = width;
+        Height = height;
 
         // Initialize keys to false
         for (int i = 0; i < 1024; i++) {
-            this->Keys[i] = false;
-            this->KeysProcessed[i] = false;
+            Keys[i] = false;
+            KeysProcessed[i] = false;
         }
 
         // Initialize the physics solver and thread pool
@@ -110,8 +106,13 @@ public:
         physics_solver = new PhysicSolver(*thread_pool, &boundary);
         // physics_solver = new PhysicSolver(*thread_pool);
         total_points = 0;
+
     }
     ~Game(){
+        Mix_FreeChunk(mergeSound);
+        Mix_CloseAudio();
+        SDL_Quit();
+
         delete b_rend;
         delete h_rend;
         delete t_rend;
@@ -171,6 +172,19 @@ public:
 
         state.Init(window);
 
+        mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
+        if (!mergeSound) {
+            std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
+        }
+        loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
+        if (!loseSound) {
+            std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
+        }
+        placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
+        if (!placeSound) {
+            std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
+        }
+
         std::vector<std::string> faces
         {
             FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // right
@@ -217,7 +231,7 @@ public:
     }
     // game loop
     void ProcessInput(float dt){
-        if (this->State == GAME_ACTIVE)
+        if (State == GAME_ACTIVE)
         {
             // Handle input for camera movement using continuous key check
             if (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_W) == GLFW_PRESS) {
@@ -230,42 +244,38 @@ public:
 
         // Handle single key presses for state changes
         // From menu to game
-        if (this->State == GAME_MENU)
+        if (State == GAME_MENU)
         {
-            if (this->Keys[GLFW_KEY_ENTER] && !this->KeysProcessed[GLFW_KEY_ENTER]){
-                this->State = GAME_ACTIVE;
-                State = GAME_ACTIVE; // Update global state
-                this->KeysProcessed[GLFW_KEY_ENTER] = true;
+            if (Keys[GLFW_KEY_ENTER] && !KeysProcessed[GLFW_KEY_ENTER]){
+                KeysProcessed[GLFW_KEY_ENTER] = true;
+                State = GAME_ACTIVE;
             }
             if (mouseClicked){
                 State = GAME_ACTIVE;
             }
         }
 
-        if (this->State == GAME_OVER) {
-            if (this->Keys[GLFW_KEY_ENTER] && !this->KeysProcessed[GLFW_KEY_ENTER]){
-                Reset(); // Reset game
-                this->State = GAME_ACTIVE;
-                this->KeysProcessed[GLFW_KEY_ENTER] = true;
+        if (State == GAME_OVER) {
+            if (Keys[GLFW_KEY_ENTER] && !KeysProcessed[GLFW_KEY_ENTER]){
+                KeysProcessed[GLFW_KEY_ENTER] = true;
+                State = GAME_ACTIVE;
+                Reset();
             }
             if (mouseClicked){
-                Reset(); // Reset game
-                this->State = GAME_ACTIVE;
+                State = GAME_ACTIVE;
+                Reset();
             }
         }
         
         // Toggle menu with Escape key
-        if (this->Keys[GLFW_KEY_ESCAPE] && !this->KeysProcessed[GLFW_KEY_ESCAPE]){
-            if (this->State == GAME_ACTIVE) {
-                this->State = GAME_MENU;
-                State = GAME_MENU; // Update global state
+        if (Keys[GLFW_KEY_ESCAPE] && !KeysProcessed[GLFW_KEY_ESCAPE]){
+            if (State == GAME_ACTIVE || State == GAME_OVER) {
+                State = GAME_MENU;
             } else {
-                this->State = GAME_ACTIVE;
-                State = GAME_ACTIVE; // Update global state
+                State = GAME_ACTIVE;
             }
-            this->KeysProcessed[GLFW_KEY_ESCAPE] = true;
+            KeysProcessed[GLFW_KEY_ESCAPE] = true;
         }
-        mouseClicked=false;
     }
 
     void FixedUpdate(float dt){
@@ -274,6 +284,7 @@ public:
         total_points = physics_solver->total_points;
     }
     void Update(float dt){
+        Sound();
         if (State == GAME_OVER){
             // Smooth pan (rotate around bowl)
             // state.yaw += dt * 0.5f; // Adjust speed as needed
@@ -296,8 +307,16 @@ public:
 
             state.w = midpoint + amplitude * sin(w_timer * frequency * 2.0f * 3.14159f);
         }
+        mouseClicked=false;
     }
-
+    int Sound(){
+        if (physics_solver->just_merged > 0) {
+            Mix_PlayChannel(-1, mergeSound, 0);
+        }
+        if (mouseClicked) {
+            Mix_PlayChannel(-1, placeSound, 0);
+        }
+    }
     void Render(){
         switch(State){
             case GAME_ACTIVE:
@@ -327,7 +346,7 @@ public:
         glm::mat4 view = state.getViewMatrix();
         glm::mat4 projection = glm::perspective(
             glm::radians(45.0f),
-            (float)this->Width / (float)this->Height,
+            (float)Width / (float)Height,
             0.1f,
             100.0f
         );
@@ -362,15 +381,25 @@ public:
 
         // Render all physics objects
         int renderedCount = 0;
-        // for (auto &obj : physics_solver->objects) {
+
+        bool losing=false;
         for (int i=0;i<MAX_OBJECTS;i++) {
             if (!physics_solver->has_obj[i])continue;
             PhysicsObject &obj = physics_solver->objects[i];
             if (obj.hidden) continue;
             
+            // if (obj.position.y < -10){
+            //     if (total_points > high_score) high_score = total_points;
+            //     State = GAME_OVER;
+            //     continue;
+            // }
             if (obj.position.y < -10){
                 if (total_points > high_score) high_score = total_points;
-                this->State = GAME_OVER;
+                float yawVelocity = 0.0001;
+                float pitchVelocity = 0;
+                state.updateCameraPos(yawVelocity,pitchVelocity);
+                State = GAME_OVER;
+                losing=true;
                 continue;
             }
             
@@ -385,30 +414,11 @@ public:
                 std::cout << "  w_diff=" << w_diff << ", projected_scale=" << projected_scale << std::endl;
             }
             
-            // Skip objects that would be behind the 4D viewing plane or have invalid scale
-            // if (abs(w_diff) < 0.001f) {
-            //     if (frameCount % 60 == 0) {
-            //         std::cout << "  SKIPPED: Object too close to 4D viewing plane" << std::endl;
-            //     }
-            //     continue;
-            // }
-            
-            // if (abs(projected_scale) > 100.0f) {
-            //     if (frameCount % 60 == 0) {
-            //         std::cout << "  SKIPPED: Projected scale too large (" << projected_scale << ")" << std::endl;
-            //     }
-            //     continue;
-            // }
-            
             // Render the object
             b_rend->Draw4d(state.w, obj.fruit, obj.position, glm::vec3(0.0f));
-            // GLenum err;
-            // while ((err = glGetError()) != GL_NO_ERROR) {
-            //     std::cerr << "[Draw4d] GL ERROR: " << err << std::endl;
-            // }
             renderedCount++;
-            
         }
+        if (losing) Mix_PlayChannel(-1, loseSound, 0);
         
         if (frameCount % 60 == 0) {
             std::cout << "Actually rendered: " << renderedCount << " objects" << std::endl;
@@ -424,16 +434,6 @@ public:
         h_rend->shader->setFloat("alpha", 1.0f);
 
         h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f));
-
-        // projection = glm::ortho(0.0f, static_cast<float>(state.windowWidth), 0.0f, static_cast<float>(state.windowHeight));
-        // text_shader->use();
-        // glUniformMatrix4fv(glGetUniformLocation(text_shader->ID, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        
-        // glDepthFunc(GL_LEQUAL);  // Same as skybox, allows rendering at same depth
-        // glDepthMask(GL_FALSE);   // Don't write to depth buffer
-        // Re-enable depth testing and writing
-        // glDepthFunc(GL_LESS);    // Reset to normal
-        // glDepthMask(GL_TRUE);
 
         // Render skybox LAST (after all objects)
         glDepthFunc(GL_LEQUAL); // Change depth function so skybox renders behind everything
@@ -490,7 +490,7 @@ public:
         
         // Create view/projection matrices for the skybox
         glm::mat4 view = glm::mat4(glm::mat3(state.getViewMatrix())); // Remove translation
-        glm::mat4 projection_3d = glm::perspective(glm::radians(45.0f), (float)this->Width / (float)this->Height, 0.1f, 100.0f);
+        glm::mat4 projection_3d = glm::perspective(glm::radians(45.0f), (float)Width / (float)Height, 0.1f, 100.0f);
         
         background_shader->setMat4("view", view);
         background_shader->setMat4("projection", projection_3d);
@@ -505,16 +505,27 @@ public:
         glDepthFunc(GL_LESS);
 
         // Setup for 2D text rendering with top-left origin
-        glm::mat4 projection_2d = glm::ortho(0.0f, static_cast<float>(this->Width), static_cast<float>(this->Height), 0.0f);
+        glm::mat4 projection_2d = glm::ortho(0.0f, static_cast<float>(Width), static_cast<float>(Height), 0.0f);
         t_rend->shader->use();
         t_rend->shader->setMat4("projection", projection_2d);
         t_rend->shader->setInt("text", 0);
 
         // Render menu text
         // Note: Y-coordinate is from the top of the screen. Centering text requires knowing its rendered width, so we approximate with offsets.
-        t_rend->RenderText("Suika 4D", this->Width / 2.0f - 150.0f, this->Height / 2.0f - 100.0f, 2.0f, glm::vec3(0.9f, 0.9f, 1.0f));
-        t_rend->RenderText("Press ENTER to Play", this->Width / 2.0f - 220.0f, this->Height / 2.0f, 1.5f, glm::vec3(0.8f, 0.8f, 0.8f));
-        t_rend->RenderText("Press ESC to Pause", 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
+        std::string title = "Suika 4D";
+        std::string subtitle = "Click or Press ENTER to Play";
+        std::string hint = "Press ESC to Pause";
+
+        float centerX = Width / 2.0f;
+        float centerY = Height / 2.0f;
+
+        float titleScale = 2.0f;
+        float subtitleScale = 1.5f;
+        float hintScale = 1.0f;
+
+        t_rend->RenderText(title, centerX -  t_rend->GetTextWidth(title, titleScale) / 2.0f,centerY - 100.0f,titleScale,glm::vec3(0.9f, 0.9f, 1.0f));
+        t_rend->RenderText(subtitle,centerX -  t_rend->GetTextWidth(subtitle, subtitleScale) / 2.0f,centerY,subtitleScale,glm::vec3(0.8f, 0.8f, 0.8f));
+        t_rend->RenderText(hint,25.0f,25.0f,hintScale,glm::vec3(1.0f));
     }
     void RenderEndScreen() {
         
@@ -532,7 +543,7 @@ public:
         glm::mat4 view = state.getViewMatrix();
         glm::mat4 projection = glm::perspective(
             glm::radians(45.0f),
-            (float)this->Width / (float)this->Height,
+            (float)Width / (float)Height,
             0.1f,
             100.0f
         );
@@ -571,11 +582,6 @@ public:
             PhysicsObject &obj = physics_solver->objects[i];
             if (obj.hidden) continue;
             
-            if (obj.position.y < -10){
-                if (total_points > high_score) high_score = total_points;
-                this->State = GAME_OVER;
-                continue;
-            }
             float w_diff = state.w - obj.position.w;
             float projected_scale = sqrt(obj.radius*obj.radius - w_diff*w_diff);
             b_rend->Draw4d(state.w, obj.fruit, obj.position, glm::vec3(0.0f));
@@ -604,7 +610,7 @@ public:
 
         view = glm::mat4(glm::mat3(state.getViewMatrix()));
         projection = glm::perspective(glm::radians(45.0f),
-                                                (float)this->Width / (float)this->Height,
+                                                (float)Width / (float)Height,
                                                 0.1f, 100.0f);
         background_shader->setMat4("view", view);
         background_shader->setMat4("projection", projection);
@@ -622,11 +628,20 @@ public:
         t_rend->shader->setMat4("projection", projection);
         t_rend->shader->setInt("text", 0);
 
-        float centerX = Width / 2.0f;
-        t_rend->RenderText("GAME OVER", centerX - 100, 150.0f, 1.5f, glm::vec3(1.0f, 0.2f, 0.2f));
-        t_rend->RenderText("Score: " + std::to_string(total_points), centerX - 80, 250.0f, 1.0f, glm::vec3(1.0f));
-        t_rend->RenderText("High Score: " + std::to_string(high_score), centerX - 100, 300.0f, 1.0f, glm::vec3(0.8f, 0.8f, 0.2f));
-        t_rend->RenderText("Press ENTER to Retry", centerX - 120, 400.0f, 1.0f, glm::vec3(0.8f));
+        std::string msg1 = "GAME OVER";
+        std::string msg2 = "Score: " + std::to_string(total_points);
+        std::string msg3 = "High Score: " + std::to_string(high_score);
+        std::string msg4 = "Click or Press ENTER to Restart";
+
+        float scale1 = 1.5f;
+        float scale2 = 1.0f;
+
+        float centerX = state.windowWidth / 2.0f;
+
+        t_rend->RenderText(msg1, centerX - t_rend->GetTextWidth(msg1, scale1) / 2.0f, 150.0f, scale1, glm::vec3(1.0f, 0.2f, 0.2f));
+        t_rend->RenderText(msg2, centerX - t_rend->GetTextWidth(msg2, scale2) / 2.0f, 250.0f, scale2, glm::vec3(1.0f));
+        t_rend->RenderText(msg3, centerX - t_rend->GetTextWidth(msg3, scale2) / 2.0f, 300.0f, scale2, glm::vec3(0.8f, 0.8f, 0.2f));
+        t_rend->RenderText(msg4, centerX - t_rend->GetTextWidth(msg4, scale2) / 2.0f, 400.0f, scale2, glm::vec3(0.8f));
     }
     // void DoCollisions();
     // reset

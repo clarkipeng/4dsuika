@@ -25,6 +25,7 @@ struct PhysicSolver
     glm::vec4                   gravity = {0.0f, -20.0f, 0.0f, 0.0f};
 
     std::atomic<int> total_points = 0;
+    std::atomic<int> just_merged =0;
     // glm::vec4                   gravity = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Simulation solving pass count
@@ -68,6 +69,7 @@ struct PhysicSolver
                 glm::vec4 vel_2 = obj_2.position - obj_2.last_position;
                 
                 total_points += FruitManager::getFruitProperties(obj_2.fruit).merge_points;
+                just_merged++;
                 removeObject(atom_2_idx);
                 obj_1.setPosition((obj_1.position + obj_2.position) / 2.0f);
                 obj_1.upgrade_fruit();
@@ -178,6 +180,9 @@ struct PhysicSolver
     {
         // Perform the sub steps
         const float sub_dt = dt / static_cast<float>(sub_steps);
+
+        just_merged=0;
+
         for (uint32_t i(sub_steps); i--;) {
             solveCollisions();
             updateBoundary_multi(sub_dt);

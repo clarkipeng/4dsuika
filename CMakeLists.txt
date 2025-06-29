@@ -26,6 +26,10 @@ find_package(GLFW3 REQUIRED)
 message(STATUS "Found GLFW3 in ${GLFW3_INCLUDE_DIR}")
 find_package(ASSIMP REQUIRED)
 message(STATUS "Found ASSIMP in ${ASSIMP_INCLUDE_DIR}")
+find_package(SDL2 REQUIRED)
+include_directories(${SDL2_INCLUDE_DIRS})
+include_directories(${CMAKE_SOURCE_DIR}/vendor/SDL_mixer-release-2.8.1/include)
+set(LIBS ${LIBS} SDL2::SDL2)
 # find_package(SOIL REQUIRED)
 # message(STATUS "Found SOIL in ${SOIL_INCLUDE_DIR}")
 # find_package(GLEW REQUIRED)
@@ -33,6 +37,20 @@ message(STATUS "Found ASSIMP in ${ASSIMP_INCLUDE_DIR}")
 if(APPLE)
   find_package(Freetype REQUIRED)
   message(STATUS "Found Freetype in ${FREETYPE_INCLUDE_DIRS}")
+
+  find_library(COREAUDIO_FRAMEWORK CoreAudio)
+  find_library(AUDIOTOOLBOX_FRAMEWORK AudioToolbox)
+  find_library(AUDIOUNIT_FRAMEWORK AudioUnit)
+  find_library(COREMIDI_FRAMEWORK CoreMIDI)
+  
+  set(APPLE_AUDIO_FRAMEWORKS
+    ${COREAUDIO_FRAMEWORK}
+    ${AUDIOTOOLBOX_FRAMEWORK}
+    ${AUDIOUNIT_FRAMEWORK}
+    ${COREMIDI_FRAMEWORK}
+  )
+  
+  set(LIBS ${LIBS} ${APPLE_AUDIO_FRAMEWORKS})
 endif(APPLE)
 
 if(WIN32)
@@ -197,6 +215,13 @@ set(LIBS ${LIBS} STB_IMAGE)
 
 add_library(GLAD "src/glad.c")
 set(LIBS ${LIBS} GLAD)
+
+add_library(SDL2_mixer STATIC IMPORTED GLOBAL)
+set_target_properties(SDL2_mixer PROPERTIES
+  IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/vendor/SDL_mixer-release-2.8.1/build/libSDL2_mixer.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/vendor/SDL_mixer-release-2.8.1/include"
+)
+set(LIBS ${LIBS} SDL2_mixer)
 
 macro(makeLink src dest target)
   add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E create_symlink ${src} ${dest}  DEPENDS  ${dest} COMMENT "mklink ${src} -> ${dest}")

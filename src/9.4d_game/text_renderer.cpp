@@ -123,3 +123,13 @@ void TextRenderer::RenderText(const std::string& text, float x, float y, float s
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
+
+
+float TextRenderer::GetTextWidth(const std::string& text, float scale) {
+    float width = 0.0f;
+    for (char c : text) {
+        Character ch = Characters[c];  // Assuming you cache glyphs like this
+        width += (ch.Advance >> 6) * scale;    // Bitshift back to pixels, scale applied
+    }
+    return width;
+}

@@ -9,6 +9,9 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include <SDL.h>
+#include <SDL_mixer.h>
+
 #include "game.hpp"
 
 #include "globals.h"
@@ -59,6 +62,14 @@ int main(int argc, char *argv[])
     GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "game", nullptr, nullptr);
     glfwMakeContextCurrent(window);
 
+    if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+        std::cerr << "SDL_Init error: " << SDL_GetError() << std::endl;
+        return 1;
+    }
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+        std::cerr << "Mix_OpenAudio error: " << Mix_GetError() << std::endl;
+        return 1;
+    }
     // glad: load all OpenGL function pointers
     // ---------------------------------------
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -128,6 +139,7 @@ int main(int argc, char *argv[])
         {
             std::this_thread::sleep_for(std::chrono::duration<float>(FRAME_TIME - frameDuration));
         }
+        
     }
 
 
@@ -183,8 +195,8 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
                 game.nextFruit, true, false)
             );
             game.nextFruit = FruitManager::getRandomFruit();
-        } else {
         }
+        game.mouseClicked=true;
     }
 }
 
