@@ -31,7 +31,8 @@
 
 enum GameState {
     GAME_ACTIVE,
-    GAME_MENU
+    GAME_MENU,
+    GAME_OVER 
 };
 
 const float light_radius = 20.0f;
@@ -85,6 +86,7 @@ public:
     FruitManager fm;
 
     int total_points=0;
+    int high_score = 0;
     ViewState state;
 
     // constructor/destructor
@@ -114,34 +116,34 @@ public:
         delete physics_solver;
         delete thread_pool;
     }
-    // void Reset(){
-    //     // Clear all objects in the physics solver
-    //     for (int i = 0; i < MAX_OBJECTS; ++i) {
-    //         if (physics_solver->has_obj[i]) {
-    //             physics_solver->removeObject(i);
-    //         }
-    //     }
-    //     // Reset physics solver internal state
-    //     physics_solver->reset();  // Assuming you have or can add this method
-    //     // Reset points
-    //     total_points = 0;
-    //     physics_solver->total_points = 0;
+    void Reset(){
+        // Clear all objects in the physics solver
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            if (physics_solver->has_obj[i]) {
+                physics_solver->removeObject(i);
+            }
+        }
+        // Reset physics solver internal state
+        physics_solver->reset();  // Assuming you have or can add this method
+        // Reset points
+        total_points = 0;
+        physics_solver->total_points = 0;
 
-    //     // Reset the fruit manager state (if needed)
-    //     fm.initializeFruits();
-    //     nextFruit = fm.getRandomFruit();
+        // Reset the fruit manager state (if needed)
+        fm.initializeFruits();
+        nextFruit = fm.getRandomFruit();
 
-    //     // Reset view state
-    //     state.Reset();  // Make sure ViewState has a Reset() method to restore initial camera & parameters
+        // Reset view state
+        state.reset();  // Make sure ViewState has a Reset() method to restore initial camera & parameters
 
-    //     // Reset any other relevant variables
-    //     ShakeTime = 0.0f;
-    //     angle = 0.0f;
+        // Reset any other relevant variables
+        ShakeTime = 0.0f;
+        angle = 0.0f;
 
-    //     // Set game state back to active or menu as desired
-    //     State = GAME_ACTIVE;
+        // Set game state back to active or menu as desired
+        State = GAME_ACTIVE;
 
-    // }
+    }
     // initialize game state (load all shaders/textures/levels)
     void Init(GLFWwindow* window){
         ball_shader = new Shader("2.2.2.pbr.vs", "2.2.2.pbr.fs");
@@ -234,6 +236,14 @@ public:
                 this->KeysProcessed[GLFW_KEY_ENTER] = true;
             }
         }
+
+        if (this->State == GAME_OVER) {
+            if (this->Keys[GLFW_KEY_ENTER] && !this->KeysProcessed[GLFW_KEY_ENTER]){
+                Reset(); // Reset game
+                this->State = GAME_ACTIVE;
+                this->KeysProcessed[GLFW_KEY_ENTER] = true;
+            }
+        }
         
         // Toggle menu with Escape key
         if (this->Keys[GLFW_KEY_ESCAPE] && !this->KeysProcessed[GLFW_KEY_ESCAPE]){
@@ -263,6 +273,10 @@ public:
             case GAME_MENU:
                 RenderMenu();
                 break;
+            case GAME_OVER:
+                RenderEndScreen();
+                break;
+                
         }
     }
     void RenderGame(){
@@ -323,6 +337,8 @@ public:
             
             if (obj.position.y < -10){
                 physics_solver->removeObject(i);
+                if (total_points > high_score) high_score = total_points;
+                this->State = GAME_OVER;
                 continue;
             }
             
@@ -467,6 +483,40 @@ public:
         t_rend->RenderText("Suika 4D", this->Width / 2.0f - 150.0f, this->Height / 2.0f - 100.0f, 2.0f, glm::vec3(0.9f, 0.9f, 1.0f));
         t_rend->RenderText("Press ENTER to Play", this->Width / 2.0f - 220.0f, this->Height / 2.0f, 1.5f, glm::vec3(0.8f, 0.8f, 0.8f));
         t_rend->RenderText("Press ESC to Pause", 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
+    }
+    void RenderEndScreen() {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Render background
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+        background_shader->use();
+
+        glm::mat4 view = glm::mat4(glm::mat3(state.getViewMatrix()));
+        glm::mat4 projection = glm::perspective(glm::radians(45.0f),
+                                                (float)this->Width / (float)this->Height,
+                                                0.1f, 100.0f);
+        background_shader->setMat4("view", view);
+        background_shader->setMat4("projection", projection);
+        background_shader->setInt("environmentMap", 0);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
+        renderCube();
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+
+        // Render text
+        projection = glm::ortho(0.0f, static_cast<float>(Width), static_cast<float>(Height), 0.0f);
+        t_rend->shader->use();
+        t_rend->shader->setMat4("projection", projection);
+        t_rend->shader->setInt("text", 0);
+
+        float centerX = Width / 2.0f;
+        t_rend->RenderText("GAME OVER", centerX - 100, 150.0f, 1.5f, glm::vec3(1.0f, 0.2f, 0.2f));
+        t_rend->RenderText("Score: " + std::to_string(total_points), centerX - 80, 250.0f, 1.0f, glm::vec3(1.0f));
+        t_rend->RenderText("High Score: " + std::to_string(high_score), centerX - 100, 300.0f, 1.0f, glm::vec3(0.8f, 0.8f, 0.2f));
+        t_rend->RenderText("Press ENTER to Retry", centerX - 120, 400.0f, 1.0f, glm::vec3(0.8f));
     }
     // void DoCollisions();
     // reset

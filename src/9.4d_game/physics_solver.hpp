@@ -167,13 +167,12 @@ struct PhysicSolver
         has_obj[i] = false;
     }
 
-    // // Add a new object to the solver
-    // uint64_t createObject(glm::vec4 pos)
-    // {
-    //     objects.emplace_back(pos);
-    //     object_locks.emplace_back();
-    //     return objects.size() - 1;
-    // }
+    void reset(){
+        has_obj.fill(false);
+        for(int i=0;i<MAX_OBJECTS;i++) {
+            no_obj.insert(i);
+        }
+    }
 
     void update(float dt)
     {

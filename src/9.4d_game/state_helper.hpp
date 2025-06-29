@@ -28,8 +28,8 @@ struct ViewState {
     glm::vec3 orbitTarget = sphereCenter; //+ glm::vec3(0, sphereRadius, 0);
     float radius = 8.0f;
 
-    float yaw = glm::radians(90.0f);    // looking along +X
-    float pitch = glm::radians(20.0f);  // slight downward
+    float yaw = glm::radians(00.0f);    // looking along +X
+    float pitch = glm::radians(-20.0f);  // slight downward
 
     const float pitchMin = glm::radians(-89.0f);
     const float pitchMax = glm::radians(89.0f);
@@ -46,6 +46,23 @@ struct ViewState {
         glfwGetWindowSize(window,&windowWidth,&windowHeight);
         initialized=true;
     }
+
+    void reset() {
+        w = 0.0f;
+        sphereCenter = glm::vec3(0.0f, 0.0f, 0.0f);
+        sphereRadius = 5.0f;
+        orbitTarget = sphereCenter;
+        radius = 8.0f;
+        yaw = glm::radians(0.0f);
+        pitch = glm::radians(-20.0f);
+        rotating = false;
+        lastX = 0.0;
+        lastY = 0.0;
+        m_xpos = 0.0f;
+        m_ypos = 0.0f;
+        mouseMoved = false;
+    }
+    
     // Update camera position based on current yaw, pitch, radius
     glm::vec3 getCameraPosition() const {
         float x = radius * cos(pitch) * cos(yaw);
