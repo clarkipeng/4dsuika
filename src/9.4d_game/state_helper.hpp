@@ -20,7 +20,7 @@
 
 struct ViewState {
     float w=0.0f;
-    const float w_min=-5.0f, w_max=5.0f;
+    const float w_min=-3.0f, w_max=3.0f;
 
     glm::vec3 sphereCenter = glm::vec3(0.0f, 0.0f, 0.0f);
     float sphereRadius = 5.0f;
@@ -28,8 +28,10 @@ struct ViewState {
     glm::vec3 orbitTarget = sphereCenter; //+ glm::vec3(0, sphereRadius, 0);
     float radius = 8.0f;
 
-    float yaw = glm::radians(00.0f);    // looking along +X
-    float pitch = glm::radians(-20.0f);  // slight downward
+    float yaw = glm::radians(00.0f);
+    float lastYaw = glm::radians(00.0f);
+    float pitch = glm::radians(-20.0f);
+    float lastPitch = glm::radians(-20.0f);
 
     const float pitchMin = glm::radians(-89.0f);
     const float pitchMax = glm::radians(89.0f);
@@ -53,8 +55,8 @@ struct ViewState {
         sphereRadius = 5.0f;
         orbitTarget = sphereCenter;
         radius = 8.0f;
-        yaw = glm::radians(0.0f);
-        pitch = glm::radians(-20.0f);
+        yaw = lastYaw = glm::radians(0.0f);
+        pitch = lastPitch = glm::radians(-20.0f);
         rotating = false;
         lastX = 0.0;
         lastY = 0.0;
@@ -62,7 +64,7 @@ struct ViewState {
         m_ypos = 0.0f;
         mouseMoved = false;
     }
-    
+
     // Update camera position based on current yaw, pitch, radius
     glm::vec3 getCameraPosition() const {
         float x = radius * cos(pitch) * cos(yaw);
@@ -95,6 +97,14 @@ struct ViewState {
     }
 
     // Call on mouse move
+    void updateCameraPos(float dyaw, float dpitch){
+        lastPitch = pitch;
+        lastYaw = yaw;
+        yaw   += dyaw;
+        pitch += dpitch;
+        if (pitch > pitchMax) pitch = pitchMax;
+        if (pitch < pitchMin) pitch = pitchMin;
+    }
     void onCursorPos(double xpos, double ypos) {
         m_xpos = xpos;
         m_ypos = ypos;
@@ -106,11 +116,7 @@ struct ViewState {
         float dx = float(xpos - lastX);
         float dy = float(ypos - lastY);
 
-        yaw   += dx * sensitivity;
-        pitch -= dy * sensitivity;
-
-        if (pitch > pitchMax) pitch = pitchMax;
-        if (pitch < pitchMin) pitch = pitchMin;
+        updateCameraPos(dx * sensitivity,-dy * sensitivity);
 
         lastX = xpos;
         lastY = ypos;

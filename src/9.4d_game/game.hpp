@@ -89,6 +89,8 @@ public:
     int high_score = 0;
     ViewState state;
 
+    bool mouseClicked=false;
+
     // constructor/destructor
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
         this->State = GAME_MENU;
@@ -235,6 +237,9 @@ public:
                 State = GAME_ACTIVE; // Update global state
                 this->KeysProcessed[GLFW_KEY_ENTER] = true;
             }
+            if (mouseClicked){
+                State = GAME_ACTIVE;
+            }
         }
 
         if (this->State == GAME_OVER) {
@@ -242,6 +247,10 @@ public:
                 Reset(); // Reset game
                 this->State = GAME_ACTIVE;
                 this->KeysProcessed[GLFW_KEY_ENTER] = true;
+            }
+            if (mouseClicked){
+                Reset(); // Reset game
+                this->State = GAME_ACTIVE;
             }
         }
         
@@ -256,6 +265,7 @@ public:
             }
             this->KeysProcessed[GLFW_KEY_ESCAPE] = true;
         }
+        mouseClicked=false;
     }
 
     void FixedUpdate(float dt){
@@ -263,7 +273,30 @@ public:
         physics_solver->update(dt);
         total_points = physics_solver->total_points;
     }
-    void Update(float dt){}
+    void Update(float dt){
+        if (State == GAME_OVER){
+            // Smooth pan (rotate around bowl)
+            // state.yaw += dt * 0.5f; // Adjust speed as needed
+            float yawVelocity = (state.yaw - state.lastYaw);
+            float pitchVelocity = (state.pitch - state.lastPitch);
+            state.updateCameraPos(yawVelocity,pitchVelocity);
+
+            // Smooth zoom: Interpolate radius toward target
+            float targetRadius = 15.0f; // Smaller = zoom in
+            float zoomSpeed = 1.5f;
+            state.radius += (targetRadius - state.radius) * dt * zoomSpeed;
+
+            // Animate w in a loop between w_min and w_max
+            static float w_timer = 0.0f;
+            w_timer += dt;
+
+            float amplitude = (state.w_max - state.w_min) / 2.0f;
+            float midpoint = (state.w_max + state.w_min) / 2.0f;
+            float frequency = 0.1f; // Adjust how fast w oscillates
+
+            state.w = midpoint + amplitude * sin(w_timer * frequency * 2.0f * 3.14159f);
+        }
+    }
 
     void Render(){
         switch(State){
@@ -336,7 +369,6 @@ public:
             if (obj.hidden) continue;
             
             if (obj.position.y < -10){
-                physics_solver->removeObject(i);
                 if (total_points > high_score) high_score = total_points;
                 this->State = GAME_OVER;
                 continue;
@@ -485,15 +517,93 @@ public:
         t_rend->RenderText("Press ESC to Pause", 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
     }
     void RenderEndScreen() {
+        
+        // Clear buffers
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        
+        // Enable blending for transparency
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Render background
-        glDepthFunc(GL_LEQUAL);
+        // Setup shader and matrices
+        glm::mat4 view = state.getViewMatrix();
+        glm::mat4 projection = glm::perspective(
+            glm::radians(45.0f),
+            (float)this->Width / (float)this->Height,
+            0.1f,
+            100.0f
+        );
+        glm::vec3 cameraPos = state.getCameraPosition();
+        
+        b_rend->shader->use();
+        b_rend->shader->setMat4("view", view);
+        b_rend->shader->setMat4("projection", projection);
+        b_rend->shader->setVec3("camPos", cameraPos);
+        
+        b_rend->shader->setFloat("metallic", 0.0f);
+        b_rend->shader->setFloat("roughness", 0.5f);
+        b_rend->shader->setFloat("ao", 1.0f);
+        b_rend->shader->setFloat("alpha", 1.0f);
+
+        float theta = 3.1415*(state.w-state.w_min) / (state.w_max-state.w_min); // or use glfwGetTime(), animating from 0 to 2π
+        float x = light_radius * cos(theta);
+        float y = max_height * sin(theta);
+        b_rend->shader->setVec3("lightPositions[" + std::to_string(0) + "]", glm::vec3(x,y,light_radius * cos(angle_in_sky)));
+        b_rend->shader->setVec3("lightColors[" + std::to_string(0) + "]", light_color);
+
+        // Debug output (only occasionally to avoid spam)
+        static int frameCount = 0;
+        frameCount++;
+        if (frameCount % 60 == 0) { // Print every 60 frames (once per second at 60fps)
+            std::cout << "=== FRAME " << frameCount/60 << " ===" << std::endl;
+            std::cout << "Camera pos: (" << cameraPos.x << ", " << cameraPos.y << ", " << cameraPos.z << ")" << std::endl;
+            std::cout << "W coordinate: " << state.w << std::endl;
+            std::cout << "Objects to render: " << MAX_OBJECTS - physics_solver->no_obj.size() << std::endl;
+        }
+
+        // Render all physics objects
+        int renderedCount = 0;
+        for (int i=0;i<MAX_OBJECTS;i++) {
+            if (!physics_solver->has_obj[i])continue;
+            PhysicsObject &obj = physics_solver->objects[i];
+            if (obj.hidden) continue;
+            
+            if (obj.position.y < -10){
+                if (total_points > high_score) high_score = total_points;
+                this->State = GAME_OVER;
+                continue;
+            }
+            float w_diff = state.w - obj.position.w;
+            float projected_scale = sqrt(obj.radius*obj.radius - w_diff*w_diff);
+            b_rend->Draw4d(state.w, obj.fruit, obj.position, glm::vec3(0.0f));
+            renderedCount++;
+            
+        }
+        
+        if (frameCount % 60 == 0) {
+            std::cout << "Actually rendered: " << renderedCount << " objects" << std::endl;
+        }
+
+        h_rend->shader->use();
+        h_rend->shader->setMat4("view", view);
+        h_rend->shader->setMat4("projection", projection);
+        h_rend->shader->setVec3("camPos", cameraPos);
+        h_rend->shader->setFloat("metallic", 0.0f);
+        h_rend->shader->setFloat("roughness", 0.5f);
+        h_rend->shader->setFloat("ao", 1.0f);
+        h_rend->shader->setFloat("alpha", 1.0f);
+
+        h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f));
+
+        glDepthFunc(GL_LEQUAL); // Change depth function so skybox renders behind everything
         glDepthMask(GL_FALSE);
         background_shader->use();
 
-        glm::mat4 view = glm::mat4(glm::mat3(state.getViewMatrix()));
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f),
+        view = glm::mat4(glm::mat3(state.getViewMatrix()));
+        projection = glm::perspective(glm::radians(45.0f),
                                                 (float)this->Width / (float)this->Height,
                                                 0.1f, 100.0f);
         background_shader->setMat4("view", view);
