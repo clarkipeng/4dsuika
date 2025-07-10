@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>4D Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        
+        #game-container {
+            position: relative;
+            text-align: center;
+        }
+        
+        #game-canvas {
+            border: 2px solid #333;
+            background-color: #111;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            z-index: 10;
+        }
+        
+        #controls {
+            margin-top: 20px;
+            color: white;
+            font-size: 14px;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        #error {
+            color: #ff4444;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="loading">Loading 4D Game...</div>
+        <canvas id="game-canvas" class="hidden"></canvas>
+        <div id="controls" class="hidden">
+            <h3>Controls:</h3>
+            <p>Mouse: Look around</p>
+            <p>Left Click: Place fruit</p>
+            <p>Scroll: Zoom in/out</p>
+            <p>WASD: Move camera</p>
+        </div>
+        <div id="error"></div>
+    </div>
+
+    <script>
+        // Emscripten module configuration
+        var Module = {
+            canvas: document.getElementById('game-canvas'),
+            onRuntimeInitialized: function() {
+                console.log('4D Game loaded successfully!');
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('game-canvas').classList.remove('hidden');
+                document.getElementById('controls').classList.remove('hidden');
+            },
+            onError: function(error) {
+                console.error('Error loading 4D Game:', error);
+                document.getElementById('loading').textContent = 'Error loading game';
+                document.getElementById('error').textContent = 'Failed to load the game. Please check your browser supports WebGL2.';
+            }
+        };
+
+        // Load the WebAssembly module
+        var script = document.createElement('script');
+        script.src = '4DGame_Web.js';
+        script.onerror = function() {
+            document.getElementById('loading').textContent = 'Error: Could not load game files';
+            document.getElementById('error').textContent = 'Failed to load game files. Please check your internet connection.';
+        };
+        document.head.appendChild(script);
+    </script>
+</body>
+</html> 

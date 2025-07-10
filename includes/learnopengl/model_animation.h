@@ -217,14 +217,18 @@ private:
 		{
 			GLenum format;
 			if (nrComponents == 1)
-				format = GL_RED;
+				// format = GL_RED;
+				format = GL_RED8;
 			else if (nrComponents == 3)
-				format = GL_RGB;
+				// format = GL_RGB;
+				format = GL_RGB8;
 			else if (nrComponents == 4)
-				format = GL_RGBA;
+				// format = GL_RGBA;
+				format = GL_RGBA8;
 
 			glBindTexture(GL_TEXTURE_2D, textureID);
 			glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+			
 			glGenerateMipmap(GL_TEXTURE_2D);
 
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);

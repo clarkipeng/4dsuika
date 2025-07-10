@@ -1,312 +1,205 @@
-cmake_minimum_required (VERSION 3.0)
-cmake_policy(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
+cmake_policy(VERSION 3.10)
 
 project(LearnOpenGL)
 
-set(CMAKE_CXX_STANDARD 17) # this does nothing for MSVC, use target_compile_options below
+option(LINK_EXTRA_MAC_LIBS "Link PNG and Brotli libraries" OFF)
+
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
-IF(NOT CMAKE_BUILD_TYPE)
-  SET(CMAKE_BUILD_TYPE Debug CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
-ENDIF(NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
+endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/modules/")
 
-if(WIN32)
-	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
-endif(WIN32)
+#-----------------------------------------------------------------------------
+# 1. FIND DEPENDENCIES
+#-----------------------------------------------------------------------------
+add_library(STB_IMAGE STATIC src/stb_image.cpp)
+add_library(GLAD STATIC src/glad.c)
 
-link_directories(${CMAKE_SOURCE_DIR}/lib)
-
-# find the required packages
 find_package(GLM REQUIRED)
-message(STATUS "GLM included at ${GLM_INCLUDE_DIR}")
 find_package(GLFW3 REQUIRED)
-message(STATUS "Found GLFW3 in ${GLFW3_INCLUDE_DIR}")
 find_package(ASSIMP REQUIRED)
-message(STATUS "Found ASSIMP in ${ASSIMP_INCLUDE_DIR}")
-find_package(SDL2 REQUIRED)
-include_directories(${SDL2_INCLUDE_DIRS})
-include_directories(${CMAKE_SOURCE_DIR}/vendor/SDL_mixer-release-2.8.1/include)
-set(LIBS ${LIBS} SDL2::SDL2)
-# find_package(SOIL REQUIRED)
-# message(STATUS "Found SOIL in ${SOIL_INCLUDE_DIR}")
-# find_package(GLEW REQUIRED)
-# message(STATUS "Found GLEW in ${GLEW_INCLUDE_DIR}")
-if(APPLE)
-  find_package(Freetype REQUIRED)
-  message(STATUS "Found Freetype in ${FREETYPE_INCLUDE_DIRS}")
+find_package(OpenGL REQUIRED)
 
+set(ZLIB_USE_STATIC_LIBS ON)
+find_package(ZLIB REQUIRED)
+find_package(SDL2 REQUIRED)
+find_package(Freetype REQUIRED)
+find_package(SDL2_mixer REQUIRED)
+if(APPLE)
+  find_package(BZip2 REQUIRED)
+  find_package(PNG REQUIRED)
+endif()
+
+#-----------------------------------------------------------------------------
+# 2. DEFINE LIBRARIES FOR LINKING (PLATFORM-SPECIFIC)
+#-----------------------------------------------------------------------------
+set(COMMON_LIBS
+    GLAD
+    STB_IMAGE
+    ${ASSIMP_LIBRARY}
+    ${GLFW3_LIBRARY}
+    Freetype::Freetype
+    SDL2_mixer::SDL2_mixer-static
+    SDL2::SDL2-static
+    ${ZLIB_LIBRARY}
+)
+
+
+if(WIN32)
+  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+  set(LIBS ${COMMON_LIBS} opengl32 mingw32)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mconsole")
+elseif(APPLE)
+  # Find all required macOS frameworks correctly
+  find_library(COCOA_LIBRARY Cocoa)
+  find_library(IOKit_LIBRARY IOKit)
+  find_library(CoreVideo_LIBRARY CoreVideo)
+  find_library(ICONV_LIBRARY iconv)
   find_library(COREAUDIO_FRAMEWORK CoreAudio)
   find_library(AUDIOTOOLBOX_FRAMEWORK AudioToolbox)
   find_library(AUDIOUNIT_FRAMEWORK AudioUnit)
   find_library(COREMIDI_FRAMEWORK CoreMIDI)
-  
-  set(APPLE_AUDIO_FRAMEWORKS
+  find_library(GME_FRAMEWORK gme)
+
+  # Create a list of all found frameworks and libraries
+  set(APPLE_LIBS_AND_FRAMEWORKS
+    ${COCOA_LIBRARY}
+    ${IOKit_LIBRARY}
+    ${CoreVideo_LIBRARY}
+    ${OPENGL_LIBRARY}
     ${COREAUDIO_FRAMEWORK}
     ${AUDIOTOOLBOX_FRAMEWORK}
     ${AUDIOUNIT_FRAMEWORK}
     ${COREMIDI_FRAMEWORK}
+    ${ICONV_LIBRARY}
+    ${GME_FRAMEWORK}
+    "bz2"
   )
-  
-  set(LIBS ${LIBS} ${APPLE_AUDIO_FRAMEWORKS})
-endif(APPLE)
+  if(LINK_EXTRA_MAC_LIBS)
+    message(STATUS "Extra libraries enabled: PNG and Brotli will be linked.")
+    list(APPEND APPLE_LIBS_AND_FRAMEWORKS
+        "${MACOS_INSTALL_DIR}/lib/libpng.a"
+        "${MACOS_INSTALL_DIR}/lib/libbrotlidec.a"
+        "${MACOS_INSTALL_DIR}/lib/libbrotlicommon.a"
+    )
+  else()
+    message(STATUS "Linking against system DYNAMIC libraries.")
+    # Link the libraries by name for the linker to find on the system
+    list(APPEND APPLE_LIBS_AND_FRAMEWORKS
+        "png"
+        "brotlidec"
+        "brotlicommon"
+    )
+  endif()
 
-if(WIN32)
-  set(LIBS glfw3 opengl32 assimp freetype irrKlang)
-  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-elseif(UNIX AND NOT APPLE)
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall")
-  find_package(OpenGL REQUIRED)
-  add_definitions(${OPENGL_DEFINITIONS})
-  find_package(X11 REQUIRED)
-  # note that the order is important for setting the libs
-  # use pkg-config --libs $(pkg-config --print-requires --print-requires-private glfw3) in a terminal to confirm
-  set(LIBS ${GLFW3_LIBRARY} X11 Xrandr Xinerama Xi Xxf86vm Xcursor GL dl pthread freetype ${ASSIMP_LIBRARY})
-  set (CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -ldl")
-elseif(APPLE)
-  INCLUDE_DIRECTORIES(/System/Library/Frameworks)
-  FIND_LIBRARY(COCOA_LIBRARY Cocoa)
-  FIND_LIBRARY(OpenGL_LIBRARY OpenGL)
-  FIND_LIBRARY(IOKit_LIBRARY IOKit)
-  FIND_LIBRARY(CoreVideo_LIBRARY CoreVideo)
-  MARK_AS_ADVANCED(COCOA_LIBRARY OpenGL_LIBRARY)
-  SET(APPLE_LIBS ${COCOA_LIBRARY} ${IOKit_LIBRARY} ${OpenGL_LIBRARY} ${CoreVideo_LIBRARY})
-  SET(APPLE_LIBS ${APPLE_LIBS} ${GLFW3_LIBRARY} ${ASSIMP_LIBRARY} ${FREETYPE_LIBRARIES})
-  set(LIBS ${LIBS} ${APPLE_LIBS})
-else()
-  set(LIBS )
-endif(WIN32)
+  # Add the found items to the main LIBS variable
+  set(LIBS ${COMMON_LIBS} ${APPLE_LIBS_AND_FRAMEWORKS})
 
-set(CHAPTERS
-    1.getting_started
-    2.lighting
-    3.model_loading
-    4.advanced_opengl
-    5.advanced_lighting
-    6.pbr
-    7.in_practice
-)
+endif()
 
-set(1.getting_started
-    1.1.hello_window
-    1.2.hello_window_clear
-    2.1.hello_triangle
-    2.2.hello_triangle_indexed
-    2.3.hello_triangle_exercise1
-    2.4.hello_triangle_exercise2
-    2.5.hello_triangle_exercise3
-    3.1.shaders_uniform
-    3.2.shaders_interpolation
-    3.3.shaders_class
-    4.1.textures
-    4.2.textures_combined
-    4.4.textures_exercise2
-    4.5.textures_exercise3
-    4.6.textures_exercise4
-    5.1.transformations
-    5.2.transformations_exercise2
-    6.1.coordinate_systems
-    6.2.coordinate_systems_depth
-    6.3.coordinate_systems_multiple
-    7.1.camera_circle
-    7.2.camera_keyboard_dt
-    7.3.camera_mouse_zoom
-    7.4.camera_class
-)
 
-set(2.lighting
-    1.colors
-    2.1.basic_lighting_diffuse
-    2.2.basic_lighting_specular
-    3.1.materials
-    3.2.materials_exercise1
-    4.1.lighting_maps_diffuse_map
-    4.2.lighting_maps_specular_map
-    4.4.lighting_maps_exercise4
-    5.1.light_casters_directional
-    5.2.light_casters_point
-    5.3.light_casters_spot
-    5.4.light_casters_spot_soft
-    6.multiple_lights
-)
-
-set(3.model_loading
-    1.model_loading
-)
-
-set(4.advanced_opengl
-    1.1.depth_testing
-    1.2.depth_testing_view
-    2.stencil_testing
-    3.1.blending_discard
-    3.2.blending_sort
-    5.1.framebuffers
-    5.2.framebuffers_exercise1
-    6.1.cubemaps_skybox
-    6.2.cubemaps_environment_mapping
-    8.advanced_glsl_ubo
-    9.1.geometry_shader_houses
-    9.2.geometry_shader_exploding
-    9.3.geometry_shader_normals
-    10.1.instancing_quads
-    10.2.asteroids
-    10.3.asteroids_instanced
-    11.1.anti_aliasing_msaa
-    11.2.anti_aliasing_offscreen
-)
-
-set(5.advanced_lighting
-    1.advanced_lighting
-    2.gamma_correction
-    3.1.1.shadow_mapping_depth
-    3.1.2.shadow_mapping_base
-    3.1.3.shadow_mapping
-    3.2.1.point_shadows
-    3.2.2.point_shadows_soft
-    4.normal_mapping
-    5.1.parallax_mapping
-    5.2.steep_parallax_mapping
-    5.3.parallax_occlusion_mapping
-    6.hdr
-    7.bloom
-    8.1.deferred_shading
-    8.2.deferred_shading_volumes
-    9.ssao
-)
-
-set(6.pbr
-    1.1.lighting
-    1.2.lighting_textured
-    2.1.1.ibl_irradiance_conversion
-    2.1.2.ibl_irradiance
-    2.2.1.ibl_specular
-    2.2.2.ibl_specular_textured
-)
-
-set(7.in_practice
-    1.debugging
-    2.text_rendering
-    # 3.2d_game
-)
-
-set(GUEST_ARTICLES
-	8.guest/2020/oit
-	8.guest/2020/skeletal_animation
-	8.guest/2021/1.scene/1.scene_graph
-	8.guest/2021/1.scene/2.frustum_culling
-	8.guest/2021/2.csm
-	8.guest/2021/3.tessellation/terrain_gpu_dist
-	8.guest/2021/3.tessellation/terrain_cpu_src
-	8.guest/2021/4.dsa
-	8.guest/2022/5.computeshader_helloworld
-	8.guest/2022/6.physically_based_bloom
-	8.guest/2022/7.area_lights/1.area_light
-	8.guest/2022/7.area_lights/2.multiple_area_lights
-)
-
+#-----------------------------------------------------------------------------
+# 3. DEFINE YOUR PROJECT EXECUTABLES AND FUNCTIONS
+#-----------------------------------------------------------------------------
+include_directories(${CMAKE_SOURCE_DIR}/includes)
 configure_file(configuration/root_directory.h.in configuration/root_directory.h)
 include_directories(${CMAKE_BINARY_DIR}/configuration)
 
-# first create relevant static libraries required for other projects
-add_library(STB_IMAGE "src/stb_image.cpp")
-set(LIBS ${LIBS} STB_IMAGE)
-
-add_library(GLAD "src/glad.c")
-set(LIBS ${LIBS} GLAD)
-
-add_library(SDL2_mixer STATIC IMPORTED GLOBAL)
-set_target_properties(SDL2_mixer PROPERTIES
-  IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/vendor/SDL_mixer-release-2.8.1/build/libSDL2_mixer.a"
-  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/vendor/SDL_mixer-release-2.8.1/include"
-)
-set(LIBS ${LIBS} SDL2_mixer)
-
-macro(makeLink src dest target)
-  add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E create_symlink ${src} ${dest}  DEPENDS  ${dest} COMMENT "mklink ${src} -> ${dest}")
-endmacro()
-
 function(create_project_from_sources chapter demo)
-	file(GLOB SOURCE
-            "src/${chapter}/${demo}/*.h"
-            "src/${chapter}/${demo}/*.cpp"
-            "src/${chapter}/${demo}/*.vs"
-            "src/${chapter}/${demo}/*.fs"
-            "src/${chapter}/${demo}/*.tcs"
-            "src/${chapter}/${demo}/*.tes"
-            "src/${chapter}/${demo}/*.gs"
-            "src/${chapter}/${demo}/*.cs"
-    )
-	if (demo STREQUAL "")
-		SET(replaced "")
-		string(REPLACE "/" "_" replaced ${chapter})
-		set(NAME ${replaced})
-	else()
-		set(NAME "${chapter}__${demo}")
-	endif()
-    add_executable(${NAME} ${SOURCE})
-    target_link_libraries(${NAME} ${LIBS})
-    if(MSVC)
-		target_compile_options(${NAME} PRIVATE /std:c++17 /MP)
-        target_link_options(${NAME} PUBLIC /ignore:4099)
-    endif(MSVC)
-    if(WIN32)
-        set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${chapter}")
-        set_target_properties(${NAME} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${chapter}/Debug")
-    elseif(UNIX AND NOT APPLE)
-        set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${chapter}")
-    elseif(APPLE)
-        set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${chapter}")
-        set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/bin/${chapter}")
-        set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/bin/${chapter}")
-    endif(WIN32)
-    # copy shader files to build directory
-    file(GLOB SHADERS
-             "src/${chapter}/${demo}/*.vs"
-             # "src/${chapter}/${demo}/*.frag"
-             "src/${chapter}/${demo}/*.fs"
-             "src/${chapter}/${demo}/*.tcs"
-             "src/${chapter}/${demo}/*.tes"
-             "src/${chapter}/${demo}/*.gs"
-             "src/${chapter}/${demo}/*.cs"
-    )
-	# copy dlls
-	file(GLOB DLLS "dlls/*.dll")
-    foreach(SHADER ${SHADERS})
-        if(WIN32)
-            # configure_file(${SHADER} "test")
-            add_custom_command(TARGET ${NAME} PRE_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${SHADER} $<TARGET_FILE_DIR:${NAME}>)
-			add_custom_command(TARGET ${NAME} PRE_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DLLS} $<TARGET_FILE_DIR:${NAME}>)
-        elseif(UNIX AND NOT APPLE)
-            file(COPY ${SHADER} DESTINATION ${CMAKE_SOURCE_DIR}/bin/${chapter})
-        elseif(APPLE)
-            # create symbolic link for *.vs *.fs *.gs
-            get_filename_component(SHADERNAME ${SHADER} NAME)
-            makeLink(${SHADER} ${CMAKE_SOURCE_DIR}/bin/${chapter}/${SHADERNAME} ${NAME})
-        endif(WIN32)
-    endforeach(SHADER)
-    # if compiling for visual studio, also use configure file for each project (specifically to set up working directory)
-    if(MSVC)
-        configure_file(${CMAKE_SOURCE_DIR}/configuration/visualstudio.vcxproj.user.in ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.vcxproj.user @ONLY)
-    endif(MSVC)
+  # This part finds all the source files for a given target
+  file(GLOB SOURCE
+      "src/${chapter}/${demo}/*.h"
+      "src/${chapter}/${demo}/*.cpp"
+      "src/${chapter}/${demo}/*.vs"
+      "src/${chapter}/${demo}/*.fs"
+      "src/${chapter}/${demo}/*.gs"
+      "src/${chapter}/${demo}/*.cs"
+  )
+
+  # This part creates the executable's name
+  if (demo STREQUAL "")
+    string(REPLACE "/" "_" NAME ${chapter})
+  else()
+    set(NAME "${chapter}__${demo}")
+  endif()
+
+  # Creates the executable from the source files it found
+  add_executable(${NAME} ${SOURCE})
+
+  # Links all necessary libraries
+  target_link_libraries(${NAME} ${LIBS})
+
+  # Sets the output directory and fixes the Windows linker error
+  if(WIN32)
+    target_link_options(${NAME} PRIVATE -mconsole)
+    set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/windows/${chapter}")
+  elseif(APPLE)
+    set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE TRUE)
+    set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
+  endif()
 endfunction()
 
-# then create a project file per tutorial
-# foreach(CHAPTER ${CHAPTERS})
-#     foreach(DEMO ${${CHAPTER}})
-# 		create_project_from_sources(${CHAPTER} ${DEMO})
-#     endforeach(DEMO)
-# endforeach(CHAPTER)
-# foreach(GUEST_ARTICLE ${GUEST_ARTICLES})
-# 	create_project_from_sources(${GUEST_ARTICLE} "")
-# endforeach(GUEST_ARTICLE)
-
 set(GAME_ARTICLES
-	9.4d_game/
+  9.4d_game/
 )
 foreach(GAME_ARTICLE ${GAME_ARTICLES})
-	create_project_from_sources(${GAME_ARTICLE} "")
-endforeach(GAME_ARTICLE)
+  create_project_from_sources(${GAME_ARTICLE} "")
+endforeach()
 
-include_directories(${CMAKE_SOURCE_DIR}/includes)
+
+#-----------------------------------------------------------------------------
+# 4. PACKAGING CONFIGURATION
+#-----------------------------------------------------------------------------
+# This section has been updated to correctly create distributable applications.
+
+# The target name from your function is "9.4d_game_", not "9.4d_game".
+set(GAME_TARGET 9.4d_game_)
+
+# Install game resources like images, sounds, etc.
+install(DIRECTORY resources/ DESTINATION resources)
+
+
+# Set the CPack generator based on the platform BEFORE including CPack
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+elseif(APPLE)
+    set(CPACK_GENERATOR "DragNDrop")
+endif()
+
+# Include the CPack module for packaging
+include(CPack)
+include(InstallRequiredSystemLibraries)
+
+# --- Windows .zip Configuration ---
+if(WIN32)
+    # Install the executable to the root of the package
+    install(TARGETS ${GAME_TARGET}
+        RUNTIME DESTINATION .
+        COMPONENT Applications
+    )
+    # Automatically find and include required MinGW DLLs
+    set(CPACK_SYSTEM_RUNTIME_LIBS_SKIP_SYSTEM TRUE)
+    if(EXISTS "/opt/homebrew/opt/mingw-w64/bin")
+      set(CPACK_SYSTEM_RUNTIME_LIBS_PATH "/opt/homebrew/opt/mingw-w64/bin")
+    endif()
+
+# --- macOS .app Bundle Configuration ---
+elseif(APPLE)
+    # Install the .app bundle created by MACOSX_BUNDLE property
+    install(TARGETS ${GAME_TARGET} BUNDLE DESTINATION .)
+    
+    # Install the resources directory into the .app bundle's Resources folder
+    install(DIRECTORY resources/
+        DESTINATION "${GAME_TARGET}.app/Contents/Resources"
+    )
+
+    # Configure the .dmg package properties
+    set(CPACK_BUNDLE_NAME "${PROJECT_NAME}")
+    set(CPACK_BUNDLE_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
+endif()

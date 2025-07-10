@@ -16,7 +16,7 @@
 #include "stb_image.h"
 
 #include "learnopengl/shader.h"
-#include "learnopengl/filesystem.h"
+#include "filesystem.h"
 
 #include "threadpool.hpp"
 
@@ -41,7 +41,7 @@ enum GameState {
 const float light_radius = 20.0f;
 const float angle_in_sky = glm::radians(30.0f);
 const float max_height = light_radius*sin(angle_in_sky); // height of the sun at its peak (noon)
-const glm::vec3 light_color(300.0f);
+const glm::vec3 light_color(100.0f);
 
 float ShakeTime = 0.0f;
 float                   angle=0;
@@ -99,8 +99,17 @@ public:
             KeysProcessed[i] = false;
         }
 
-        // Initialize the physics solver and thread pool
-        thread_pool = new tp::ThreadPool(4); // Adjust the number of threads as needed
+        unsigned int thread_count = 1;
+        
+        #ifdef __EMSCRIPTEN__
+            thread_count = 1;
+        #else
+            thread_count = std::thread::hardware_concurrency();
+            if (thread_count == 0) thread_count = 1; // Fallback to single thread
+            if (thread_count > 4) thread_count = 4; // Cap at 4 threads
+        #endif
+        
+        thread_pool = new tp::ThreadPool(thread_count);
 
         // glm::vec3 center, float radius, float angleDegrees = 90.0f, float margin = 0.01f
         physics_solver = new PhysicSolver(*thread_pool, &boundary);
@@ -149,55 +158,127 @@ public:
     }
     // initialize game state (load all shaders/textures/levels)
     void Init(GLFWwindow* window){
-        ball_shader = new Shader("2.2.2.pbr.vs", "2.2.2.pbr.fs");
-        background_shader = new Shader("2.2.2.background.vs", "2.2.2.background.fs");
-        text_shader = new Shader("text_2d.vs", "text_2d.fs");
+        std::cout<<"start"<<std::endl;
+        std::cout<<"start"<<std::endl;
+        std::cout<<"start"<<std::endl;
+        std::cout<<"start"<<std::endl;
+        std::cout<<"start"<<std::endl;
+        std::cout<<"start"<<std::endl;
+        std::cout<<"start"<<std::endl;
+        ball_shader = new Shader(FileSystem::getPath("resources/shaders/pbr_web.vs").c_str(), FileSystem::getPath("resources/shaders/pbr_web.fs").c_str());
+        background_shader = new Shader(FileSystem::getPath("resources/shaders/background_web.vs").c_str(), FileSystem::getPath("resources/shaders/background_web.fs").c_str());
+        text_shader = new Shader(FileSystem::getPath("resources/shaders/text_2d_web.vs").c_str(), FileSystem::getPath("resources/shaders/text_2d_web.fs").c_str());
+        std::cout<<"end"<<std::endl;
+        // Load shaders with error handling
+        // try {
+        // ball_shader = new Shader("2.2.2.pbr.vs", "2.2.2.pbr.fs");
+        // background_shader = new Shader("2.2.2.background.vs", "2.2.2.background.fs");
+        // text_shader = new Shader("text_2d.vs", "text_2d.fs");
+        #ifdef __EMSCRIPTEN__
+            // #pragma message("__EMSCRIPTEN__ is defined")
+            std::cout<<"start"<<std::endl;
+            ball_shader = new Shader(FileSystem::getPath("resources/shaders/pbr_web.vs").c_str(), FileSystem::getPath("resources/shaders/pbr_web.fs").c_str());
+            background_shader = new Shader(FileSystem::getPath("resources/shaders/background_web.vs").c_str(), FileSystem::getPath("resources/shaders/background_web.fs").c_str());
+            text_shader = new Shader(FileSystem::getPath("resources/shaders/text_2d_web.vs").c_str(), FileSystem::getPath("resources/shaders/text_2d_web.fs").c_str());
+            std::cout<<"end"<<std::endl;
+        #else
+            std::cout<<"NOT"<<std::endl;
+            ball_shader = new Shader(FileSystem::getPath("resources/shaders/pbr.vs").c_str(), FileSystem::getPath("resources/shaders/pbr.fs").c_str());
+            background_shader = new Shader(FileSystem::getPath("resources/shaders/background.vs").c_str(), FileSystem::getPath("resources/shaders/background.fs").c_str());
+            text_shader = new Shader(FileSystem::getPath("resources/shaders/text_2d.vs").c_str(), FileSystem::getPath("resources/shaders/text_2d.fs").c_str());
+        #endif
+        std::cout<<"NOT"<<std::endl;
+        // } catch (const std::exception& e) {
+        //     std::cerr << "Error loading shaders: " << e.what() << std::endl;
+        //     throw; // Re-throw to prevent continuing with invalid shaders
+        // }
 
-        GLint success;
-        char infoLog[512];
-        glGetShaderiv(ball_shader->ID, GL_LINK_STATUS, &success);
-        if (!success) {
-            glGetShaderInfoLog(ball_shader->ID, 512, NULL, infoLog);
-            std::cerr << "[ball_shader] Link error:\n" << infoLog << std::endl;
-        }
+        // GLint success;
+        // char infoLog[512];
+        // glGetShaderiv(ball_shader->ID, GL_LINK_STATUS, &success);
+        // if (!success) {
+        //     glGetShaderInfoLog(ball_shader->ID, 512, NULL, infoLog);
+        //     std::cerr << "[ball_shader] Link error:\n" << infoLog << std::endl;
+        // }
 
         b_rend = new BallRenderer(ball_shader, SPHERE, 5);
         h_rend = new HemisphereRenderer(ball_shader, SPHERE, 5, 90.0f, 1.0f, boundary.margin/boundary.radius);
     
         t_rend = new TextRenderer(text_shader);
-        t_rend->Load(FileSystem::getPath("resources/fonts/OCRAEXT.TTF").c_str(), 24);
+        try {
+            t_rend->Load(FileSystem::getPath("resources/fonts/OCRAEXT.TTF").c_str(), 24);
+            std::cout << "Font loaded successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to load font: " << e.what() << std::endl;
+            // Continue without font - text rendering will be disabled
+        }
 
         fm.initializeFruits();
         nextFruit = fm.getRandomFruit();
 
         state.Init(window);
 
-        mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
-        if (!mergeSound) {
-            std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
-        }
-        loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
-        if (!loseSound) {
-            std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
-        }
-        placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
-        if (!placeSound) {
-            std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
-        }
+        // Load audio files with error handling
+        #ifdef __EMSCRIPTEN__
+            // For web build, try to load audio but don't fail if it doesn't work
+            mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
+            if (!mergeSound) {
+                std::cerr << "Warning: Could not load drop.wav: " << Mix_GetError() << std::endl;
+                mergeSound = nullptr;
+            }
+            loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
+            if (!loseSound) {
+                std::cerr << "Warning: Could not load game_over.wav: " << Mix_GetError() << std::endl;
+                loseSound = nullptr;
+            }
+            placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
+            if (!placeSound) {
+                std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
+                placeSound = nullptr;
+            }
+        #else
+            // For native builds, load audio normally
+            mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
+            if (!mergeSound) {
+                std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
+            }
+            loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
+            if (!loseSound) {
+                std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
+            }
+            placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
+            if (!placeSound) {
+                std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
+            }
+        #endif
 
         std::vector<std::string> faces
         {
-            FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // right
-            FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // left
-            FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // top
-            FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // bottom
-            FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // front
-            FileSystem::getPath("resources/textures/pbr/wall/albedo.png"),  // back
+            FileSystem::getPath("resources/textures/wall/albedo.png"),  // right
+            FileSystem::getPath("resources/textures/wall/albedo.png"),  // left
+            FileSystem::getPath("resources/textures/wall/albedo.png"),  // top
+            FileSystem::getPath("resources/textures/wall/albedo.png"),  // bottom
+            FileSystem::getPath("resources/textures/wall/albedo.png"),  // front
+            FileSystem::getPath("resources/textures/wall/albedo.png"),  // back
         };
-        backgroundTexture = loadCubemap(faces);
+        
+        try {
+            backgroundTexture = loadCubemap(faces);
+            std::cout << "Background texture loaded successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to load background texture: " << e.what() << std::endl;
+            backgroundTexture = 0; // Use 0 as fallback
+        }
 
-        defaultTexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/albedo.png").c_str());
-        bowlTexture = loadTexture(FileSystem::getPath("resources/textures/pbr/gold/albedo.png").c_str());
+        try {
+            defaultTexture = loadTexture(FileSystem::getPath("resources/textures/gold/albedo.png").c_str());
+            bowlTexture = loadTexture(FileSystem::getPath("resources/textures/gold/albedo.png").c_str());
+            std::cout << "Default and bowl textures loaded successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to load default/bowl textures: " << e.what() << std::endl;
+            defaultTexture = 0;
+            bowlTexture = 0;
+        }
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, defaultTexture);
@@ -228,6 +309,7 @@ public:
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        std::cout<<"INIT DONE"<<std::endl;
     }
     // game loop
     void ProcessInput(float dt){
@@ -310,12 +392,13 @@ public:
         mouseClicked=false;
     }
     int Sound(){
-        if (physics_solver->just_merged > 0) {
+        if (physics_solver->just_merged > 0 && mergeSound != nullptr) {
             Mix_PlayChannel(-1, mergeSound, 0);
         }
-        if (mouseClicked) {
+        if (mouseClicked && placeSound != nullptr) {
             Mix_PlayChannel(-1, placeSound, 0);
         }
+        return 0; // Add return statement to prevent undefined behavior
     }
     void Render(){
         switch(State){
@@ -418,7 +501,7 @@ public:
             b_rend->Draw4d(state.w, obj.fruit, obj.position, glm::vec3(0.0f));
             renderedCount++;
         }
-        if (losing) Mix_PlayChannel(-1, loseSound, 0);
+        if (losing && loseSound != nullptr) Mix_PlayChannel(-1, loseSound, 0);
         
         if (frameCount % 60 == 0) {
             std::cout << "Actually rendered: " << renderedCount << " objects" << std::endl;

@@ -6,6 +6,10 @@
 #include <mutex>
 #include <atomic>
 
+#ifdef __EMSCRIPTEN__
+// For web builds, disable threading and use synchronous execution
+#define WEB_BUILD
+#endif
 
 namespace tp
 {
@@ -54,6 +58,47 @@ struct TaskQueue
     }
 };
 
+#ifdef WEB_BUILD
+// Web-compatible worker that doesn't use threads
+struct Worker
+{
+    uint32_t              m_id      = 0;
+    std::function<void()> m_task    = nullptr;
+    bool                  m_running = true;
+    TaskQueue*            m_queue   = nullptr;
+
+    Worker() = default;
+
+    Worker(TaskQueue& queue, uint32_t id)
+        : m_id{id}
+        , m_queue{&queue}
+    {
+        // No thread creation for web builds
+    }
+
+    void run()
+    {
+        // Synchronous execution for web builds
+        while (m_running) {
+            m_queue->getTask(m_task);
+            if (m_task == nullptr) {
+                break; // No more tasks
+            } else {
+                m_task();
+                m_queue->workDone();
+                m_task = nullptr;
+            }
+        }
+    }
+
+    void stop()
+    {
+        m_running = false;
+        // No thread to join in web builds
+    }
+};
+#else
+// Native worker with actual threading
 struct Worker
 {
     uint32_t              m_id      = 0;
@@ -93,6 +138,7 @@ struct Worker
         m_thread.join();
     }
 };
+#endif
 
 struct ThreadPool
 {
@@ -108,6 +154,13 @@ struct ThreadPool
         for (uint32_t i{thread_count}; i--;) {
             m_workers.emplace_back(m_queue, static_cast<uint32_t>(m_workers.size()));
         }
+        
+        #ifdef WEB_BUILD
+        // For web builds, run all workers synchronously
+        for (Worker& worker : m_workers) {
+            worker.run();
+        }
+        #endif
     }
 
     virtual ~ThreadPool()

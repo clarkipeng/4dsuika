@@ -21,6 +21,7 @@ inline float getRandomFloat(float min, float max) {
 
 inline unsigned int loadCubemap(std::vector<std::string> faces)
 {
+    std::cout << "Loading cubemap with " << faces.size() << " faces" << std::endl;
     unsigned int textureID;
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
@@ -28,9 +29,11 @@ inline unsigned int loadCubemap(std::vector<std::string> faces)
     int width, height, nrChannels;
     for (unsigned int i = 0; i < faces.size(); i++)
     {
+        std::cout << "Loading cubemap face " << i << ": " << faces[i] << std::endl;
         unsigned char *data = stbi_load(faces[i].c_str(), &width, &height, &nrChannels, 0);
         if (data)
         {
+            std::cout << "Cubemap face " << i << " loaded successfully: " << faces[i] << " (" << width << "x" << height << ", " << nrChannels << " channels)" << std::endl;
             GLenum format;
             if (nrChannels == 1)
                 format = GL_RED;
@@ -45,6 +48,9 @@ inline unsigned int loadCubemap(std::vector<std::string> faces)
         else
         {
             std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
+            #ifdef __EMSCRIPTEN__
+            std::cout << "Cubemap loading failed in WebGL context" << std::endl;
+            #endif
             stbi_image_free(data);
         }
     }
@@ -61,6 +67,7 @@ inline unsigned int loadCubemap(std::vector<std::string> faces)
 // ---------------------------------------------------
 inline unsigned int loadTexture(char const * path)
 {
+    std::cout << "Loading texture: " << path << std::endl;
     unsigned int textureID;
     glGenTextures(1, &textureID);
 
@@ -68,6 +75,7 @@ inline unsigned int loadTexture(char const * path)
     unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
     if (data)
     {
+        std::cout << "Texture loaded successfully: " << path << " (" << width << "x" << height << ", " << nrComponents << " components)" << std::endl;
         GLenum format;
         if (nrComponents == 1)
             format = GL_RED;
@@ -90,6 +98,9 @@ inline unsigned int loadTexture(char const * path)
     else
     {
         std::cout << "Texture failed to load at path: " << path << std::endl;
+        #ifdef __EMSCRIPTEN__
+        std::cout << "Texture loading failed in WebGL context" << std::endl;
+        #endif
         stbi_image_free(data);
     }
 
