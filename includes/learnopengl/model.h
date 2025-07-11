@@ -173,10 +173,12 @@ private:
     vector<Texture> loadMaterialTextures(aiMaterial *mat, aiTextureType type, string typeName)
     {
         vector<Texture> textures;
+        cout<<mat->GetTextureCount(type)<<endl;
         for(unsigned int i = 0; i < mat->GetTextureCount(type); i++)
         {
             aiString str;
             mat->GetTexture(type, i, &str);
+            std::cout << "Assimp raw texture string: " << str.C_Str() << std::endl;
             // check if texture was loaded before and if so, continue to next iteration: skip loading a new texture
             bool skip = false;
             for(unsigned int j = 0; j < textures_loaded.size(); j++)
@@ -213,26 +215,43 @@ unsigned int TextureFromFile(const char *path, const string &directory, bool gam
 
     int width, height, nrComponents;
     unsigned char *data = stbi_load(filename.c_str(), &width, &height, &nrComponents, 0);
+    // unsigned char *data = stbi_load("/Users/clarkpeng/Documents/Code/LearnOpenGL/resources/textures/wall/albedo.png", &width, &height, &nrComponents, 0);
+    std::cout << "Attempting to load texture: " << filename << std::endl;
+    std::cout << "stbi_load result - data: " << (void*)data << ", width: " << width << ", height: " << height << ", components: " << nrComponents << std::endl;
+    // **************************
+    
     if (data)
     {
         GLenum format;
-        if (nrComponents == 1)
-            // format = GL_RED;
-            format = GL_RED8;
-        else if (nrComponents == 3)
-            // format = GL_RGB;
-            format = GL_RGB8;
-        else if (nrComponents == 4)
-            // format = GL_RGBA;
-            format = GL_RGBA8;
+        GLenum internalFormat; // <-- NEW VARIABLE
+
+        if (nrComponents == 1) {
+            format = GL_RED;
+            internalFormat = GL_RED;
+        }
+        else if (nrComponents == 3) { // For RGB images (like your albedo)
+            format = GL_RGB;
+            internalFormat = gamma ? GL_SRGB : GL_RGB; // <-- CRITICAL CHANGE: Use GL_SRGB if gamma correction is desired
+        }
+        else if (nrComponents == 4) { // For RGBA images
+            format = GL_RGBA;
+            internalFormat = gamma ? GL_SRGB_ALPHA : GL_RGBA; // <-- CRITICAL CHANGE: Use GL_SRGB_ALPHA
+        }
+        else {
+            std::cerr << "WARNING: Unsupported texture components: " << nrComponents << " for " << filename << std::endl;
+            stbi_image_free(data);
+            return 0; // Return 0 or handle error appropriately
+        }
 
         glBindTexture(GL_TEXTURE_2D, textureID);
-        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
+        // Use the new internalFormat here:
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL_UNSIGNED_BYTE, data);
 
+        // Re-enable mipmaps for 2048x2048 textures and use appropriate min filter
+        glGenerateMipmap(GL_TEXTURE_2D);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // Change back to mipmap filter for large textures
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
         stbi_image_free(data);
@@ -241,6 +260,8 @@ unsigned int TextureFromFile(const char *path, const string &directory, bool gam
     {
         std::cout << "Texture failed to load at path: " << path << std::endl;
         stbi_image_free(data);
+        std::cout << "Texture failed to load at FULL path: " << filename << std::endl;
+        // stbi_image_free(data);
     }
 
     return textureID;

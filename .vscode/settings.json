@@ -61,6 +61,14 @@
         "any": "cpp",
         "cinttypes": "cpp",
         "condition_variable": "cpp",
-        "regex": "cpp"
+        "regex": "cpp",
+        "__config": "cpp",
+        "barrier": "cpp",
+        "cfenv": "cpp",
+        "codecvt": "cpp",
+        "future": "cpp",
+        "shared_mutex": "cpp",
+        "strstream": "cpp",
+        "valarray": "cpp"
     }
 }

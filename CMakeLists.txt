@@ -139,27 +139,21 @@ function(create_project_from_sources chapter demo)
   if(WIN32)
     target_link_options(${NAME} PRIVATE -mconsole)
     set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/windows/${chapter}")
-  elseif(APPLE)
+  elseif(APPLE AND LINK_EXTRA_MAC_LIBS)
     set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE TRUE)
     set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
   endif()
 endfunction()
 
 set(GAME_ARTICLES
-  9.4d_game/
+  4d_game/
 )
 foreach(GAME_ARTICLE ${GAME_ARTICLES})
   create_project_from_sources(${GAME_ARTICLE} "")
 endforeach()
 
 
-#-----------------------------------------------------------------------------
-# 4. PACKAGING CONFIGURATION
-#-----------------------------------------------------------------------------
-# This section has been updated to correctly create distributable applications.
-
-# The target name from your function is "9.4d_game_", not "9.4d_game".
-set(GAME_TARGET 9.4d_game_)
+set(GAME_TARGET 4d_game_)
 
 # Install game resources like images, sounds, etc.
 install(DIRECTORY resources/ DESTINATION resources)
@@ -190,7 +184,7 @@ if(WIN32)
     endif()
 
 # --- macOS .app Bundle Configuration ---
-elseif(APPLE)
+elseif(APPLE AND LINK_EXTRA_MAC_LIBS)
     # Install the .app bundle created by MACOSX_BUNDLE property
     install(TARGETS ${GAME_TARGET} BUNDLE DESTINATION .)
     

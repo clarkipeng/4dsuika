@@ -10,7 +10,7 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)
 ```
 To run locally, run the executable located at
 ```
-/bin/9.4d_game
+/build/9.4d_game
 ```
 
 ## Application Build
