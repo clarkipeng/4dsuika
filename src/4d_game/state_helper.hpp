@@ -204,5 +204,5 @@ glm::vec3 calculateSunsetColor(float t)
         float interp = (t - 0.5f) * 2.0f;
         calculatedColor = glm::mix(middayColor, sunsetColor, interp);
     }
-    return calculatedColor*500.0f;
+    return calculatedColor*1000000.0f;
 }

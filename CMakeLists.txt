@@ -142,6 +142,7 @@ function(create_project_from_sources chapter demo)
   elseif(APPLE AND LINK_EXTRA_MAC_LIBS)
     set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE TRUE)
     set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
+    set_target_properties(${NAME} PROPERTIES MACOSX_BUNDLE_RESOURCES "${CMAKE_SOURCE_DIR}/resources")
   endif()
 endfunction()
 
@@ -188,10 +189,10 @@ elseif(APPLE AND LINK_EXTRA_MAC_LIBS)
     # Install the .app bundle created by MACOSX_BUNDLE property
     install(TARGETS ${GAME_TARGET} BUNDLE DESTINATION .)
     
-    # Install the resources directory into the .app bundle's Resources folder
-    install(DIRECTORY resources/
-        DESTINATION "${GAME_TARGET}.app/Contents/Resources"
-    )
+    # # Install the resources directory into the .app bundle's Resources folder
+    # install(DIRECTORY resources/
+    #     DESTINATION "${GAME_TARGET}.app/Contents/Resources"
+    # )
 
     # Configure the .dmg package properties
     set(CPACK_BUNDLE_NAME "${PROJECT_NAME}")

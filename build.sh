@@ -127,9 +127,9 @@ if [ "$1" == "macos" ]; then
         -DCMAKE_PREFIX_PATH="$INSTALL_DIR" \
         -DGLM_INCLUDE_DIR="$VENDOR_DIR/glm" \
         -DMACOS_INSTALL_DIR="$INSTALL_DIR" \
-        -DLINK_EXTRA_LIBS=ON
+        -DLINK_EXTRA_MAC_LIBS=ON
     cmake --build "$BUILD_DIR/macos" -j"$NUM_CORES"
-    (cd "$BUILD_DIR/macos" && make package)
+    (cd "$BUILD_DIR/macos" && make package && codesign --force --deep --sign - 4d_game_.app)
     echo "✅ macOS build complete! Executable is in $BUILD_DIR/macos/"
 fi
 

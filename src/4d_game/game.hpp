@@ -39,7 +39,7 @@ enum GameState {
     GAME_OVER 
 };
 
-const float light_radius = 30.0f;
+const float light_radius = 1000.0f;
 const float angle_in_sky = glm::radians(10.0f);
 const float max_height = light_radius*sin(angle_in_sky); // height of the sun at its peak (noon)
 
@@ -461,6 +461,10 @@ public:
         model_shader->setFloat("roughness", 0.5f);
         model_shader->setFloat("ao", 1.0f);
         model_shader->setFloat("alpha", 1.0f);
+
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
+        model_shader->setInt("environmentMap", 10);
     }
     void SetupBallShader(const glm::mat4& projection, const glm::mat4& view,
                     const glm::vec3& camPos, const glm::vec3& lightPos,
@@ -474,6 +478,10 @@ public:
         ball_shader->setFloat("metallic", 0.0f);
         ball_shader->setFloat("roughness", 0.5f);
         ball_shader->setFloat("ao", 1.0f);
+
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
+        ball_shader->setInt("environmentMap", 10);
     }
 
     /**
@@ -501,7 +509,7 @@ public:
         // model_shader should already be active when this is called
         model_shader->use(); 
         glm::mat4 modelMatrix = glm::mat4(1.0f);
-        modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -15.0f, 0.0f));
+        modelMatrix = glm::translate(modelMatrix, glm::vec3(-2.0f, -13.65f, -2.0f));
         modelMatrix = glm::scale(modelMatrix, glm::vec3(2.f, 2.f, 2.f));
         model_shader->setMat4("model", modelMatrix);
         tableModel->Draw(*model_shader);

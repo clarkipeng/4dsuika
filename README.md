@@ -12,6 +12,10 @@ To run locally, run the executable located at
 ```
 /build/9.4d_game
 ```
+Zip using 
+```
+ditto -c -k --sequesterRsrc --keepParent build/macos/4d_game_.app 4d_game-macOS.zip
+```
 
 ## Application Build
 To statically build an application run the following for windows

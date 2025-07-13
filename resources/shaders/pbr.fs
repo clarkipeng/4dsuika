@@ -13,6 +13,7 @@ uniform float ao;
 uniform float alpha;
 
 // lights
+uniform samplerCube environmentMap;
 uniform vec3 lightPositions[1];
 uniform vec3 lightColors[1];
 
@@ -70,9 +71,12 @@ void main()
 {		
     // FragColor = vec4(normalize(Normal) * 0.5 + 0.5, 1.0);
     // return;
+    // FragColor = vec4(normalize(Normal) * 0.5 + 0.5, 1.0);
+    // return;
 
     vec3 albedo = texture(texture_diffuse1, TexCoords).rgb;
     vec3 N = normalize(Normal);
+    
     vec3 V = normalize(camPos - WorldPos);
     vec3 R = reflect(-V, N); 
 
@@ -80,7 +84,16 @@ void main()
     F0 = mix(F0, albedo, metallic);
 
     // ambient (simple constant)
-    vec3 ambient = vec3(0.03) * albedo * ao;
+    // vec3 ambient = vec3(0.03) * albedo * ao;
+    vec3 diffuse_IBL  = texture(environmentMap, N).rgb * albedo;
+    const float MAX_REFLECTION_LOD = 4.0;
+    vec3 specular_IBL = textureLod(environmentMap, R, roughness * MAX_REFLECTION_LOD).rgb;
+    vec3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    vec3 kS = F;
+    vec3 kD = (1.0 - kS) * (1.0 - metallic);
+    vec3 ambient = (vec3(0.02) * albedo + 0.01 * (kD * diffuse_IBL + specular_IBL * F)) * ao;
+    
+    // vec3 ambient = (vec3(0.015) + 0.05 * texture(environmentMap, N).rgb) * albedo * ao;
 
     // direct lighting
     vec3 Lo = vec3(0.0);
