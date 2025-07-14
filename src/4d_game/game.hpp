@@ -50,7 +50,78 @@ float                   dim4=0;
 bool place_object = false;
 
 
+struct Slider {
+    // The slider's position and size on the screen
+    glm::vec4 rect; // x, y, width, height
+    std::string label;
+    
+    // A pointer to the actual game variable this slider controls (e.g., musicVolume)
+    float* value; 
+    
+    // State to track if the user is currently dragging this slider
+    bool isDragging;
+    void Update(){
+        double mouseX, mouseY;
+        glfwGetCursorPos(glfwGetCurrentContext(), &mouseX, &mouseY);
+        
+        bool isMousePressed = glfwGetMouseButton(glfwGetCurrentContext(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
 
+        // Check if the mouse is over the slider's rectangle
+        bool isMouseOver = (mouseX >= rect.x && mouseX <= rect.x + rect.z &&
+                        mouseY >= rect.y && mouseY <= rect.y + rect.w);
+
+        if (isMousePressed && isMouseOver) {
+            isDragging = true;
+        }
+        
+        if (!isMousePressed) {
+            isDragging = false;
+        }
+
+        if (isDragging) {
+            // Update the slider's value based on mouse position
+            float newValue = (mouseX - rect.x) / rect.z;
+            // Clamp the value between 0.0 and 1.0
+            *value = glm::clamp(newValue, 0.0f, 1.0f);
+        }
+    }
+};
+struct VolumeSettings {
+    float musicVolume;
+    float sfxVolume;
+    
+    Slider musicSlider;
+    Slider sfxSlider;
+
+    // The constructor sets up the internal logic
+    VolumeSettings() {
+        musicVolume = 0.8f;
+        sfxVolume = 1.0f;
+        musicSlider.label = "Music Volume";
+        musicSlider.value = &musicVolume; 
+        musicSlider.isDragging = false;
+        sfxSlider.label = "SFX Volume";
+        sfxSlider.value = &sfxVolume; 
+        sfxSlider.isDragging = false;
+    }
+    
+    void UpdateLayout(unsigned int Width, unsigned int Height) {
+        float sliderX = Width * 0.75f; // Position in right quadrant
+        float sliderWidth = Width/4;
+        float sliderHeight = 10.0f;
+        // float startY = Height * 0.6f; // Adjust start Y position
+        float startY = Height * 0.1f; // Adjust start Y position
+        float sliderSpacing = 60.0f * (Height / 800.0f);
+
+        musicSlider.rect = {sliderX, startY, sliderWidth, sliderHeight};
+        sfxSlider.rect = {sliderX, startY + sliderSpacing, sliderWidth, sliderHeight};
+    }
+    // This function handles the mouse input
+    void UpdateControls() {
+        musicSlider.Update();
+        sfxSlider.Update();
+    }
+};
 class Game
 {
 public:
@@ -79,6 +150,7 @@ public:
     Mix_Chunk* mergeSound;
     Mix_Chunk* loseSound;
     Mix_Chunk* placeSound;
+    Mix_Music* themeMusic;
 
     HemisphereBoundary boundary;   
     Fruit nextFruit;
@@ -87,8 +159,9 @@ public:
     int total_points=0;
     int high_score = 0;
     ViewState state;
+    VolumeSettings vset;
 
-    bool mouseClicked=false;
+    bool ballPlaced=false;
 
     // constructor/destructor
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
@@ -168,6 +241,7 @@ public:
         // new Shader(FileSystem::getPath("resources/shaders/table.vs").c_str(), FileSystem::getPath("resources/shaders/table.fs").c_str());
 
         tableModel = new Model(FileSystem::getPath("resources/models/flyingIsland/flyingIsland.obj").c_str()); 
+        // tableModel = new Model(FileSystem::getPath("resources/models/skyisland/skyisland.obj").c_str()); 
         // Load shaders with error handling
         // try {
         // ball_shader = new Shader("2.2.2.pbr.vs", "2.2.2.pbr.fs");
@@ -217,38 +291,25 @@ public:
         state.Init(window);
 
         // Load audio files with error handling
-        #ifdef __EMSCRIPTEN__
-            // For web build, try to load audio but don't fail if it doesn't work
-            mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
-            if (!mergeSound) {
-                std::cerr << "Warning: Could not load drop.wav: " << Mix_GetError() << std::endl;
-                mergeSound = nullptr;
-            }
-            loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
-            if (!loseSound) {
-                std::cerr << "Warning: Could not load game_over.wav: " << Mix_GetError() << std::endl;
-                loseSound = nullptr;
-            }
-            placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
-            if (!placeSound) {
-                std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
-                placeSound = nullptr;
-            }
-        #else
-            // For native builds, load audio normally
-            mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
-            if (!mergeSound) {
-                std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
-            }
-            loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
-            if (!loseSound) {
-                std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
-            }
-            placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
-            if (!placeSound) {
-                std::cerr << "Mix_LoadWAV error: " << Mix_GetError() << std::endl;
-            }
-        #endif
+        mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
+        if (!mergeSound) {
+            std::cerr << "Warning: Could not load drop.wav: " << Mix_GetError() << std::endl;
+            mergeSound = nullptr;
+        }
+        loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
+        if (!loseSound) {
+            std::cerr << "Warning: Could not load game_over.wav: " << Mix_GetError() << std::endl;
+            loseSound = nullptr;
+        }
+        placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
+        if (!placeSound) {
+            std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
+            placeSound = nullptr;
+        }
+        themeMusic = Mix_LoadMUS(FileSystem::getPath("resources/audio/theme.wav").c_str());
+        if (!themeMusic) {
+            std::cerr << "Mix_LoadMUS error: " << Mix_GetError() << std::endl;
+        }
 
         std::vector<std::string> faces
         {
@@ -307,6 +368,10 @@ public:
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        if (themeMusic) {
+            Mix_PlayMusic(themeMusic, -1);
+        }
         std::cout<<"INIT DONE"<<std::endl;
     }
     // game loop
@@ -332,9 +397,9 @@ public:
                 KeysProcessed[GLFW_KEY_ENTER] = true;
                 State = GAME_ACTIVE;
             }
-            if (mouseClicked){
-                State = GAME_ACTIVE;
-            }
+            // if (ballPlaced){
+            //     State = GAME_ACTIVE;
+            // }
         }
 
         if (State == GAME_OVER) {
@@ -343,24 +408,42 @@ public:
                 State = GAME_ACTIVE;
                 Reset();
             }
-            if (mouseClicked){
-                State = GAME_ACTIVE;
-                Reset();
-            }
+            // if (ballPlaced){
+            //     State = GAME_ACTIVE;
+            //     Reset();
+            // }
         }
         
         // Toggle menu with Escape key
         if (Keys[GLFW_KEY_ESCAPE] && !KeysProcessed[GLFW_KEY_ESCAPE]){
             if (State == GAME_ACTIVE || State == GAME_OVER) {
                 State = GAME_MENU;
-            } else {
+            } 
+            else {
                 State = GAME_ACTIVE;
             }
             KeysProcessed[GLFW_KEY_ESCAPE] = true;
         }
     }
+
+    void ApplyVolumeSettings()
+    {
+        // SDL_mixer uses a volume range of 0 to 128 (MIX_MAX_VOLUME)
+        
+        // Set the music volume
+        Mix_VolumeMusic(static_cast<int>(vset.musicVolume * MIX_MAX_VOLUME));
+
+        // Set the volume for all sound effect chunks
+        int sfx_volume_sdl = static_cast<int>(vset.sfxVolume * MIX_MAX_VOLUME);
+        if (mergeSound) Mix_VolumeChunk(mergeSound, sfx_volume_sdl);
+        if (loseSound)  Mix_VolumeChunk(loseSound, sfx_volume_sdl);
+        if (placeSound) Mix_VolumeChunk(placeSound, sfx_volume_sdl);
+    }
+
     void Update(float dt)
     {
+        Width = state.windowWidth;
+        Height = state.windowHeight;
         // Logic that should run every frame, regardless of state
         Sound(); // Manages ongoing sounds
 
@@ -368,15 +451,27 @@ public:
         switch (State)
         {
             case GAME_ACTIVE:
+                if (Mix_PausedMusic() == 1) {
+                    Mix_ResumeMusic();
+                }
                 UpdateGameActive(dt);
                 break;
             case GAME_OVER:
                 UpdateGameOver(dt);
+                if (State == GAME_OVER) {
+                    Mix_PauseMusic();
+                }
                 break;
             case GAME_MENU:
+                if (Mix_PausedMusic() == 1) {
+                    Mix_ResumeMusic();
+                }
+                vset.UpdateLayout(Width, Height);
+                vset.UpdateControls();
+                ApplyVolumeSettings();
                 break;
         }
-        mouseClicked = false;
+        ballPlaced = false;
     }
 
     /**
@@ -392,12 +487,12 @@ public:
                 if (total_points > high_score) {
                     high_score = total_points;
                 }
-                State = GAME_OVER;
-
                 // Play the lose sound once when the state changes
-                if (loseSound != nullptr) {
+                if (State == GAME_ACTIVE && loseSound != nullptr) {
                     Mix_PlayChannel(-1, loseSound, 0);
                 }
+
+                State = GAME_OVER;
                 return; // Exit immediately, game is over
             }
         }
@@ -442,7 +537,7 @@ public:
         if (physics_solver->just_merged > 0 && mergeSound != nullptr) {
             Mix_PlayChannel(-1, mergeSound, 0);
         }
-        if (mouseClicked && placeSound != nullptr) {
+        if (ballPlaced && placeSound != nullptr) {
             Mix_PlayChannel(-1, placeSound, 0);
         }
         return 0; // Add return statement to prevent undefined behavior
@@ -603,36 +698,64 @@ public:
         // 8. Finally, render the 2D UI on top
         RenderGameUI();
     }
-    
+
+    void RenderSlider(const Slider& slider)
+    {
+        float scale = 0.75f;
+        glm::vec3 color = glm::vec3(0.9f);
+        
+        // Create the visual bar based on the slider's current value
+        std::string bar = "[";
+        int barLength = 20;
+        for (int i = 0; i < barLength; ++i) {
+            bar += (i < (*slider.value) * barLength) ? "=" : "-";
+        }
+        bar += "]";
+
+        // Render the label and the bar
+        t_rend->RenderText(slider.label,  slider.rect.x, slider.rect.y - 25.0f, scale, color);
+        t_rend->RenderTextScale(bar,  slider.rect.x, slider.rect.y,slider.rect.z,slider.rect.w, color);
+    }
     void RenderMenu() {
-        // Setup 3D view for the background
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)Width / (float)Height, 0.1f, 100.0f);
+        // 1. Setup 3D view for the background skybox
+        glm::mat4 projection3D = glm::perspective(glm::radians(45.0f), (float)Width / (float)Height, 0.1f, 100.0f);
         glm::mat4 view = state.getViewMatrix();
-        RenderSkybox(projection, view);
+        RenderSkybox(projection3D, view);
 
-        // Setup 2D projection for text
-        glm::mat4 projection_2d = glm::ortho(0.0f, static_cast<float>(Width), static_cast<float>(Height), 0.0f);
-        text_shader->use();
-        text_shader->setMat4("projection", projection_2d);
+        // 2. Setup 2D projection for all text and UI rendering
+        glm::mat4 projection2D = glm::ortho(0.0f, static_cast<float>(Width), static_cast<float>(Height), 0.0f);
+        t_rend->shader->use();
+        t_rend->shader->setMat4("projection", projection2D);
 
-        text_shader->setInt("text", 0);
-
-        // Render menu text
-        // Note: Y-coordinate is from the top of the screen. Centering text requires knowing its rendered width, so we approximate with offsets.
-        std::string title = "Suika 4D";
-        std::string subtitle = "Click or Press ENTER to Play";
-        std::string hint = "Press ESC to Pause";
-
+        // --- Render All Menu Text ---
         float centerX = Width / 2.0f;
         float centerY = Height / 2.0f;
+        
+        // Title and Subtitle
+        std::string title = "Suika 4D";
+        t_rend->RenderText(title, centerX - t_rend->GetTextWidth(title, 2.0f) / 2.0f, centerY - 150.0f, 2.0f, glm::vec3(0.9f, 0.9f, 1.0f));
+        std::string subtitle = "Press ESC or ENTER to Play";
+        t_rend->RenderText(subtitle, centerX - t_rend->GetTextWidth(subtitle, 1.0f) / 2.0f, centerY - 50.0f, 1.0f, glm::vec3(0.8f, 0.8f, 0.8f));
 
-        float titleScale = 2.0f;
-        float subtitleScale = 1.5f;
-        float hintScale = 1.0f;
+        // Instructions Block
+        float instructionScale = 0.75f;
+        glm::vec3 instructionColor = glm::vec3(0.7f);
 
-        t_rend->RenderText(title, centerX -  t_rend->GetTextWidth(title, titleScale) / 2.0f,centerY - 100.0f,titleScale,glm::vec3(0.9f, 0.9f, 1.0f));
-        t_rend->RenderText(subtitle,centerX -  t_rend->GetTextWidth(subtitle, subtitleScale) / 2.0f,centerY,subtitleScale,glm::vec3(0.8f, 0.8f, 0.8f));
-        t_rend->RenderText(hint,25.0f,25.0f,hintScale,glm::vec3(1.0f));
+
+        float startY = Height*0.6f;
+        // float startY = centerY + 50.0f;
+        float lineSpacing = 20.0f;
+        
+        vector<std::string> lines = {"W / S - Move in the 4th Dimension","Left Click - Place Fruit","Right-Click + Drag - Rotate Camera","Mouse Wheel - Zoom In/Out","ESC - Pause / Return to Menu"};
+        for (int i =0;i<lines.size();i++){
+            t_rend->RenderText(lines[i], centerX - t_rend->GetTextWidth(lines[i], instructionScale) / 2.0f, startY + lineSpacing*i, instructionScale, instructionColor);
+        }
+
+        // float sliderYOffset = startY;// + (lineSpacing * 5) + 40.0f; // Position sliders below instructions
+        // Music Slider
+
+        RenderSlider(vset.musicSlider);
+        RenderSlider(vset.sfxSlider);
     }
     void RenderEndScreen() {
         // 1. Set up the 3D camera matrices
@@ -671,7 +794,7 @@ public:
         std::string msg1 = "GAME OVER";
         std::string msg2 = "Score: " + std::to_string(total_points);
         std::string msg3 = "High Score: " + std::to_string(high_score);
-        std::string msg4 = "Click or Press ENTER to Restart";
+        std::string msg4 = "Press ESC or ENTER to Restart";
 
         float scale1 = 1.5f;
         float scale2 = 1.0f;

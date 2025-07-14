@@ -240,10 +240,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     game.state.onMouseButton(button, action, game.state.m_xpos, game.state.m_ypos);
     if (game.State == GAME_MENU && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
-        game.mouseClicked=true;
+        // game.ballPlaced=true;
     }
     if (game.State == GAME_OVER && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
-        game.mouseClicked=true;
+        // game.ballPlaced=true;
     }
     if (game.State == GAME_ACTIVE && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         RayInter closestResult = getPlacementMouse(&game.state, &game.boundary, game.physics_solver);
@@ -256,7 +256,7 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
             );
             game.nextFruit = FruitManager::getRandomFruit();
         }
-        game.mouseClicked=true;
+        game.ballPlaced=true;
     }
 }
 

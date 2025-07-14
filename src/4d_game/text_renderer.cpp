@@ -123,7 +123,61 @@ void TextRenderer::RenderText(const std::string& text, float x, float y, float s
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
+void TextRenderer::RenderTextScale(const std::string& text, float x, float y, float targetWidth, float targetHeight, glm::vec3 color)
+{
+    // 1. Calculate the original size of the text at a scale of 1.0
+    float naturalWidth = GetTextWidth(text, 1.0f);
+    float naturalHeight = (float)Characters['H'].Size.y;
 
+    if (naturalWidth == 0.0f || naturalHeight == 0.0f) return;
+
+    // 2. Calculate the scale required for width and height separately
+    float scaleX = targetWidth / naturalWidth;
+    float scaleY = targetHeight / naturalHeight;
+
+    // --- This is the main change: We no longer find the minimum scale. ---
+    // We will use scaleX and scaleY independently.
+
+    shader->use();
+    shader->setVec3("textColor", color);
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(vao);
+
+    float currentX = x; // Start at the beginning of the box
+
+    for (auto c = text.begin(); c != text.end(); ++c)
+    {
+        Character ch = Characters[*c];
+
+        // Apply scaleX to horizontal properties and scaleY to vertical properties
+        float xpos = currentX + ch.Bearing.x * scaleX;
+        float ypos = y + (Characters['H'].Bearing.y - ch.Bearing.y) * scaleY;
+
+        float w = ch.Size.x * scaleX;
+        float h = ch.Size.y * scaleY;
+
+        float vertices[6][4] = {
+            { xpos,     ypos + h,   0.0f, 1.0f },
+            { xpos + w, ypos,       1.0f, 0.0f },
+            { xpos,     ypos,       0.0f, 0.0f },
+            { xpos,     ypos + h,   0.0f, 1.0f },
+            { xpos + w, ypos + h,   1.0f, 1.0f },
+            { xpos + w, ypos,       1.0f, 0.0f }
+        };
+
+        glBindTexture(GL_TEXTURE_2D, ch.TextureID);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // Advance cursor based on the horizontal scale
+        currentX += (ch.Advance >> 6) * scaleX;
+    }
+
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
 
 float TextRenderer::GetTextWidth(const std::string& text, float scale) {
     float width = 0.0f;

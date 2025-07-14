@@ -142,6 +142,7 @@ inline RayInter getPlacementMouse(ViewState *state, HemisphereBoundary *boundary
         0.1f, 
         100.0f
     );
+    
 
     glm::vec4 viewport(0, 0, state->windowWidth, state->windowHeight);
 

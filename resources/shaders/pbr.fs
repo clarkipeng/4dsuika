@@ -71,6 +71,7 @@ void main()
 {		
     // FragColor = vec4(normalize(Normal) * 0.5 + 0.5, 1.0);
     // return;
+    
     // FragColor = vec4(normalize(Normal) * 0.5 + 0.5, 1.0);
     // return;
 
@@ -129,3 +130,4 @@ void main()
 
     FragColor = vec4(color, alpha);
 }
+

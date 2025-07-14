@@ -154,15 +154,20 @@ private:
         // 1. diffuse maps
         vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
         textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
-        // 2. specular maps
-        vector<Texture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
-        textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
-        // 3. normal maps
-        std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
-        textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
-        // 4. height maps
-        std::vector<Texture> heightMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_height");
-        textures.insert(textures.end(), heightMaps.begin(), heightMaps.end());
+
+        // 3. Metallic maps
+        // Note: Assimp often loads Metallic maps using the aiTextureType_SPECULAR slot
+        vector<Texture> metallicMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_metallic");
+        textures.insert(textures.end(), metallicMaps.begin(), metallicMaps.end());
+        
+        // 4. Roughness maps
+        // Note: Assimp often loads Roughness maps using the aiTextureType_SHININESS slot
+        vector<Texture> roughnessMaps = loadMaterialTextures(material, aiTextureType_SHININESS, "texture_roughness");
+        textures.insert(textures.end(), roughnessMaps.begin(), roughnessMaps.end());
+
+        // 5. Ambient Occlusion maps
+        vector<Texture> aoMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_ao");
+        textures.insert(textures.end(), aoMaps.begin(), aoMaps.end());
         
         // return a mesh object created from the extracted mesh data
         return Mesh(vertices, indices, textures);
