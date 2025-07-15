@@ -1,4 +1,7 @@
 ## Suika Game in 4D!
+
+<img width="1604" alt="game photo" src="footage/gameImage.png"> 
+
 This repository was forked from the LearnOpenGL [github repo](https://github.com/JoeyDeVries/LearnOpenGL)
 
 The itch.io page is [here](https://werus23.itch.io/4d-suika).
