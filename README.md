@@ -50,6 +50,8 @@ bash build.sh macos
 ```
 
 
-Asset Credits
-credit to Chris Haugen for the theme Morning Mandolin https://www.youtube.com/watch?v=jDQgLlmCivI
-credit to LAPDOR for Floating Island https://sketchfab.com/3d-models/floating-island-3a5aca0e003d4effae29c107787e2012 
+# Asset Credits
+
+credit to Chris Haugen for the theme (Morning Mandolin)[https://www.youtube.com/watch?v=jDQgLlmCivI]
+
+credit to LAPDOR for (Floating Island)[https://sketchfab.com/3d-models/floating-island-3a5aca0e003d4effae29c107787e2012]
