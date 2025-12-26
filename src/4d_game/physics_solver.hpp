@@ -8,6 +8,11 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <set>
+#include <array>
+#include <mutex>
+#include <atomic>
+#include <cmath>
+#include <algorithm>
 
 
 struct PhysicSolver

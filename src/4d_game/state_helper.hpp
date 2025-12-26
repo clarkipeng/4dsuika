@@ -3,6 +3,8 @@
 #include <vector>
 #include <string>
 #include <random>
+#include <algorithm>
+#include <cmath>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>

@@ -2,6 +2,8 @@
 #include <vector>
 #include <tuple>
 #include <random>
+#include <thread>
+#include <algorithm>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>

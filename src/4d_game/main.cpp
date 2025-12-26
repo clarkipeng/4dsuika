@@ -9,6 +9,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <SDL_mixer.h>
 

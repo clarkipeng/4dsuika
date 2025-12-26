@@ -23,30 +23,51 @@ The itch.io page is [here](https://werus23.itch.io/4d-suika).
          wmode="transparent" width="425" height="350" />
 </object> -->
 
-## Mac OS X building
-Building on Mac OS X is fairly simple:
-```
+## Prerequisites
+
+### Windows
+1.  **CMake**: Install via PowerShell: `winget install kitware.cmake` OR download from [cmake.org](https://cmake.org/download/) (ensure "Add to PATH" is selected).
+2.  **C++ Compiler**: 
+    - **Recommended**: Install [Visual Studio Community](https://visualstudio.microsoft.com/vs/community/) and select **"Desktop development with C++"**.
+    - **Alternative**: Install [MSYS2](https://www.msys2.org/) and run `pacman -S mine-w64-x86_64-toolchain`.
+
+### macOS
+Install dependencies via Homebrew:
+```bash
 brew install cmake assimp glm glfw freetype sdl2 sdl2_mixer
-cmake -S . -B build -DCMAKE_EXE_LINKER_FLAGS="-L$(brew --prefix)/lib"
-cmake --build build -j$(sysctl -n hw.logicalcpu)
-```
-To run locally, run the executable located at
-```
-/build/9.4d_game
-```
-Zip using 
-```
-ditto -c -k --sequesterRsrc --keepParent build/macos/4d_game_.app 4d_game-macOS.zip
 ```
 
-## Application Build
-To statically build an application run the following for windows
+### Linux (Ubuntu/Debian)
+```bash
+sudo apt update
+sudo apt install cmake build-essential libx11-dev libxcursor-dev libxinerama-dev libxrandr-dev libxi-dev libasound2-dev libmesa-dev libglu1-mesa-dev
 ```
-bash build.sh windows
+
+## Quick Start (Local)
+The project now uses a simplified build process with automated dependency management.
+
+### Windows
+To build and run on Windows (PowerShell):
+```powershell
+.\build.bat
+.\build.bat run
 ```
-Run the following for macos
+
+### macOS / Linux
+To build and run:
+```bash
+make build
+make run
 ```
-bash build.sh macos
+
+## Platform-Specific Building (CI/CD)
+Automated builds for Windows and macOS are handled via GitHub Actions. The built artifacts are available in the GitHub Actions run results or as releases.
+
+### Manual Build
+If you prefer manual building with CMake:
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j 8
 ```
 
 
