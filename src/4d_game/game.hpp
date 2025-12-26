@@ -558,6 +558,7 @@ public:
         model_shader->setFloat("roughness", 0.5f);
         model_shader->setFloat("ao", 1.0f);
         model_shader->setFloat("alpha", 1.0f);
+        model_shader->setFloat("alpha_mult", 1.0f);
 
         glActiveTexture(GL_TEXTURE10);
         glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
@@ -575,6 +576,7 @@ public:
         ball_shader->setFloat("metallic", 0.0f);
         ball_shader->setFloat("roughness", 0.5f);
         ball_shader->setFloat("ao", 1.0f);
+        ball_shader->setFloat("alpha", 1.0f);
 
         glActiveTexture(GL_TEXTURE10);
         glBindTexture(GL_TEXTURE_CUBE_MAP, backgroundTexture);
@@ -602,33 +604,95 @@ public:
         glDepthFunc(GL_LESS);   // Restore default depth function
     }
     
+    void RenderSlice(float w, float alpha, glm::vec3 spatial_offset) {
+        // 1. Render the bowl for this slice (Background)
+        h_rend->Draw4d(w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f), alpha, spatial_offset);
+        
+        // 2. Render all fruits in this 4D slice (Foreground)
+        for (int i = 0; i < MAX_OBJECTS; i++) {
+            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
+            PhysicsObject &obj = physics_solver->objects[i];
+            
+            // 4D Visibility Check: Only render if the sphere intersects this 4D slice
+            if (abs(obj.position.w - w) > obj.radius) continue;
+            
+            b_rend->Draw4d(w, obj.fruit, obj.position, glm::vec3(0.0f), alpha, spatial_offset);
+        }
+    }
+
+    void RenderTripleBowl(const glm::mat4& projection, const glm::mat4& view, 
+                         const glm::vec3& camPos, const glm::vec3& light_pos, 
+                         const glm::vec3& light_color) {
+        SetupBallShader(projection, view, camPos, light_pos, light_color);
+        
+        const glm::vec3 cameraRight = state.getRightVector();
+        const float sideAlpha = 0.66f;
+        const float wOffset = boundary.radius * 0.25f;
+
+        // 1. Render Main slice (Opaque) first so it's in the depth buffer
+        RenderSlice(state.w, 1.0f, glm::vec3(0.0f));
+
+        // 2. Render Side panels (Transparent) second with depth-write off
+        glEnable(GL_BLEND);
+        glDepthMask(GL_FALSE); 
+        
+        // Dynamic offsets: Use the diameter of the *specific slice* at w +/- wOffset
+        // rendering_radius = sqrt(R^2 - w^2)
+
+        float rSq = boundary.radius * boundary.radius - state.w * state.w;
+        float r = (rSq > 0.0f) ? sqrt(rSq) : 0.0f;
+        
+        float wLeft = state.w - wOffset;
+        float rLeftSq = boundary.radius * boundary.radius - wLeft * wLeft;
+        float rLeft = (rLeftSq > 0.0f) ? sqrt(rLeftSq) : 0.0f;
+        glm::vec3 offsetLeft = cameraRight * (rLeft + r); // Spaced by its own diameter
+        
+        float wRight = state.w + wOffset;
+        float rRightSq = boundary.radius * boundary.radius - wRight * wRight;
+        float rRight = (rRightSq > 0.0f) ? sqrt(rRightSq) : 0.0f;
+        glm::vec3 offsetRight = cameraRight * (rRight + r); // Spaced by its own diameter
+        
+        RenderSlice(wLeft, sideAlpha, -offsetLeft);
+        RenderSlice(wRight, sideAlpha, offsetRight);
+        
+        glDepthMask(GL_TRUE);
+    }
+
     void RenderTable() {
         // model_shader should already be active when this is called
         model_shader->use(); 
+        model_shader->setFloat("alpha", 1.0f); // Ensure opaque rendering for the environment
         glm::mat4 modelMatrix = glm::mat4(1.0f);
-        modelMatrix = glm::translate(modelMatrix, glm::vec3(-2.0f, -13.65f, -2.0f));
-        modelMatrix = glm::scale(modelMatrix, glm::vec3(2.f, 2.f, 2.f));
+        modelMatrix = glm::translate(modelMatrix, glm::vec3(-9.0f, -26.0f, -4.0f));
+        modelMatrix = glm::scale(modelMatrix, glm::vec3(4.0, 4.0, 4.0));
         model_shader->setMat4("model", modelMatrix);
         tableModel->Draw(*model_shader);
     }
 
-    void RenderPhysicsObjects() {
-        // ball_shader should already be active when this is called
-        ball_shader->setFloat("alpha", 1.0f);
-        for (int i = 0; i < MAX_OBJECTS; i++) {
-            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
-            
-            PhysicsObject &obj = physics_solver->objects[i];
-            b_rend->Draw4d(state.w, obj.fruit, obj.position, glm::vec3(0.0f));
-        }
-    }
+    void RenderSceneCore() {
+        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)Width / (float)Height, 0.1f, 100.0f);
+        glm::mat4 view = state.getViewMatrix();
+        glm::vec3 camPos = state.getCameraPosition();
 
+        float t = (state.w - state.w_min) / (state.w_max - state.w_min);
+        glm::vec3 light_color = calculateSunsetColor(t);
+        float theta = 3.14159f * (0.8*t+0.1);
+        float x = light_radius * cos(theta);
+        float y = max_height * sin(theta);
+        float z = light_radius * sin(theta); 
+        glm::vec3 light_position = glm::vec3(x, y, z);
+
+        RenderSkybox(projection, view);
+        SetupModelShader(projection, view, camPos, light_position, light_color);
+        RenderTable();
+        RenderTripleBowl(projection, view, camPos, light_position, light_color);
+    } 
     void RenderPreviewObject() {
         RayInter mousePos = getPlacementMouse(&state, &boundary, physics_solver);
         if (mousePos.hit) {
             // ball_shader should already be active when this is called
             ball_shader->setFloat("alpha", 0.5f);
-            b_rend->Draw3d(nextFruit, mousePos.point + glm::vec3(0, 3, 0), glm::vec3(0.0f));
+            b_rend->Draw3d(nextFruit, mousePos.point + glm::vec3(0, 3, 0), glm::vec3(0.0f), 1.0f);
         }
     }
 
@@ -666,38 +730,8 @@ public:
     }
 
     void RenderGame() {
-        // 1. Set up the 3D camera matrices
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)Width / (float)Height, 0.1f, 100.0f);
-        glm::mat4 view = state.getViewMatrix();
-        glm::vec3 camPos = state.getCameraPosition();
-
-        // 2. Calculate dynamic lighting once
-        float t = (state.w - state.w_min) / (state.w_max - state.w_min);
-        glm::vec3 light_color = calculateSunsetColor(t);
-        float theta = 3.14159f * (0.8*t+0.1);
-        float x = light_radius * cos(theta);
-        float y = max_height * sin(theta);
-        float z = light_radius * sin(theta); // Fixed Z coordinate
-        glm::vec3 light_position = glm::vec3(x, y, z);
-
-        // 3. Render the skybox first (it uses its own shader)
-        RenderSkybox(projection, view);
-
-        // 4. Render the Table with model shader
-        SetupModelShader(projection,view,camPos,light_position,light_color);
-        RenderTable();
-
-        // 5. Render Physics Objects (Fruits) with ball shader
-        SetupBallShader(projection,view,camPos,light_position,light_color);
-        RenderPhysicsObjects();
-
-        // 6. Draw the Bowl (assuming it uses ball_shader)
-        h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f));
-
-        // 7. Draw the transparent Preview Object
+        RenderSceneCore();
         RenderPreviewObject();
-
-        // 8. Finally, render the 2D UI on top
         RenderGameUI();
     }
 
@@ -760,34 +794,9 @@ public:
         RenderSlider(vset.sfxSlider);
     }
     void RenderEndScreen() {
-        // 1. Set up the 3D camera matrices
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)Width / (float)Height, 0.1f, 100.0f);
-        glm::mat4 view = state.getViewMatrix();
-        glm::vec3 camPos = state.getCameraPosition();
+        RenderSceneCore();
 
-        // 2. Calculate dynamic lighting once
-        float t = (state.w - state.w_min) / (state.w_max - state.w_min);
-        glm::vec3 light_color = calculateSunsetColor(t);
-        float theta = 3.14159f * (0.8*t+0.1);
-        float x = light_radius * cos(theta);
-        float y = max_height * sin(theta);
-        float z = light_radius * sin(theta); // Fixed Z coordinate
-        glm::vec3 light_position = glm::vec3(x, y, z);
-
-        // 3. Render the skybox first (it uses its own shader)
-        RenderSkybox(projection, view);
-
-        // 4. Render the Table with model shader
-        SetupModelShader(projection,view,camPos,light_position,light_color);
-        RenderTable();
-
-        // 5. Render Physics Objects (Fruits) with ball shader
-        SetupBallShader(projection,view,camPos,light_position,light_color);
-        RenderPhysicsObjects();
-
-        // 6. Draw the Bowl (assuming it uses ball_shader)
-        h_rend->Draw4d(state.w, bowlTexture, glm::vec4(0.0f), boundary.radius, glm::vec3(0.0f));
-
+        // Game Over Text overlay
         glm::mat4 projection_2d = glm::ortho(0.0f, static_cast<float>(Width), static_cast<float>(Height), 0.0f);
         text_shader->use();
         text_shader->setMat4("projection", projection_2d);
@@ -800,7 +809,6 @@ public:
 
         float scale1 = 1.5f;
         float scale2 = 1.0f;
-
         float centerX = state.windowWidth / 2.0f;
 
         t_rend->RenderText(msg1, centerX - t_rend->GetTextWidth(msg1, scale1) / 2.0f, 150.0f, scale1, glm::vec3(1.0f, 0.2f, 0.2f));
@@ -808,11 +816,4 @@ public:
         t_rend->RenderText(msg3, centerX - t_rend->GetTextWidth(msg3, scale2) / 2.0f, 300.0f, scale2, glm::vec3(0.8f, 0.8f, 0.2f));
         t_rend->RenderText(msg4, centerX - t_rend->GetTextWidth(msg4, scale2) / 2.0f, 400.0f, scale2, glm::vec3(0.8f));
     }
-    // void DoCollisions();
-    // reset
-    // void ResetLevel();
-    // void ResetPlayer();
-    // powerups
-    // void SpawnPowerUps(GameObject &block);
-    // void UpdatePowerUps(float dt);
 };

@@ -75,6 +75,15 @@ struct ViewState {
 
         return orbitTarget + glm::vec3(x, y, z);
     }
+    glm::vec3 getRightVector() const {
+        glm::vec3 dir = {
+            cosf(pitch) * cosf(yaw),
+            sinf(pitch),
+            cosf(pitch) * sinf(yaw)
+        };
+        glm::vec3 up = glm::vec3(0, 1, 0);
+        return glm::normalize(glm::cross(dir, up));
+    }
     glm::mat4 getViewMatrix() const {
         glm::vec3 dir = {
             cosf(pitch) * cosf(yaw),

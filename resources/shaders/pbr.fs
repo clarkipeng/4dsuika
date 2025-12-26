@@ -11,6 +11,7 @@ uniform float metallic;
 uniform float roughness;
 uniform float ao;
 uniform float alpha;
+uniform float alpha_mult; // Multiplier for ghosting passes
 
 // lights
 uniform samplerCube environmentMap;
@@ -18,6 +19,7 @@ uniform vec3 lightPositions[1];
 uniform vec3 lightColors[1];
 
 uniform vec3 camPos;
+uniform float wDelta; // Distance in 4th dimension from the player's slice
 
 const float PI = 3.14159265359;
 // ----------------------------------------------------------------------------
@@ -75,10 +77,19 @@ void main()
     // FragColor = vec4(normalize(Normal) * 0.5 + 0.5, 1.0);
     // return;
 
-    vec3 albedo = texture(texture_diffuse1, TexCoords).rgb;
-    vec3 N = normalize(Normal);
+    vec4 texColor = texture(texture_diffuse1, TexCoords);
+    // Discard if alpha is low OR if the pixel is black (common in some asset packs without alpha channel)
+    if(texColor.a < 0.1 || (texColor.r + texColor.g + texColor.b) < 0.1) discard;
+    vec3 albedo = texColor.rgb;
     
+    vec3 N = normalize(Normal);
     vec3 V = normalize(camPos - WorldPos);
+
+    // 4D Phasing Edge (Soft Alpha Fade)
+    // Instead of harsh clipping or colors, we just use a smooth alpha fade near the W-limits
+    // Lenient threshold to ensure objects are visible for their whole 4D span
+    float phaseLife = clamp(1.0 - abs(wDelta) / 1.5, 0.0, 1.0);
+
     vec3 R = reflect(-V, N); 
 
     vec3 F0 = vec3(0.04); 
@@ -128,6 +139,6 @@ void main()
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2)); 
 
-    FragColor = vec4(color, alpha);
+    FragColor = vec4(color, alpha * alpha_mult);
 }
 

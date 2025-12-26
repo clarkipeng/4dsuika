@@ -36,13 +36,15 @@ public:
     }
 
     void virtual Draw4d(float w_coord, unsigned int texture, glm::vec4 position, float scale, 
-                glm::vec3 rotation = glm::vec3(0.0f))
+                glm::vec3 rotation = glm::vec3(0.0f), float alpha_mult = 1.0f,
+                glm::vec3 spatial_offset = glm::vec3(0.0f))
     {
         glm::mat4 model = glm::mat4(1.0f);
-        glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z);
+        float wDelta = position.w - w_coord;
+        glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z) + spatial_offset;
         
         // Prevent division by zero
-        float projected_scale = sqrt(scale*scale - (w_coord - position.w)*(w_coord - position.w));
+        float projected_scale = sqrt(max(0.0f, scale*scale - wDelta*wDelta));
         glm::vec3 scale3d = glm::vec3(abs(projected_scale));
 
         model = glm::translate(model, pos3d);
@@ -50,6 +52,8 @@ public:
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         this->shader->setMat4("model", model); // also needed!
         this->shader->setMat3("normalMatrix", normalMatrix);
+        this->shader->setFloat("wDelta", wDelta);
+        this->shader->setFloat("alpha_mult", alpha_mult);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -60,7 +64,7 @@ public:
     }
 
     void virtual Draw3d(glm::vec3 position, unsigned int texture, float scale, 
-                glm::vec3 rotation = glm::vec3(0.0f))
+                glm::vec3 rotation = glm::vec3(0.0f),float alpha_mult = 1.0f)
     {
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, position);
@@ -70,6 +74,8 @@ public:
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         this->shader->setMat4("model", model); // also needed!
         this->shader->setMat3("normalMatrix", normalMatrix);
+        this->shader->setFloat("wDelta", 0.0f);
+        this->shader->setFloat("alpha_mult", alpha_mult);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -79,16 +85,17 @@ public:
         glBindVertexArray(0);
     }
 
-    void virtual Draw4d(float w_coord, Fruit fruit, glm::vec4 position,glm::vec3 rotation = glm::vec3(0.0f))
+    void virtual Draw4d(float w_coord, Fruit fruit, glm::vec4 position, glm::vec3 rotation = glm::vec3(0.0f), float alpha_mult = 1.0f, glm::vec3 spatial_offset = glm::vec3(0.0f))
     {
         const float scale = FruitManager::getFruitProperties(fruit).radius;
         const unsigned int texture = FruitManager::getFruitProperties(fruit).texture;
 
         glm::mat4 model = glm::mat4(1.0f);
-        glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z);
+        float wDelta = position.w - w_coord;
+        glm::vec3 pos3d = glm::vec3(position.x, position.y, position.z) + spatial_offset;
         
         // Prevent division by zero
-        float projected_scale = sqrt(scale*scale - (w_coord - position.w)*(w_coord - position.w));
+        float projected_scale = sqrt(max(0.0f, scale*scale - wDelta*wDelta));
         glm::vec3 scale3d = glm::vec3(abs(projected_scale));
 
         model = glm::translate(model, pos3d);
@@ -97,6 +104,8 @@ public:
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         this->shader->setMat4("model", model); // also needed!
         this->shader->setMat3("normalMatrix", normalMatrix);
+        this->shader->setFloat("wDelta", wDelta);
+        this->shader->setFloat("alpha_mult", alpha_mult);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -107,7 +116,7 @@ public:
     }
 
     void virtual Draw3d(Fruit fruit, glm::vec3 position,
-                glm::vec3 rotation = glm::vec3(0.0f))
+                glm::vec3 rotation = glm::vec3(0.0f), float alpha_mult = 1.0f)
     {
         const float scale = FruitManager::getFruitProperties(fruit).radius;
         const unsigned int texture = FruitManager::getFruitProperties(fruit).texture;
@@ -120,6 +129,8 @@ public:
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         this->shader->setMat4("model", model); // also needed!
         this->shader->setMat3("normalMatrix", normalMatrix);
+        this->shader->setFloat("wDelta", 0.0f);
+        this->shader->setFloat("alpha_mult", alpha_mult);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
