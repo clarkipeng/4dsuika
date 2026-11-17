@@ -26,6 +26,16 @@ uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform float uFogStart;             // distance where fog begins (just past the orbit target)
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
 
+// Slice cache (docs/4D.md): worldStaticSDF baked over a cube in slice
+// coordinates. x in [0, uCacheSize]^3 maps to uCacheOrigin + uCacheBasis * x.
+uniform int       uCacheMode;        // 0 = no cache (march the analytic SDF), 1 = cache
+uniform sampler3D uCache;
+uniform vec4      uCacheOrigin;
+uniform mat4      uCacheBasis;       // columns: slice axes x, y, z, slice normal
+uniform float     uCacheSize;        // cube side, 0 = no static world in this slice
+uniform float     uCacheVoxel;
+uniform vec3      uCacheUV;          // scale of the baked corner, min and max texture coordinate
+
 #include "world4d.glsl"
 #include "fruit4d.glsl"
 
@@ -33,17 +43,32 @@ uniform float uFacet;                // low-poly facet strength, 0 = smooth
 #ifndef QUALITY
 #define QUALITY 2
 #endif
+// Shadow steps read the slice cache (cheap texture fetches), so fewer suffice.
 #if QUALITY == 0
-const int MAX_STEPS = 72;  const int SHADOW_STEPS = 16; const int AO_SAMPLES = 2;
+const int MAX_STEPS = 72;  const int SHADOW_STEPS = 12; const int AO_SAMPLES = 2;
 #elif QUALITY == 1
-const int MAX_STEPS = 96;  const int SHADOW_STEPS = 28; const int AO_SAMPLES = 3;
+const int MAX_STEPS = 96;  const int SHADOW_STEPS = 18; const int AO_SAMPLES = 3;
 #elif QUALITY == 2
-const int MAX_STEPS = 128; const int SHADOW_STEPS = 40; const int AO_SAMPLES = 4;
+const int MAX_STEPS = 128; const int SHADOW_STEPS = 24; const int AO_SAMPLES = 3;
 #else
-const int MAX_STEPS = 160; const int SHADOW_STEPS = 64; const int AO_SAMPLES = 5;
+const int MAX_STEPS = 160; const int SHADOW_STEPS = 40; const int AO_SAMPLES = 5;
 #endif
 
 const float FAR = 80.0;
+
+// --cost-map: count analytic SDF evaluations per pixel (world and fruit) and
+// output that instead of colour. A deterministic profile that shared GPUs
+// cannot disturb.
+#ifdef COST_MAP
+ivec3 gCost = ivec3(0); // static world, moving world, fruit
+#define COST(n) gCost.x += (n)
+#define COST_DYNAMIC(n) gCost.y += (n)
+#define COST_FRUIT(n) gCost.z += (n)
+#else
+#define COST(n)
+#define COST_DYNAMIC(n)
+#define COST_FRUIT(n)
+#endif
 
 const float MAT_FRUIT = 3.0;
 
@@ -78,6 +103,7 @@ float fruitMarch(vec4 ro, vec4 rd, vec4 c, vec4 d, float t0, float t1, float lod
     float t = t0;
     for (int k = 0; k < 24; ++k) {
         float h = fruitSDF(ro + rd * t - c, d.x, d.y, lod);
+        COST_FRUIT(1);
         if (h < 0.002 * d.x) return t;
         t += h;
         if (t > t1) break;
@@ -171,18 +197,103 @@ vec4 facetNormal(vec4 n, float density, float seed) {
 // ---------------------------------------------------------------- scene
 
 
-// Gradient from the five vertices of a regular 5-cell (4D tetrahedron trick).
-vec4 worldNormal(vec4 p) {
+// Normal of the surface's cross-section by the slice: the 4D gradient
+// projected into the slice, from forward differences along the slice axes
+// (f0 is the distance at p, known from the march). Three evaluations; light
+// and shadows both work in the slice, so the part of the gradient along the
+// slice normal is not needed.
+// Static hits differentiate only the parts of their material
+// (worldStaticSDFFor), so f0 is re-evaluated for that same function.
+vec4 worldNormal(vec4 p, float f0, float mat, bool dynamic) {
     const float h = 0.002;
-    const float s = 0.4472136; // 1 / sqrt(5)
-    const vec4 k0 = vec4( 1.0,  1.0,  1.0, -s);
-    const vec4 k1 = vec4( 1.0, -1.0, -1.0, -s);
-    const vec4 k2 = vec4(-1.0,  1.0, -1.0, -s);
-    const vec4 k3 = vec4(-1.0, -1.0,  1.0, -s);
-    const vec4 k4 = vec4( 0.0,  0.0,  0.0, 4.0 * s);
-    return normalize(k0 * worldSDF(p + h * k0).x + k1 * worldSDF(p + h * k1).x +
-                     k2 * worldSDF(p + h * k2).x + k3 * worldSDF(p + h * k3).x +
-                     k4 * worldSDF(p + h * k4).x);
+    vec4 e0 = h * uCameraBasis[0], e1 = h * uCameraBasis[1], e2 = h * uCameraBasis[2];
+    vec3 f;
+    if (dynamic) {
+        COST_DYNAMIC(3);
+        f = vec3(worldSDF(p + e0).x, worldSDF(p + e1).x, worldSDF(p + e2).x);
+    } else {
+        COST(4); // part-only evaluations, each far cheaper than the whole world
+        f0 = worldStaticSDFFor(p, mat).x;
+        f = vec3(worldStaticSDFFor(p + e0, mat).x, worldStaticSDFFor(p + e1, mat).x,
+                 worldStaticSDFFor(p + e2, mat).x);
+    }
+    return normalize(uCameraBasis[0] * (f.x - f0) + uCameraBasis[1] * (f.y - f0) + uCameraBasis[2] * (f.z - f0));
+}
+
+// ---------------------------------------------------------------- slice cache
+//
+// Trilinear filtering of exact distances is within 0.87 voxel of the truth
+// (the SDF is 1-Lipschitz), so cache value - 0.9 voxel is a safe step.
+// Where that is under a voxel the march falls back to the analytic SDF, so
+// thin parts are never stepped over and hits are exact.
+
+vec3 toCache(vec4 p) { return (transpose(uCacheBasis) * (p - uCacheOrigin)).xyz; }
+vec3 dirToCache(vec4 d) { return (transpose(uCacheBasis) * d).xyz; }
+float cacheDist(vec3 x) {
+    return texture(uCache, clamp(x / uCacheSize * uCacheUV.x, uCacheUV.y, uCacheUV.z)).r;
+}
+bool inCache(vec3 x) { return all(greaterThanEqual(x, vec3(0.0))) && all(lessThanEqual(x, vec3(uCacheSize))); }
+
+// Entry and exit of the ray with the cache cube; false if it misses.
+bool cacheSpan(vec3 o, vec3 d, out float t0, out float t1) {
+    vec3 inv = 1.0 / d;
+    vec3 a = (vec3(0.0) - o) * inv, b = (vec3(uCacheSize) - o) * inv;
+    vec3 lo = min(a, b), hi = max(a, b);
+    t0 = max(max(max(lo.x, lo.y), lo.z), 0.0);
+    t1 = min(min(hi.x, hi.y), hi.z);
+    return uCacheSize > 0.0 && t1 > t0;
+}
+
+// Static world along an in-slice ray: (t, material, distance at t),
+// material 0 = miss.
+// bowlNear collects the closest approach to the bowl for its glow.
+vec3 marchStatic(vec4 ro, vec4 rd, float tMax, inout float bowlNear) {
+    if (uCacheMode == 0) {
+        float t = 0.0;
+        for (int i = 0; i < MAX_STEPS; ++i) {
+            vec4 p = ro + rd * t;
+            vec2 h = worldStaticSDF(p);
+            COST(1);
+            bowlNear = min(bowlNear, bowlSDF(p));
+            if (h.x < 0.001 * t) return vec3(t, h.y, h.x);
+            t += h.x;
+            if (t > tMax) break;
+        }
+        return vec3(tMax, 0.0, 0.0);
+    }
+    vec3 o = toCache(ro), d = dirToCache(rd);
+    float t, t1;
+    if (!cacheSpan(o, d, t, t1)) return vec3(tMax, 0.0, 0.0);
+    t1 = min(t1, tMax);
+    float margin = 0.9 * uCacheVoxel + 0.01;
+    for (int i = 0; i < MAX_STEPS; ++i) {
+        vec4 p = ro + rd * t;
+        bowlNear = min(bowlNear, bowlSDF(p));
+        float adv = cacheDist(o + d * t) - margin;
+        if (adv < uCacheVoxel) {
+            vec2 h = worldStaticSDF(p);
+            COST(1);
+            if (h.x < 0.001 * t) return vec3(t, h.y, h.x);
+            adv = h.x;
+        }
+        t += adv;
+        if (t > t1) break;
+    }
+    return vec3(tMax, 0.0, 0.0);
+}
+
+// Moving parts (clouds), marched live. Steps are capped so the parts' own
+// bounds skip most of the work.
+vec3 marchDynamic(vec4 ro, vec4 rd, float tMax) {
+    float t = 0.0;
+    for (int i = 0; i < 48; ++i) {
+        vec2 h = worldDynamicSDF(ro + rd * t, 6.0);
+        COST_DYNAMIC(1);
+        if (h.x < 0.001 * t + 0.002) return h.y > 0.0 ? vec3(t, h.y, h.x) : vec3(tMax, 0.0, 0.0);
+        t += h.x;
+        if (t > tMax) break;
+    }
+    return vec3(tMax, 0.0, 0.0);
 }
 
 // Shadows and AO may use a cheaper, coarser world distance if the world
@@ -193,17 +304,32 @@ float occluderSDF(vec4 p) { return worldShadowSDF(p); }
 float occluderSDF(vec4 p) { return worldSDF(p).x; }
 #endif
 
-// Soft shadow towards the sun: the world is marched in 4D, fruit are analytic.
+// Soft shadow towards the sun; fruit are analytic. With the cache, the
+// shadow ray runs inside the slice (rd is the sun projected into it) over
+// the cached distances.
 float softShadow(vec4 ro, vec4 rd) {
     float res = 1.0;
     for (int i = 0; i < MAX_FRUIT; ++i) {
         if (i >= uFruitCount) break;
         res = min(res, glomeShadow(ro, rd, uFruitCenters[i], uFruitData[i].x));
     }
+    if (uCacheMode != 0) {
+        vec3 o = toCache(ro), d = dirToCache(rd);
+        float t = uCacheVoxel;
+        for (int i = 0; i < SHADOW_STEPS; ++i) {
+            vec3 x = o + d * t;
+            if (res < 0.01 || t > 25.0 || !inCache(x)) break;
+            float h = cacheDist(x);
+            res = min(res, 10.0 * h / t);
+            t += clamp(h, 0.03, 2.5);
+        }
+        return clamp(res, 0.0, 1.0);
+    }
     float t = 0.05;
     for (int i = 0; i < SHADOW_STEPS; ++i) {
         if (res < 0.01) break;
         float h = occluderSDF(ro + rd * t);
+        COST(1);
         res = min(res, 10.0 * h / t);
         t += clamp(h, 0.03, 2.5);
         if (res < 0.01 || t > 25.0) break;
@@ -213,9 +339,16 @@ float softShadow(vec4 ro, vec4 rd) {
 
 float ambientOcclusion(vec4 p, vec4 n) {
     float occ = 0.0, w = 1.0;
+    // With the cache, samples step along the normal's part inside the slice.
+    vec3 o = toCache(p), d = dirToCache(n);
+    bool cached = uCacheMode != 0 && dot(d, d) > 0.01;
+    d = cached ? normalize(d) : d;
     for (int i = 1; i <= AO_SAMPLES; ++i) {
         float h = 0.3 * float(i * i) / float(AO_SAMPLES * AO_SAMPLES) * 5.0;
-        occ += (h - occluderSDF(p + n * h)) * w;
+        vec3 x = o + d * h;
+        float dist = cached ? (inCache(x) ? cacheDist(x) : h) : occluderSDF(p + n * h);
+        COST(cached ? 0 : 1);
+        occ += (h - dist) * w;
         w *= 0.6;
     }
     float ao = clamp(1.0 - 1.4 * occ, 0.0, 1.0);
@@ -235,10 +368,22 @@ const vec3 SUN_COLOR = vec3(2.1, 1.25, 0.62);
 const vec3 SKY_AMBIENT = vec3(0.32, 0.28, 0.40);
 const vec3 GROUND_BOUNCE = vec3(0.40, 0.24, 0.12);
 
+// Direction shadow rays take: the sun, or with the cache its projection into
+// the slice (zero when the sun is almost normal to the slice).
+vec4 shadowDir() {
+    if (uCacheMode == 0) return uSunDir;
+    vec4 s = uSunDir - dot(uSunDir, uCacheBasis[3]) * uCacheBasis[3];
+    return dot(s, s) > 0.0025 ? normalize(s) : vec4(0.0);
+}
+
 // n: lighting (faceted) normal; ns: smooth normal for shadow/AO offsets.
-vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss) {
-    float sunDot = max(dot(n, uSunDir), 0.0);
-    float sh = dot(ns, uSunDir) > -0.1 ? softShadow(p + ns * 0.02, uSunDir) : 0.0;
+// wrap: light that passes through (foliage), 0 = opaque.
+vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wrap) {
+    float sunDot = max((dot(n, uSunDir) + wrap) / (1.0 + wrap), 0.0);
+    vec4 sd = shadowDir();
+    float sh = dot(sd, sd) == 0.0 ? 1.0
+             : dot(ns, sd) > -0.1 - wrap ? softShadow(p + ns * 0.02, sd) : 0.0;
+    sh = mix(sh, 1.0, 0.5 * wrap);
     float ao = ambientOcclusion(p, ns);
     vec3 sun = SUN_COLOR * sunDot * sh;
     vec3 sky = SKY_AMBIENT * (0.55 + 0.45 * n.y) * (0.3 + 0.7 * ao);
@@ -308,18 +453,14 @@ void main() {
 
     // World: sphere-traced SDF, stopped early at the nearest fruit. The
     // closest approach to the bowl feeds its glow.
-    float t = 0.0;
-    float mat = 0.0;
     float bowlNear = 1e3;
-    for (int i = 0; i < MAX_STEPS; ++i) {
-        vec2 h = worldSDF(ro + rd * t);
-        if (h.y == 2.0) bowlNear = min(bowlNear, h.x);
-        if (h.x < 0.001 * t) { mat = h.y; break; }
-        t += h.x;
-        if (t > tHit) break;
-    }
+    vec3 hs = marchStatic(ro, rd, min(tHit, FAR), bowlNear);
+    vec3 hd = marchDynamic(ro, rd, hs.x);
+    vec3 hw = hd.y > 0.0 ? hd : hs;
+    float t = hw.x;
+    float mat = hw.y;
 
-    vec3 col;
+    vec3 col = vec3(0.0);
     float dist;
     if (fruit >= 0 && tHit <= t) {
         vec4 p = ro + rd * tHit;
@@ -335,7 +476,7 @@ void main() {
         // Plus a soft fill from the viewer, so the side we see is never just
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
-        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y)) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
+        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
         // 4D lean: a fruit's cross-section normals tilt along the slice
         // normal as it drifts out of the slice. Warm it towards the w-axis
         // gold of the indicator so "about to vanish" reads at a glance.
@@ -346,18 +487,20 @@ void main() {
         dist = tHit;
     } else if (mat > 0.0) {
         vec4 p = ro + rd * t;
-        vec4 ns = worldNormal(p);
+        vec4 ns = worldNormal(p, hw.z, mat, hd.y > 0.0);
         vec4 n = facetBlend(ns, 6.0, 0.0);
-        col = shade(p, n, ns, rd, materialColor(mat, p, n), mat == 2.0 ? 0.25 : 0.0);
+        // Leaves pass some sun through, so canopies seen from below stay green.
+        float wrap = mat == MAT_LEAVES ? 0.6 : 0.0;
+        col = shade(p, n, ns, rd, materialColor(mat, p, n), mat == 2.0 ? 0.25 : 0.0, wrap);
         dist = t;
     } else {
-        col = skyColor(rd);
         dist = FAR;
     }
 
-    // Sunset fog.
-    float fog = 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
-    col = mix(col, skyColor(rd), fog);
+    // Sunset fog. The sky (noise clouds, not cheap) is evaluated once, and
+    // only where it shows.
+    float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
+    if (fog > 0.002) col = mix(col, skyColor(rd), fog);
 
     // The bowl glows softly, as in the cover art.
     // Not over fruit, which must stay readable.
@@ -386,4 +529,8 @@ void main() {
     vec2 v = vUV - 0.5;
     col *= 1.0 - 0.55 * dot(v, v);
     fragColor = vec4(col, 1.0);
+#ifdef COST_MAP
+    // Evaluations / 255 per channel: R static world, G moving world, B fruit.
+    fragColor = vec4(vec3(gCost) / 255.0, 1.0);
+#endif
 }

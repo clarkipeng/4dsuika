@@ -75,6 +75,11 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --quality q            low | medium | high | ultra (default high)
 //   --adaptive             keep adaptive resolution on (otherwise fixed --scale)
 //   --perf                 show the F3 performance overlay
+//   --no-cache             march the analytic world SDF (no slice cache), to compare
+//   --bench-turn deg       with --bench: turn xw by deg every frame (rebakes the cache)
+//   --cost-map out.png     analytic SDF evaluations per pixel instead of colour (R static
+//                          world, G moving world, B fruit) with statistics; deterministic,
+//                          unlike timings on a shared GPU
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -102,6 +107,9 @@ struct Options {
     std::string quality = "high";
     bool adaptive = false;
     bool perf = false;
+    bool noCache = false;
+    float benchTurn = 0.0f;
+    std::string costMap;
     float cursorX = -1.0f, cursorY = -1.0f;
     std::string record;
     std::string cameraPath;
@@ -112,7 +120,10 @@ struct Options {
     bool mute = false;
     std::string fruitSheet;
     std::string sheetTurn = "yw:35";
-    bool headless() const { return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty() || playtestSeconds > 0.0f; }
+    bool headless() const {
+        return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty() || !costMap.empty() ||
+               playtestSeconds > 0.0f;
+    }
     bool muted() const { return mute || headless(); }
 };
 
@@ -145,6 +156,9 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--quality") o.quality = next();
         else if (a == "--adaptive") o.adaptive = true;
         else if (a == "--perf") o.perf = true;
+        else if (a == "--no-cache") o.noCache = true;
+        else if (a == "--bench-turn") o.benchTurn = std::atof(next().c_str());
+        else if (a == "--cost-map") o.costMap = next();
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
         else if (a == "--fruit-sheet") o.fruitSheet = next();
         else if (a == "--sheet-turn") o.sheetTurn = next();
@@ -332,13 +346,15 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.state.m_ypos = o.cursorY >= 0 ? o.cursorY : o.height * 0.55f;
     Quality q = o.quality == "low" ? Quality::Low : o.quality == "medium" ? Quality::Medium
               : o.quality == "ultra" ? Quality::Ultra : Quality::High;
-    if (q != game.renderer.quality()) game.renderer.setQuality(q);
+    if (!o.costMap.empty()) game.renderer.extraDefines = "#define COST_MAP\n";
+    if (q != game.renderer.quality() || !o.costMap.empty()) game.renderer.setQuality(q);
     // Headless runs render at a fixed scale (of the preset's cap) so results
     // are reproducible; adaptive resolution is for live play.
     game.renderer.adaptive = o.adaptive;
     game.showPerf = o.perf;
     game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
+    game.renderer.useCache = !o.noCache;
     auto showMenuState = [&](const std::string& st) {
         game.State = st == "menu" || st == "settings" || st == "controls" ? GAME_MENU
                    : st == "pause" ? GAME_PAUSED : st == "over" ? GAME_OVER : GAME_ACTIVE;
@@ -410,24 +426,32 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (late) showMenuState(o.state);
 
     if (o.bench > 0) {
-        // GPU time of the scene pass from timer queries (the number that
-        // decides 60 fps), plus wall time per whole frame for reference.
+        // Per frame: wall time with glFinish (the whole frame, robust when
+        // other work shares the GPU) and the scene pass's GPU timer. The
+        // fastest quartile is the least disturbed by other GPU users.
         game.renderer.syncTiming = true;
         frame(FIXED_TIMESTEP);
         glFinish();
-        std::vector<float> gpu;
-        auto t0 = std::chrono::steady_clock::now();
+        std::vector<float> wall, gpu, bake;
+        int bakes0 = game.renderer.bakeCount();
         for (int i = 0; i < o.bench; ++i) {
+            if (o.benchTurn != 0.0f) game.state.cam.turnLocal(AX_X, AX_W, glm::radians(o.benchTurn));
+            auto t0 = std::chrono::steady_clock::now();
             frame(0.0f);
+            glFinish();
+            wall.push_back(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count());
             gpu.push_back(game.renderer.lastGpuMs());
+            bake.push_back(game.renderer.bakeMs());
         }
-        glFinish();
-        double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / o.bench;
-        std::sort(gpu.begin(), gpu.end());
-        float median = gpu[gpu.size() / 2], p95 = gpu[std::min(gpu.size() - 1, gpu.size() * 95 / 100)];
-        printf("bench %dx%d %s scale %.2f: scene GPU median %.2f ms, p95 %.2f ms; frame wall %.2f ms (%.0f fps)\n",
+        auto pct = [](std::vector<float> v, float q) {
+            std::sort(v.begin(), v.end());
+            return v[std::min(v.size() - 1, size_t(q * v.size()))];
+        };
+        printf("bench %dx%d %s scale %.2f: frame wall median %.2f ms, p25 %.2f ms (%.0f fps); scene GPU median %.2f ms\n",
                o.width, o.height, qualityName(game.renderer.quality()), game.renderer.renderScale,
-               median, p95, wall, 1000.0 / wall);
+               pct(wall, 0.5f), pct(wall, 0.25f), 1000.0f / pct(wall, 0.5f), pct(gpu, 0.5f));
+        printf("slice cache %s: %d bakes, bake GPU median %.2f ms\n",
+               o.noCache ? "off" : "on", game.renderer.bakeCount() - bakes0, pct(bake, 0.5f));
     }
     // Read the frame, flipped to top-down rows, appended to px.
     auto capture = [&](std::vector<unsigned char>& px) {
@@ -453,6 +477,21 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
         std::vector<unsigned char> px;
         capture(px);
         if (!save(o.screenshot, px, o.height)) return 1;
+    }
+    if (!o.costMap.empty()) {
+        std::vector<unsigned char> px;
+        capture(px);
+        const char* names[] = {"static world", "moving world", "fruit"};
+        for (int ch = 0; ch < 3; ++ch) {
+            std::vector<int> cost;
+            for (size_t i = ch; i < px.size(); i += 4) cost.push_back(px[i]);
+            std::sort(cost.begin(), cost.end());
+            double sum = 0.0;
+            for (int c : cost) sum += c;
+            printf("cost map, %s SDF evaluations per pixel: mean %.1f, median %d, p95 %d, max %d\n", names[ch],
+                   sum / cost.size(), cost[cost.size() / 2], cost[cost.size() * 95 / 100], cost.back());
+        }
+        if (!save(o.costMap, px, o.height)) return 1;
     }
     if (!o.fruitSheet.empty()) {
         std::vector<unsigned char> px;
