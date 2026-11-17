@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <vector>
 #include <string>
 #include <iostream>
 #ifndef __EMSCRIPTEN__
@@ -23,7 +24,7 @@ struct Character {
 
 class TextRenderer {
 private:
-    unsigned int vao, vbo;
+    unsigned int vao, vbo, whiteTex = 0;
     std::map<char, Character> Characters;
 
     void initRenderData();
@@ -45,6 +46,7 @@ public:
     {
         glDeleteVertexArrays(1, &vao);
         glDeleteBuffers(1, &vbo);
+        if (whiteTex) glDeleteTextures(1, &whiteTex);
     }
 
     void Load(std::string fontPath, unsigned int fontSize);
@@ -52,4 +54,9 @@ public:
     void RenderText(const std::string& text, float x, float y, float scale, glm::vec3 color);
     void RenderTextScale(const std::string& text, float x, float y, float targetWidth, float targetHeight, glm::vec3 color);
     float GetTextWidth(const std::string& text, float scale);
+    // Height of a capital letter, and the y at which text of this scale is
+    // vertically centred on `centerY` (RenderText's y is the top of capitals).
+    float CapHeight(float scale);
+    // Flat-coloured convex polygon (triangle fan), for panels and widgets.
+    void FillPoly(const std::vector<glm::vec2>& points, glm::vec3 color, float alpha = 1.0f);
 };

@@ -58,7 +58,8 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --mute                do not initialize, load, or play audio
 //   --scripted-playtest   headless demo sequence for screenshot/playtest jobs
 //   --size WxH             offscreen size in pixels (default 1920x1080)
-//   --state game|menu|over
+//   --state game|menu|pause|settings|controls|over   (menu = start screen)
+//   --focus N              focused menu row (for screenshots of the focus state)
 //   --turn xw:30,yw:0,zw:0,xy:0   4D turns in degrees, camera-local planes
 //   --orbit yaw,pitch      degrees
 //   --distance d           camera distance from the bowl (default 13; 34 frames the island)
@@ -78,6 +79,7 @@ struct Options {
     int bench = 0;
     int width = 1920, height = 1080;
     std::string state = "game";
+    int focus = -1;
     std::string turn;
     float yaw = 0.0f, pitch = glm::degrees(Camera4D::kDefaultPitch);
     float offset = 0.0f;
@@ -115,6 +117,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--bench") o.bench = std::atoi(next().c_str());
         else if (a == "--size") sscanf(next().c_str(), "%dx%d", &o.width, &o.height);
         else if (a == "--state") o.state = next();
+        else if (a == "--focus") o.focus = std::atoi(next().c_str());
         else if (a == "--turn") o.turn = next();
         else if (a == "--orbit") sscanf(next().c_str(), "%f,%f", &o.yaw, &o.pitch);
         else if (a == "--distance") o.distance = std::atof(next().c_str());
@@ -215,7 +218,16 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.showPerf = o.perf;
     game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
-    game.State = o.state == "menu" ? GAME_MENU : GAME_ACTIVE;
+    auto showMenuState = [&](const std::string& st) {
+        game.State = st == "menu" || st == "settings" || st == "controls" ? GAME_MENU
+                   : st == "pause" ? GAME_PAUSED : st == "over" ? GAME_OVER : GAME_ACTIVE;
+        game.page = st == "settings" ? Game::Page::Settings : st == "controls" ? Game::Page::Controls : Game::Page::None;
+        game.menuBuiltFor = -1;
+        game.EnsureMenu();
+        if (o.focus >= 0) game.menu.focus = o.focus;
+    };
+    bool late = o.state == "over" || o.state == "pause";  // play first, then show the menu
+    showMenuState(late ? "game" : o.state);
     applyCameraOptions(o, game.state.cam);
 
     auto frame = [&](float dt) {
@@ -232,7 +244,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
         if (i % dropEvery == 0 && i / dropEvery < o.demo) dropDemoFruit(i / dropEvery);
         frame(FIXED_TIMESTEP);
     }
-    if (o.state == "over") game.State = GAME_OVER;
+    if (late) showMenuState(o.state);
 
     if (o.bench > 0) {
         // GPU time of the scene pass from timer queries (the number that
@@ -495,7 +507,7 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     if (!game.state.initialized) game.state.Init(window);
-    game.state.onScroll(yoffset);
+    if (game.State == GAME_ACTIVE) game.state.onScroll(yoffset);
 }
 
 void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight){
