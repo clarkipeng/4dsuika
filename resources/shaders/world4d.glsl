@@ -32,6 +32,8 @@ const float MAT_NONE   = 0.0;
 // ---- geometry constants -------------------------------------------------------
 const float BOWL_R      = 3.0;
 const float BOWL_HALF   = 0.1;    // physics margin
+const float BOWL_IN     = BOWL_R - BOWL_HALF;   // 2.9: the inner surface fruit rest on
+const float BOWL_FOOT_Y = -3.25;  // underside of the bowl's foot ring
 const float GROUND_Y    = -2.35;  // grass level around the bowl
 const float ISLAND_R    = 11.0;   // radius of the island top in (x, z, w)
 const float ISLAND_BASE = -15.0;  // tip of the rocky underside
@@ -44,6 +46,11 @@ vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 // Sine-free hashes (Dave Hoskins): cheap and stable across GPUs.
 float hash1(float n) { n = fract(n * 0.1031); n *= n + 33.33; n *= n + n; return fract(n); }
 float hash3(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+vec4 hash44(vec4 p) {
+    p = fract(p * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+    p += dot(p, p.wzxy + 33.33);
+    return fract((p.xxyz + p.yzzw) * p.zywx);
+}
 float hash4(vec4 p) { p = fract(p * vec4(0.1031, 0.1030, 0.0973, 0.1099)); p += dot(p, p.wzxy + 33.33); return fract((p.x + p.y) * (p.z + p.w)); }
 
 // Piecewise-linear noise on a 3D simplex grid: linear inside each tetrahedron,
@@ -79,6 +86,12 @@ float valueNoise4(vec4 p) {
 }
 
 // ---- 4D primitives ------------------------------------------------------------
+// Smooth union.
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
 float sdGlome(vec4 p, float r) { return length(p) - r; }
 
 float sdBox4(vec4 p, vec4 b) {
@@ -227,9 +240,8 @@ float groundHeight(vec3 q, bool facets) {
     if (facets) h += 0.35 * facetNoise3(q * 0.42);
     // a gentle crown so the edge falls away
     h -= 0.008 * r * r;
-    // flatten under and around the bowl
-    float bowlPad = smoothstep(3.6, 6.0, length(q));
-    h = mix(GROUND_Y, h, bowlPad);
+    // a shallow grassy hollow where the bowl stands on its foot ring
+    h = mix(BOWL_FOOT_Y, h, smoothstep(1.9, 6.0, length(q)));
     // the pond basin
     float pd = pondDist(q);
     h = mix(h, min(h, WATER_Y - 0.5), smoothstep(0.3, -0.5, pd));
@@ -297,12 +309,56 @@ vec2 pondSDF(vec4 p) {
 }
 
 // ---- bowl ---------------------------------------------------------------------
+// A hand-thrown ceramic bowl in 4D. Its throwing axis is y, so "around the bowl" is
+// the 2-sphere of directions u in (x, z, w): the wobble of the lip, the wall thickness,
+// the ridges and the glaze all vary over u, and a turned slice cuts a differently
+// shaped bowl. The inner surface the fruit rest on is the physics hemisphere
+// |p| = BOWL_IN to within 0.004 (the ridges inside), so fruit sit exactly on it.
+
+// A smooth wobble in [-1, 1] over directions u: a few tilted waves.
+float bowlWobble(vec3 u) {
+    return 0.5 * sin(dot(u, vec3(2.1, 0.7, -1.3)) * 2.0 + 0.4)
+         + 0.3 * sin(dot(u, vec3(-0.9, 2.6, 1.1)) * 2.0 + 1.9)
+         + 0.2 * sin(dot(u, vec3(1.4, -1.2, 2.4)) * 3.0 + 4.1);
+}
+
+// Height of the lip above the physics rim (y = 0) from the wobble w = bowlWobble(u):
+// it rises and falls around the bowl.
+float bowlLipY(float w) { return 0.1 + 0.06 * w; }
+float bowlLipY(vec3 u) { return bowlLipY(bowlWobble(u)); }
+
+// Wall thickness outside the inner surface: heavier toward the base, uneven around
+// it, with throwing ridges (rings about the axis that drift with direction).
+float bowlThick(vec3 u, float w, float y) {
+    float t = 0.16 + 0.05 * sin(dot(u, vec3(-1.7, 1.1, 2.0)) * 2.0 + 2.7)
+            + 0.1 * smoothstep(-0.5, -2.8, y);
+    return t + 0.006 * sin(y * 23.0 - 1.5 * w) + 0.004 * sin(y * 41.0 + 2.0 * w + 1.3);
+}
+
 float bowlSDF(vec4 p) {
-    if (p.y > 0.0) {
-        // rounded rim: distance to the 2-sphere |xzw| = R at y = 0
-        return length(vec2(length(p.xzw) - BOWL_R, p.y)) - BOWL_HALF;
-    }
-    return abs(length(p) - BOWL_R) - BOWL_HALF;
+    float len = length(p);
+    // everything lies within 3.6 of the centre (the foot ring reaches farthest)
+    if (len > 4.2) return len - 3.6;
+    // the inner surface, with faint ridges (at most 0.004 inward)
+    float inner = BOWL_IN - len - 0.002 * (1.0 + sin(p.y * 26.0 + 0.6));
+    // inside the cavity well below the lip the inner surface is all there is (the
+    // outer wall and foot are at least the wall's thickness, 0.16, beyond it)
+    if (len < BOWL_IN && p.y < -0.25) return inner;
+    vec3 q = p.xzw;
+    float s = length(q);
+    vec3 u = q / max(s, 1e-4);
+    float w = bowlWobble(u);
+    // the outer surface; 0.85 keeps the ridges and the uneven wall Lipschitz
+    float outer = (len - BOWL_IN - bowlThick(u, w, p.y)) * 0.85;
+    float shell = max(inner, outer);
+    // the wobbling lip, rounded
+    const float k = 0.05;
+    vec2 a = vec2(shell, p.y - bowlLipY(w)) + k;
+    float d = length(max(a, 0.0)) + min(max(a.x, a.y), 0.0) - k;
+    // the foot ring: a squared-off ring under the base, merged into the wall
+    vec2 f = abs(vec2(s - 1.36, p.y - BOWL_FOOT_Y - 0.22)) - vec2(0.16, 0.22);
+    float foot = length(max(f, 0.0)) + min(max(f.x, f.y), 0.0) - 0.03;
+    return smin(d, foot, 0.08);
 }
 
 // ---- rocks --------------------------------------------------------------------
@@ -419,10 +475,6 @@ vec2 fenceSDF(vec4 p) {
 // ---- clouds -------------------------------------------------------------------
 // A sea of faceted cloud banks drifting below and around the island, spread through
 // x, z and w so every slice shows a different set.
-float smin(float a, float b, float k) {
-    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
-    return mix(b, a, h) - k * h * (1.0 - h);
-}
 
 // The banks circle the island together, so the drift is one rotation of p; each bank
 // is (x, y, z, w phase) at zero drift and leans along its own 4D direction.
@@ -627,6 +679,56 @@ vec3 skyColor(vec4 dir) { return toLinear(skySrgb(dir));
 }
 
 // ---- materials ----------------------------------------------------------------
+// Crackle: the edges of 4D Voronoi cells (F2 - F1 over the 16 nearest cells), so the
+// craze pattern in the glaze is a 4D texture and changes as the slice turns.
+float crackle(vec4 p) {
+    vec4 i = floor(p), f = fract(p);
+    vec4 base = step(0.5, f) - 1.0;
+    float d1 = 9.0, d2 = 9.0;
+    for (int k = 0; k < 16; k++) {
+        vec4 c = base + vec4(float(k & 1), float((k >> 1) & 1), float((k >> 2) & 1), float((k >> 3) & 1));
+        float d = length(c + 0.15 + 0.7 * hash44(i + c + 0.5) - f);
+        d2 = min(d2, max(d1, d));
+        d1 = min(d1, d);
+    }
+    return d2 - d1;
+}
+
+// The bowl's glaze: a warm cream glaze that pools amber in the bottom, runs part
+// way down the outside and stops in a beaded line with drips, breaks to bare
+// clay on the lip and the foot, and is crazed with fine crackle.
+vec3 bowlSrgb(vec4 p) {
+    vec3 q = p.xzw;
+    vec3 u = q / max(length(q), 1e-4);
+    float len = length(p);
+    vec3 glaze = vec3(0.95, 0.84, 0.68);
+    vec3 pool  = vec3(0.80, 0.53, 0.31);
+    vec3 clay  = vec3(0.50, 0.29, 0.18);
+    vec3 c;
+    float glazed = 1.0;
+    if (len < BOWL_IN + 0.03) {
+        // inside: the glaze pools in the bottom
+        c = mix(glaze, pool, 0.75 * smoothstep(-2.2, -2.85, p.y));
+    } else {
+        // outside: the glaze stops at a wavy line, with drips running below it
+        float dr = 0.5 + 0.5 * sin(dot(u, vec3(5.1, 3.3, -4.4)) * 3.0) * sin(dot(u, vec3(-2.7, 4.9, 3.6)) * 3.0);
+        float drip = pow(dr, 10.0);
+        float line = -1.45 + 0.2 * bowlWobble(u.yzx) - 0.9 * drip;
+        glazed = smoothstep(line - 0.015, line + 0.015, p.y);
+        // the glaze runs thick just above its edge and down the drips
+        float bead = smoothstep(0.3, 0.0, p.y - line) * 0.7 + 0.4 * drip;
+        c = mix(clay, mix(glaze, pool, bead), glazed);
+    }
+    // thin glaze over the lip shows the clay through
+    float lip = smoothstep(bowlLipY(u) - 0.09, bowlLipY(u) - 0.01, p.y);
+    c = mix(c, mix(glaze, clay, 0.55), lip);
+    // crazing in the glaze, and a few iron specks
+    float cr = 1.0 - smoothstep(0.0, 0.04, crackle(p * 4.5));
+    c *= 1.0 - 0.1 * cr * glazed;
+    c *= 1.0 - 0.3 * step(0.994, hash4(floor(p * 28.0))) * glazed;
+    return c;
+}
+
 // Albedo per material, sampled from footage/gameImage.png.
 vec3 materialSrgb(float id, vec4 p, vec4 n) {
     float v = facetNoise3(p.xzw * 0.9 + p.y * 0.37);   // tint variation that follows the facets
@@ -636,7 +738,7 @@ vec3 materialSrgb(float id, vec4 p, vec4 n) {
         vec3 lip = vec3(0.09, 0.21, 0.08);
         return mix(lip, top, smoothstep(0.35, 0.85, n.y));
     }
-    if (id == MAT_BOWL)   return vec3(0.96, 0.74, 0.52);
+    if (id == MAT_BOWL)   return bowlSrgb(p);
     if (id == MAT_DIRT)   return mix(vec3(0.34, 0.15, 0.05), vec3(0.46, 0.21, 0.07), v);
     if (id == MAT_STONE)  return mix(vec3(0.17, 0.22, 0.27), vec3(0.24, 0.29, 0.33), v);
     if (id == MAT_BARK)   return vec3(0.33, 0.15, 0.06);
