@@ -23,6 +23,7 @@ uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
 uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
+uniform float uFogStart;             // distance where fog begins (just past the orbit target)
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
 
 #include "world4d.glsl"
@@ -48,19 +49,53 @@ const float MAT_FRUIT = 3.0;
 
 // ---------------------------------------------------------------- fruit
 
-vec3 fruitColor(float type) {
-    int t = int(type + 0.5);
-    if (t == 0)  return vec3(0.80, 0.08, 0.15); // cherry
-    if (t == 1)  return vec3(0.95, 0.25, 0.30); // strawberry
-    if (t == 2)  return vec3(0.55, 0.30, 0.85); // grape
-    if (t == 3)  return vec3(1.00, 0.62, 0.15); // dekopon
-    if (t == 4)  return vec3(1.00, 0.45, 0.10); // persimmon
-    if (t == 5)  return vec3(0.85, 0.12, 0.10); // apple
-    if (t == 6)  return vec3(0.90, 0.88, 0.45); // pear
-    if (t == 7)  return vec3(1.00, 0.70, 0.70); // peach
-    if (t == 8)  return vec3(0.95, 0.80, 0.25); // pineapple
-    if (t == 9)  return vec3(0.65, 0.90, 0.45); // melon
-    return vec3(0.20, 0.60, 0.25);              // watermelon
+float glomeHit(vec4 ro, vec4 rd, vec4 c, float r);
+
+// Entry and exit of ray (ro, rd) through the glome |p - c| = r; false if missed.
+bool glomeSpan(vec4 ro, vec4 rd, vec4 c, float r, out float t0, out float t1) {
+    vec4 oc = ro - c;
+    float b = dot(oc, rd);
+    float h = b * b - (dot(oc, oc) - r * r);
+    if (h < 0.0) return false;
+    h = sqrt(h);
+    t0 = max(-b - h, 0.0);
+    t1 = -b + h;
+    return t1 > 0.0;
+}
+
+// Detail level from the fruit's size on screen: 0 below ~6 px radius, 1 from ~24 px.
+float fruitLod(float r, float t, float pixel) {
+    return smoothstep(6.0, 24.0, r / max(pixel * t, 1e-6));
+}
+
+// Sphere-trace a fruit's own SDF between t0 and t1 (its bound glome). At
+// lod 0 the fruit is its physics glome, hit analytically.
+float fruitMarch(vec4 ro, vec4 rd, vec4 c, vec4 d, float t0, float t1, float lod) {
+    if (lod <= 0.0) {
+        float th = glomeHit(ro, rd, c, d.x);
+        return th > 0.0 ? th : -1.0;
+    }
+    float t = t0;
+    for (int k = 0; k < 24; ++k) {
+        float h = fruitSDF(ro + rd * t - c, d.x, d.y, lod);
+        if (h < 0.002 * d.x) return t;
+        t += h;
+        if (t > t1) break;
+    }
+    return -1.0;
+}
+
+vec4 fruitNormal(vec4 q, vec4 d, float lod) {
+    float h = 0.002 * d.x;
+    const float s = 0.4472136;
+    const vec4 k0 = vec4( 1.0,  1.0,  1.0, -s);
+    const vec4 k1 = vec4( 1.0, -1.0, -1.0, -s);
+    const vec4 k2 = vec4(-1.0,  1.0, -1.0, -s);
+    const vec4 k3 = vec4(-1.0, -1.0,  1.0, -s);
+    const vec4 k4 = vec4( 0.0,  0.0,  0.0, 4.0 * s);
+    return normalize(k0 * fruitSDF(q + h * k0, d.x, d.y, lod) + k1 * fruitSDF(q + h * k1, d.x, d.y, lod) +
+                     k2 * fruitSDF(q + h * k2, d.x, d.y, lod) + k3 * fruitSDF(q + h * k3, d.x, d.y, lod) +
+                     k4 * fruitSDF(q + h * k4, d.x, d.y, lod));
 }
 
 // Nearest positive hit of ray (ro, rd) with the glome |p - c| = r.
@@ -241,7 +276,7 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
         float occluded = tc - r > sceneDist ? 0.35 : 1.0;
         float a = d.w * occluded * (0.95 * ring + fill);
         vec3 side = d.z > 0.0 ? vec3(0.45, 0.75, 1.0) : vec3(1.0, 0.55, 0.35);
-        col = mix(col, mix(fruitColor(d.y), side, 0.35) * 1.3, clamp(a, 0.0, 0.8));
+        col = mix(col, mix(fruitBaseColor(d.y), side, 0.35) * 1.3, clamp(a, 0.0, 0.8));
     }
     return col;
 }
@@ -255,13 +290,20 @@ void main() {
     vec4 ro = uCameraPos;
     vec4 rd = uCameraBasis * vec4(local, 0.0);
 
-    // Fruit: exact ray-glome hits (only fruit crossing the slice are sent).
+    // Fruit (only those crossing the slice are sent): the ray enters each
+    // fruit's bound glome analytically, then traces the fruit's own SDF.
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
     float tHit = FAR;
     int fruit = -1;
+    float fruitLodHit = 0.0;
     for (int i = 0; i < MAX_FRUIT; ++i) {
         if (i >= uFruitCount) break;
-        float t = glomeHit(ro, rd, uFruitCenters[i], uFruitData[i].x);
-        if (t > 0.0 && t < tHit) { tHit = t; fruit = i; }
+        vec4 d = uFruitData[i];
+        float t0, t1;
+        if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= tHit) continue;
+        float lod = fruitLod(d.x, t0, pixel);
+        float t = fruitMarch(ro, rd, uFruitCenters[i], d, t0, min(t1, tHit), lod);
+        if (t > 0.0 && t < tHit) { tHit = t; fruit = i; fruitLodHit = lod; }
     }
 
     // World: sphere-traced SDF, stopped early at the nearest fruit. The
@@ -283,18 +325,23 @@ void main() {
         vec4 p = ro + rd * tHit;
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
-        vec4 ns = normalize(p - c);
+        vec4 q = p - c;
+        vec4 body = normalize(q); // the physics glome's normal
+        vec4 ns = fruitLodHit > 0.0 ? fruitNormal(q, d, fruitLodHit) : body;
         vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
         // A little self-light keeps each fruit's colour identifiable even
         // when it is back-lit by the low sun.
-        vec3 albedo = fruitColor(d.y);
-        col = shade(p, n, ns, rd, albedo, 0.5) + albedo * 0.22 + d.z * vec3(1.0, 0.9, 0.7);
+        vec3 albedo = fruitAlbedo(q, ns, d.x, d.y, d.w, fruitLodHit);
+        // Plus a soft fill from the viewer, so the side we see is never just
+        // the shadow side of a back-lit fruit.
+        float fill = 0.35 * max(dot(n, -rd), 0.0);
+        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y)) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
         // 4D lean: a fruit's cross-section normals tilt along the slice
         // normal as it drifts out of the slice. Warm it towards the w-axis
         // gold of the indicator so "about to vanish" reads at a glance.
         // Added light (mostly at the rim), so the fruit keeps its own hue.
-        float lean = smoothstep(0.35, 0.95, abs(dot(ns, uCameraBasis[3])));
-        float edge = 0.35 + 0.65 * pow(1.0 - max(dot(ns, -rd), 0.0), 2.0);
+        float lean = smoothstep(0.35, 0.95, abs(dot(body, uCameraBasis[3])));
+        float edge = 0.35 + 0.65 * pow(1.0 - max(dot(body, -rd), 0.0), 2.0);
         col += vec3(0.55, 0.38, 0.06) * lean * edge;
         dist = tHit;
     } else if (mat > 0.0) {
@@ -309,7 +356,7 @@ void main() {
     }
 
     // Sunset fog.
-    float fog = 1.0 - exp(-max(dist - 16.0, 0.0) * 0.018);
+    float fog = 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
     col = mix(col, skyColor(rd), fog);
 
     // The bowl glows softly, as in the cover art.
@@ -325,7 +372,7 @@ void main() {
         if (tp > 0.0 && tp < dist) {
             vec4 n = normalize(ro + rd * tp - uPreviewCenter);
             float f = 0.35 + 0.4 * pow(1.0 - abs(dot(n, rd)), 2.0);
-            col = mix(col, fruitColor(uPreviewData.y) * 1.2, f);
+            col = mix(col, fruitBaseColor(uPreviewData.y) * 1.2, f);
         }
     }
 

@@ -118,6 +118,15 @@ struct Camera4D {
         dir = glm::normalize(basis() * local);
     }
 
+    // Screen position (ndc, y up) of a world point that lies in front of the camera.
+    bool project(const glm::vec4& world, float aspect, glm::vec2& ndc) const {
+        glm::vec4 local = glm::transpose(basis()) * (world - position());
+        if (local.z >= -1e-4f) return false;
+        float t = std::tan(fovY * 0.5f);
+        ndc = glm::vec2(local.x / (-local.z * t * aspect), local.y / (-local.z * t));
+        return true;
+    }
+
     // Turn in a camera-local plane (axes of what the player sees: 0 right,
     // 1 up, 2 back, 3 slice normal). Applied to `slice` so orbit stays intact.
     void turnLocal(Axis4 a, Axis4 b, float angle) {

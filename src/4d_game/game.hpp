@@ -167,6 +167,11 @@ public:
     float time = 0.0f;
     bool showPerf = false;            // F3: GPU time and render scale
 
+    // Fruit sheet (headless --fruit-sheet): fixed fruit instead of physics, labelled.
+    bool sheetMode = false;
+    std::vector<FruitInstance> sheetFruit;
+    std::string sheetTitle;
+
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
         State = GAME_MENU;
         Width = width;
@@ -427,7 +432,7 @@ public:
             const PhysicsObject& obj = physics_solver->objects[i];
             fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i});
         }
-        renderer.setFruit(fruit);
+        renderer.setFruit(sheetMode ? sheetFruit : fruit);
         Hit4 hit;
         if (showPreview) hit = getPlacementMouse(state, boundary, *physics_solver);
         renderer.setPreview(hit.hit, hit.point + glm::vec4(0, 3.0f, 0, 0),
@@ -453,8 +458,24 @@ public:
         if (homing) t_rend->RenderText("returning to default slice", size * 3.9f, Height - size * 1.9f + 14.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
     }
 
+    void RenderSheetLabels() {
+        static const char* names[] = {"cherry", "strawberry", "grape", "dekopon", "persimmon", "apple",
+                                      "pear", "peach", "pineapple", "melon", "watermelon"};
+        BeginText();
+        t_rend->RenderText(sheetTitle, 25.0f, 25.0f, 0.9f, glm::vec3(1.0f));
+        float aspect = float(Width) / float(std::max(Height, 1u));
+        for (const FruitInstance& f : sheetFruit) {
+            glm::vec2 ndc;
+            if (!state.cam.project(f.center - glm::vec4(0, f.radius * 1.15f, 0, 0), aspect, ndc)) continue;
+            float x = (ndc.x * 0.5f + 0.5f) * Width, y = (0.5f - ndc.y * 0.5f) * Height + 8.0f;
+            std::string name = names[f.type];
+            t_rend->RenderText(name, x - t_rend->GetTextWidth(name, 0.6f) / 2.0f, y, 0.6f, glm::vec3(0.95f));
+        }
+    }
+
     void RenderGameUI()
     {
+        if (sheetMode) { RenderSheetLabels(); return; }
         BeginText();
         t_rend->RenderText("Score " + std::to_string((int)physics_solver->total_points), 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
         RenderSliceLabel();
