@@ -157,6 +157,7 @@ public:
     float turnVel[kTurnCount] = {};   // radians per second, per binding
     float offsetVel = 0.0f;
     float time = 0.0f;
+    bool showPerf = false;            // F3: GPU time and render scale
 
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
         State = GAME_MENU;
@@ -267,6 +268,11 @@ public:
 
         if (State == GAME_MENU && keyPressedOnce(GLFW_KEY_ENTER)) State = GAME_ACTIVE;
         if (State == GAME_OVER && keyPressedOnce(GLFW_KEY_ENTER)) Reset();
+
+        if (keyPressedOnce(GLFW_KEY_G)) {
+            renderer.setQuality(Quality((int(renderer.quality()) + 1) % 4));
+        }
+        if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
             State = (State == GAME_ACTIVE || State == GAME_OVER) ? GAME_MENU : GAME_ACTIVE;
@@ -392,6 +398,13 @@ public:
         BeginText();
         t_rend->RenderText("Score " + std::to_string((int)physics_solver->total_points), 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
         RenderSliceLabel();
+        if (showPerf) {
+            char buf[128];
+            int rw = int(FbWidth * renderer.renderScale), rh = int(FbHeight * renderer.renderScale);
+            snprintf(buf, sizeof buf, "%s  scene %.1f ms  %dx%d (%.0f%%)", qualityName(renderer.quality()),
+                     renderer.gpuMs(), rw, rh, renderer.renderScale * 100.0f);
+            t_rend->RenderText(buf, 25.0f, 60.0f, 0.6f, glm::vec3(0.9f, 0.95f, 0.8f));
+        }
     }
 
     void Render() {
@@ -447,6 +460,7 @@ public:
         for (const TurnBinding& b : kTurnBindings) lines.push_back(b.help);
         lines.push_back("W / S  move the slice along the 4th axis");
         lines.push_back("H or Space - Back to the default slice");
+        lines.push_back(std::string("G - Graphics quality: ") + qualityName(renderer.quality()) + "   F3 - Performance");
         lines.push_back("ESC - Pause / Menu");
         for (size_t i = 0; i < lines.size(); i++) {
             t_rend->RenderText(lines[i], centerX - t_rend->GetTextWidth(lines[i], instructionScale) / 2.0f, startY + lineSpacing * i, instructionScale, instructionColor);
