@@ -15,27 +15,20 @@
 
 #include "game.hpp"
 
-#include "globals.h"
-#include "render_helper.hpp"
-#include "state_helper.hpp"
-#include "physics_solver.hpp"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
-// #include "resource_manager.h"
-
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <sstream>
+#include <thread>
 
-#include <thread>  // for std::this_thread::sleep_for
-#include <chrono>  // for std::chrono::duration
-
-// At the top of your file
 const float TARGET_FPS = 60.0f;
 const float FRAME_TIME = 1.0f / TARGET_FPS;
+const float FIXED_TIMESTEP = 1.0f / 60.0f;
 
-// For fixed timestep
-const float FIXED_TIMESTEP = 1.0f / 60.0f; // 60 updates per second
-float fixedUpdateAccumulator = 0.0f;
-
-// GLFW function declarations
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode);
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
@@ -43,22 +36,151 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos);
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
 void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight);
 
-// The Width of the screen
-const unsigned int SCREEN_WIDTH = 800;
-// The height of the screen
-const unsigned int SCREEN_HEIGHT = 600;
+const unsigned int SCREEN_WIDTH = 1280;
+const unsigned int SCREEN_HEIGHT = 800;
 
 Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 
+// Command line. With --screenshot or --bench the game runs headless: a hidden
+// window that never takes focus, rendering into an offscreen framebuffer.
+//   --screenshot out.png   render, save a PNG, exit
+//   --bench N              render N frames as fast as possible, print timings
+//   --size WxH             offscreen size in pixels (default 1920x1080)
+//   --state game|menu|over
+//   --turn xw:30,yw:0,zw:0,xy:0   4D turns in degrees, camera-local planes
+//   --orbit yaw,pitch      degrees
+//   --offset v             slice offset along its normal
+//   --demo N               drop N fruit and let them settle first
+//   --frames N             frames simulated before the capture (default 90, more with --demo)
+//   --scale s              render scale (fraction of output resolution)
+//   --cursor x,y           mouse position in pixels (for the drop preview)
+struct Options {
+    std::string screenshot;
+    int bench = 0;
+    int width = 1920, height = 1080;
+    std::string state = "game";
+    std::string turn;
+    float yaw = 0.0f, pitch = glm::degrees(Camera4D::kDefaultPitch);
+    float offset = 0.0f;
+    int demo = 0;
+    int frames = 90;
+    float scale = 1.0f;
+    float cursorX = -1.0f, cursorY = -1.0f;
+    bool headless() const { return !screenshot.empty() || bench > 0; }
+};
+
+static Options parseOptions(int argc, char* argv[]) {
+    Options o;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
+        if (a == "--screenshot") o.screenshot = next();
+        else if (a == "--bench") o.bench = std::atoi(next().c_str());
+        else if (a == "--size") sscanf(next().c_str(), "%dx%d", &o.width, &o.height);
+        else if (a == "--state") o.state = next();
+        else if (a == "--turn") o.turn = next();
+        else if (a == "--orbit") sscanf(next().c_str(), "%f,%f", &o.yaw, &o.pitch);
+        else if (a == "--offset") o.offset = std::atof(next().c_str());
+        else if (a == "--demo") o.demo = std::atoi(next().c_str());
+        else if (a == "--frames") o.frames = std::atoi(next().c_str());
+        else if (a == "--scale") o.scale = std::atof(next().c_str());
+        else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
+        else std::cerr << "Unknown option " << a << std::endl;
+    }
+    return o;
+}
+
+static void applyCameraOptions(const Options& o, Camera4D& cam) {
+    cam.yaw = glm::radians(o.yaw);
+    cam.pitch = glm::radians(o.pitch);
+    cam.offset = o.offset;
+    std::stringstream ss(o.turn);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (item.size() < 4 || item[2] != ':') continue;
+        auto axis = [](char c) { return c == 'x' ? AX_X : c == 'y' ? AX_Y : c == 'z' ? AX_Z : AX_W; };
+        cam.turnLocal(axis(item[0]), axis(item[1]), glm::radians(float(std::atof(item.c_str() + 3))));
+    }
+}
+
+// Demo fruit scattered through 4D so screenshots show glomes crossing the
+// slice; one is dropped every few frames, like a player would.
+static void dropDemoFruit(int index) {
+    uint32_t seed = 7u + 977u * uint32_t(index);
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / float(1 << 24); };
+    glm::vec4 p(rnd() * 2.4f - 1.2f, 1.5f, rnd() * 2.4f - 1.2f, rnd() * 2.0f - 1.0f);
+    game.physics_solver->addObject(PhysicsObject(p, Fruit(int(rnd() * 6.0f)), true, false));
+}
+
+static int runHeadless(GLFWwindow* window, const Options& o) {
+    GLuint fbo, color;
+    glGenFramebuffers(1, &fbo);
+    glGenTextures(1, &color);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, o.width, o.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+
+    game.state.windowWidth = game.Width = o.width;
+    game.state.windowHeight = game.Height = o.height;
+    game.FbWidth = o.width;
+    game.FbHeight = o.height;
+    game.state.m_xpos = o.cursorX >= 0 ? o.cursorX : o.width * 0.5f;
+    game.state.m_ypos = o.cursorY >= 0 ? o.cursorY : o.height * 0.55f;
+    game.renderer.renderScale = o.scale;
+    game.State = o.state == "menu" ? GAME_MENU : GAME_ACTIVE;
+    applyCameraOptions(o, game.state.cam);
+
+    auto frame = [&](float dt) {
+        game.FixedUpdate(dt);
+        game.Update(dt);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, o.width, o.height);
+        glClearColor(0, 0, 0, 1);
+        game.Render();
+    };
+    const int dropEvery = 12;
+    int frames = std::max(o.frames, o.demo * dropEvery + 60);
+    for (int i = 0; i < frames; ++i) {
+        if (i % dropEvery == 0 && i / dropEvery < o.demo) dropDemoFruit(i / dropEvery);
+        frame(FIXED_TIMESTEP);
+    }
+    if (o.state == "over") game.State = GAME_OVER;
+
+    if (o.bench > 0) {
+        frame(FIXED_TIMESTEP);
+        glFinish();
+        auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < o.bench; ++i) frame(0.0f);
+        glFinish();
+        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / o.bench;
+        printf("bench %dx%d scale %.2f: %.2f ms/frame (%.1f fps)\n", o.width, o.height, o.scale, ms, 1000.0 / ms);
+    }
+    if (!o.screenshot.empty()) {
+        frame(0.0f);
+        std::vector<unsigned char> px(size_t(o.width) * o.height * 4);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, o.width, o.height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        stbi_flip_vertically_on_write(1);
+        if (!stbi_write_png(o.screenshot.c_str(), o.width, o.height, 4, px.data(), o.width * 4)) {
+            std::cerr << "Could not write " << o.screenshot << std::endl;
+            return 1;
+        }
+        std::cout << "wrote " << o.screenshot << std::endl;
+    }
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
-    // std::cout << "GL_VERSION: " << glGetString(GL_VERSION) << "\n";
-    // std::cout << "GL_RENDERER: " << glGetString(GL_RENDERER) << "\n";
-    // std::cout << "GLSL_VERSION: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << "\n";
-    std::cout << "Starting 4D Game initialization..." << std::endl;
-    
+    Options opt = parseOptions(argc, argv);
     try {
-        std::cout << "Initializing GLFW..." << std::endl;
+        if (opt.headless()) {
+            // Never show a window, take focus, or join the Dock.
+            glfwInitHint(GLFW_COCOA_MENUBAR, GLFW_FALSE);
+            SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
+        }
         glfwInit();
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -67,52 +189,32 @@ int main(int argc, char* argv[])
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
         glfwWindowHint(GLFW_RESIZABLE, true);
+        if (opt.headless()) {
+            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+            glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+        }
 
-        std::cout << "Creating GLFW window..." << std::endl;
-        GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "game", nullptr, nullptr);
+        GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Suika 4D", nullptr, nullptr);
         if (!window) {
             std::cerr << "Failed to create GLFW window" << std::endl;
             glfwTerminate();
             return -1;
         }
         glfwMakeContextCurrent(window);
+        if (opt.bench > 0) glfwSwapInterval(0);
 
-        std::cout << "Initializing SDL audio..." << std::endl;
-        // Initialize SDL audio with error handling for web build
-        #ifdef __EMSCRIPTEN__
-            // For web build, try to initialize SDL but don't fail if it doesn't work
-            if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-                std::cerr << "Warning: SDL_Init error: " << SDL_GetError() << std::endl;
-                // Don't return, continue without audio
-            } else {
-                // Disable preload for web build
-                if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
-                    std::cerr << "Warning: Mix_OpenAudio error: " << Mix_GetError() << std::endl;
-                    // Don't return, continue without audio
-                }
-            }
-        #else
-            // For native builds, initialize SDL normally
-            if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-                std::cerr << "SDL_Init error: " << SDL_GetError() << std::endl;
-                return 1;
-            }
-            if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
-                std::cerr << "Mix_OpenAudio error: " << Mix_GetError() << std::endl;
-                return 1;
-            }
-        #endif
-        
-        std::cout << "Loading OpenGL function pointers with GLAD..." << std::endl;
-        // glad: load all OpenGL function pointers
-        // ---------------------------------------
+        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+            std::cerr << "Warning: SDL_Init error: " << SDL_GetError() << std::endl;
+        } else if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+            std::cerr << "Warning: Mix_OpenAudio error: " << Mix_GetError() << std::endl;
+        }
+
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
         {
             std::cout << "Failed to initialize GLAD" << std::endl;
             return -1;
         }
 
-        std::cout << "Setting up GLFW callbacks..." << std::endl;
         glfwSetKeyCallback(window, key_callback);
         glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
         glfwSetWindowSizeCallback(window, windowSizeCallback);
@@ -120,71 +222,48 @@ int main(int argc, char* argv[])
         glfwSetCursorPosCallback(window, cursorPosCallback);
         glfwSetScrollCallback(window, scrollCallback);
 
-        std::cout << "Configuring OpenGL..." << std::endl;
-        // OpenGL configuration
-        // --------------------
-        // glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-        int fbWidth, fbHeight;
-        glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
-        glViewport(0, 0, fbWidth, fbHeight);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        std::cout << "Initializing game..." << std::endl;
-        // initialize game
-        // ---------------
         game.Init(window);
-        std::cout << "Game initialization completed successfully!" << std::endl;
 
-        // deltaTime variables
-        // -------------------
-        float deltaTime = 0.0f;
-        float lastFrame = 0.0f;
+        if (opt.headless()) {
+            int rc = runHeadless(window, opt);
+            glfwTerminate();
+            return rc;
+        }
 
+        float fixedUpdateAccumulator = 0.0f;
+        float lastFrame = glfwGetTime();
         while (!glfwWindowShouldClose(window))
         {
-            // Calculate delta time
             float currentFrame = glfwGetTime();
             float deltaTime = currentFrame - lastFrame;
             if (deltaTime > 0.25f) deltaTime = 0.25f; // clamp delta to prevent spiral of death
             lastFrame = currentFrame;
 
             glfwPollEvents();
-
             game.ProcessInput(deltaTime);
 
-            // Fixed update loop
             fixedUpdateAccumulator += deltaTime;
             while (fixedUpdateAccumulator >= FIXED_TIMESTEP)
             {
-                game.FixedUpdate(FIXED_TIMESTEP);  // You'll need to add this to your Game class
+                game.FixedUpdate(FIXED_TIMESTEP);
                 fixedUpdateAccumulator -= FIXED_TIMESTEP;
             }
-            game.Update(deltaTime);  // You'll need to add this to your Game class
+            game.Update(deltaTime);
 
-            // Render
+            glfwGetFramebufferSize(window, &game.FbWidth, &game.FbHeight);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, game.FbWidth, game.FbHeight);
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-
             game.Render();
 
             glfwSwapBuffers(window);
 
-            // Frame rate cap
-            float frameEnd = glfwGetTime();
-            float frameDuration = frameEnd - currentFrame;
+            float frameDuration = glfwGetTime() - currentFrame;
             if (frameDuration < FRAME_TIME)
             {
                 std::this_thread::sleep_for(std::chrono::duration<float>(FRAME_TIME - frameDuration));
             }
-            
         }
-
-
-        // delete all resources as loaded using the resource manager
-        // ---------------------------------------------------------
-        // ResourceManager::Clear();
 
         glfwTerminate();
         return 0;
@@ -197,35 +276,19 @@ int main(int argc, char* argv[])
 
 #if _WIN32
 #include <windows.h>
-#endif
-
-// This is the entry point that the linker is demanding.
-#if _WIN32
-int WINAPI WinMain(
-    HINSTANCE hInstance,
-    HINSTANCE hPrevInstance,
-    LPSTR lpCmdLine,
-    int nCmdShow)
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
-    // Call your standard main function.
     return main(__argc, __argv);
 }
 #endif
 
-
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
-    // make sure the viewport matches the new window dimensions; note that width and 
-    // height will be significantly larger than specified on retina displays.
-    glfwGetFramebufferSize(window, &width, &height);
     glViewport(0, 0, width, height);
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
-    // // when a user presses the escape key, we set the WindowShouldClose property to true, closing the application
-    // if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-    //     glfwSetWindowShouldClose(window, true);
     if (key >= 0 && key < 1024)
     {
         if (action == GLFW_PRESS)
@@ -240,24 +303,8 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     game.state.onMouseButton(button, action, game.state.m_xpos, game.state.m_ypos);
-    if (game.State == GAME_MENU && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
-        // game.ballPlaced=true;
-    }
-    if (game.State == GAME_OVER && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
-        // game.ballPlaced=true;
-    }
     if (game.State == GAME_ACTIVE && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        RayInter closestResult = getPlacementMouse(&game.state, &game.boundary, game.physics_solver);
-
-        if (closestResult.hit) {
-            // std::cout << "HIT\n";
-            game.physics_solver->addObject(
-                PhysicsObject(glm::vec4(closestResult.point, game.state.w)+ glm::vec4(0,3.0f,0,0),
-                game.nextFruit, true, false)
-            );
-            game.nextFruit = FruitManager::getRandomFruit();
-        }
-        game.ballPlaced=true;
+        game.DropFruit();
     }
 }
 
@@ -270,6 +317,7 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     if (!game.state.initialized) game.state.Init(window);
     game.state.onScroll(yoffset);
 }
+
 void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight){
     if (!game.state.initialized) game.state.Init(window);
     game.state.windowHeight = windowHeight;

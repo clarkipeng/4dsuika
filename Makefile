@@ -12,7 +12,7 @@ build:
 	$(CMAKE) --build $(BUILD_DIR) --config Release -j 8
 
 run: build
-	./$(BUILD_DIR)/4d_game
+	./$(BUILD_DIR)/4d_game.app/Contents/MacOS/4d_game
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -65,22 +65,6 @@ set(SDL2MIXER_MOD OFF CACHE BOOL "" FORCE)  # IMPORTANT: Disable the format enti
 set(SDL2MIXER_MIDI OFF CACHE BOOL "" FORCE) # IMPORTANT: Disable the format entirely
 FetchContent_MakeAvailable(SDL2_mixer)
 
-# Assimp
-FetchContent_Declare(
-    assimp
-    GIT_REPOSITORY https://github.com/assimp/assimp.git
-    GIT_TAG v5.4.2
-)
-set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
-if(APPLE)
-    set(ASSIMP_BUILD_ZLIB OFF CACHE BOOL "" FORCE)
-else()
-    set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
-endif()
-set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(assimp)
-
 # FreeType
 FetchContent_Declare(
     freetype
@@ -132,7 +116,6 @@ target_link_libraries(4d_game PRIVATE
     STB_IMAGE
     glm::glm
     glfw
-    assimp::assimp
     SDL2::SDL2-static
     SDL2_mixer::SDL2_mixer-static
     freetype
