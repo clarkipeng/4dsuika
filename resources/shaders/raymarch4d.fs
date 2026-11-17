@@ -18,6 +18,9 @@ uniform vec4  uSunDir;
 uniform int   uFruitCount;
 uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, unused
+uniform int   uHintCount;            // fruit just off the slice
+uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
+uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
@@ -162,6 +165,34 @@ vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss) {
     return col;
 }
 
+// ---------------------------------------------------------------- hints
+//
+// Fruit just off the slice show as a faint ring where they would appear,
+// in their own colour, tinted cool on the +normal side and warm on the -
+// side, fading with distance from the slice. Rings and a thin fill read as
+// hints, never as solid fruit; behind scene geometry they are fainter.
+
+vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    for (int i = 0; i < MAX_HINTS; ++i) {
+        if (i >= uHintCount) break;
+        vec4 c = uHintCenters[i];
+        vec4 d = uHintData[i];
+        float r = d.x;
+        float tc = dot(c - ro, rd);
+        if (tc <= 0.0) continue;
+        float miss = length(c - ro - rd * tc);
+        float width = max(1.5 * pixel * tc, 0.02 * r);
+        float ring = exp(-pow((miss - r) / width, 2.0));
+        float fill = 0.18 * (1.0 - smoothstep(r - width, r, miss));
+        float occluded = tc - r > sceneDist ? 0.35 : 1.0;
+        float a = d.w * occluded * (0.95 * ring + fill);
+        vec3 side = d.z > 0.0 ? vec3(0.45, 0.75, 1.0) : vec3(1.0, 0.55, 0.35);
+        col = mix(col, mix(fruitColor(d.y), side, 0.35) * 1.3, clamp(a, 0.0, 0.8));
+    }
+    return col;
+}
+
 // ---------------------------------------------------------------- main
 
 void main() {
@@ -220,6 +251,8 @@ void main() {
 
     // The bowl glows softly, as in the cover art.
     col += vec3(1.0, 0.72, 0.42) * 0.22 * exp(-bowlNear * 5.0);
+
+    col = drawHints(col, ro, rd, dist);
 
     // Ghost of the next drop, blended over the scene.
     if (uPreviewData.x > 0.0) {
