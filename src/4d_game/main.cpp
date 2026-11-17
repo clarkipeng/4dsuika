@@ -94,6 +94,13 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --seconds s            recording length when headless (default: the camera
 //                          path's duration, else --frames)
 //   --camera-path file     scripted camera keyframes (see camera_path.hpp)
+//   --turntable dir        4D review turntable: each subject alone and centred while
+//                          the slice turns 0 to 180 deg through xw, then yw, then zw;
+//                          frames in dir/<subject>/ and dir/<subject>_sheet.png
+//                          (see docs/recording.md; `make turntable` adds the videos)
+//   --subject list         turntable subjects: all (default), fruit, bowl, or fruit
+//                          names, comma separated
+//   --sweep s              turntable seconds per 180 deg turn (default 4)
 struct Options {
     std::string screenshot;
     int bench = 0;
@@ -127,9 +134,12 @@ struct Options {
     bool mute = false;
     std::string fruitSheet;
     std::string sheetTurn = "yw:35";
+    std::string turntable;
+    std::string subject = "all";
+    float sweep = 4.0f;
     bool headless() const {
         return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty() || !costMap.empty() ||
-               playtestSeconds > 0.0f;
+               playtestSeconds > 0.0f || !turntable.empty();
     }
     bool muted() const { return mute || headless(); }
 };
@@ -171,6 +181,9 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--fruit-sheet") o.fruitSheet = next();
         else if (a == "--sheet-turn") o.sheetTurn = next();
         else if (a == "--record") o.record = next();
+        else if (a == "--turntable") o.turntable = next();
+        else if (a == "--subject") o.subject = next();
+        else if (a == "--sweep") o.sweep = std::max(0.1f, float(std::atof(next().c_str())));
         else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
         else if (a == "--seconds") o.seconds = std::atof(next().c_str());
         else if (a == "--camera-path") o.cameraPath = next();
@@ -384,6 +397,126 @@ static bool savePng(const std::string& path, int w, int h) {
     return stbi_write_png(path.c_str(), w, h, 4, px.data(), int(row)) != 0;
 }
 
+#ifndef __EMSCRIPTEN__
+// Review turntable (docs/recording.md): one subject alone and centred, the
+// slice turning 0 to 180 deg through xw, then yw, then zw (planes of the
+// default slice's axes), pivoting on the subject's 4D centre so every slice
+// cuts it through the middle. Writes the frames of a video per subject and a
+// contact sheet: one row per plane, a column every 30 deg.
+static int runTurntable(const Options& o, GLuint fbo) {
+    std::vector<int> subjects; // fruit type, or -1 for the bowl
+    std::stringstream ss(o.subject);
+    for (std::string item; std::getline(ss, item, ',');) {
+        if (item == "all" || item == "fruit")
+            for (int t = 0; t <= int(WATERMELON); ++t) subjects.push_back(t);
+        if (item == "all" || item == "bowl") subjects.push_back(-1);
+        for (int t = 0; t <= int(WATERMELON); ++t)
+            if (item == kFruitNames[t]) subjects.push_back(t);
+        if (item != "all" && item != "fruit" && item != "bowl" &&
+            std::none_of(std::begin(kFruitNames), std::end(kFruitNames), [&](const char* n) { return item == n; })) {
+            std::cerr << "--subject: unknown subject " << item << std::endl;
+            return 2;
+        }
+    }
+    const Axis4 planes[] = {AX_X, AX_Y, AX_Z};
+    const char* planeNames[] = {"xw", "yw", "zw"};
+    const int holdFrames = int(std::lround(0.5f * o.fps));
+    const int sweepFrames = std::max(1, int(std::lround(o.sweep * o.fps)));
+    const int columns = 7, down = 3; // sheet: 0, 30, ..., 180 deg; tiles at a third of the frame size
+    const int tw = o.width / down, th = o.height / down;
+    const float aspect = float(o.width) / float(o.height);
+
+    game.State = GAME_ACTIVE;
+    game.sheetMode = true;
+    game.sheetNames = false;
+    game.sheetTitleScale = 1.1f * float(o.height) / 720.0f; // readable on the sheet at a third of the size
+    int mode = -1;
+    for (int subject : subjects) {
+        const bool bowl = subject < 0;
+        const std::string name = bowl ? "bowl" : kFruitNames[subject];
+        if (mode != int(bowl)) { // the shaders keep only the subject
+            mode = int(bowl);
+            game.renderer.extraDefines = bowl ? "#define TURNTABLE 2\n" : "#define TURNTABLE 1\n";
+            game.renderer.setQuality(game.renderer.quality());
+            game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
+        }
+        // The fruit floats where the sky is empty; the bowl turns about its
+        // glome's centre (the origin, at the rim) and is framed 1.5 lower.
+        glm::vec4 centre = bowl ? glm::vec4(0.0f) : glm::vec4(0.0f, 12.0f, 0.0f, 0.0f);
+        float frameDown = bowl ? 1.5f : 0.0f;
+        float extent = bowl ? 3.3f : FruitManager::getFruitProperties(Fruit(subject)).radius * 1.3f;
+        game.sheetFruit.clear();
+        if (!bowl) game.sheetFruit.push_back({centre, FruitManager::getFruitProperties(Fruit(subject)).radius, subject, 0.0f, 1 + subject});
+        Camera4D base;
+        base.yaw = glm::radians(25.0f);
+        base.pitch = glm::radians(bowl ? -28.0f : -18.0f);
+        base.fovY = glm::radians(30.0f);
+        base.distance = extent / (0.62f * std::tan(base.fovY * 0.5f) * std::min(1.0f, aspect));
+
+        auto pose = [&](int plane, float deg) {
+            Camera4D& cam = game.state.cam;
+            cam = base;
+            cam.slice = Rot4::plane(planes[plane], AX_W, glm::radians(deg));
+            cam.target = centre + cam.slice.apply(glm::vec4(0.0f, -frameDown, 0.0f, 0.0f)); // stays in the slice
+            char buf[96];
+            snprintf(buf, sizeof buf, "%s    slice %s %3.0f deg", name.c_str(), planeNames[plane], deg);
+            game.sheetTitle = buf;
+        };
+        auto render = [&]() {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glViewport(0, 0, o.width, o.height);
+            glClearColor(0, 0, 0, 1);
+            game.Render();
+        };
+
+        Recorder rec;
+        rec.fps = o.fps;
+        if (!rec.start(o.turntable + "/" + name)) return 1;
+        for (int plane = 0; plane < 3; ++plane) {
+            int total = holdFrames + sweepFrames + holdFrames;
+            for (int i = 0; i <= total; ++i) {
+                float k = glm::clamp(float(i - holdFrames) / float(sweepFrames), 0.0f, 1.0f);
+                pose(plane, 180.0f * k);
+                render();
+                rec.capture(o.width, o.height);
+            }
+        }
+        rec.stop();
+
+        // Contact sheet, top-down rows; each tile a box-filtered frame.
+        std::vector<unsigned char> sheet(size_t(tw) * columns * th * 3 * 4), px(size_t(o.width) * o.height * 4);
+        for (int plane = 0; plane < 3; ++plane) {
+            for (int c = 0; c < columns; ++c) {
+                pose(plane, 180.0f * c / (columns - 1));
+                render();
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(0, 0, o.width, o.height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+                for (int y = 0; y < th; ++y) {
+                    for (int x = 0; x < tw; ++x) {
+                        int sum[4] = {};
+                        for (int dy = 0; dy < down; ++dy)
+                            for (int dx = 0; dx < down; ++dx) {
+                                const unsigned char* s = &px[(size_t(o.height - 1 - (y * down + dy)) * o.width + x * down + dx) * 4];
+                                for (int ch = 0; ch < 4; ++ch) sum[ch] += s[ch];
+                            }
+                        unsigned char* d = &sheet[(size_t(plane * th + y) * tw * columns + c * tw + x) * 4];
+                        for (int ch = 0; ch < 4; ++ch) d[ch] = (unsigned char)(sum[ch] / (down * down));
+                    }
+                }
+            }
+        }
+        std::string sheetPath = o.turntable + "/" + name + "_sheet.png";
+        if (!stbi_write_png(sheetPath.c_str(), tw * columns, th * 3, 4, sheet.data(), tw * columns * 4)) {
+            std::cerr << "Could not write " << sheetPath << std::endl;
+            return 1;
+        }
+        std::cout << "wrote " << sheetPath << std::endl;
+    }
+    return 0;
+}
+#endif
+
 static int runHeadless(GLFWwindow* window, const Options& o) {
     GLuint fbo, color;
     glGenFramebuffers(1, &fbo);
@@ -424,6 +557,14 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     applyCameraOptions(o, game.state.cam);
     if (o.poseAt >= 0.0f) setScriptedPlaytestPose(o.poseAt);
     if (o.playtestSeconds > 0.0f) return runScriptedPlaytest(o, fbo);
+    if (!o.turntable.empty()) {
+#ifdef __EMSCRIPTEN__
+        std::cerr << "--turntable is only available in the desktop build" << std::endl;
+        return 1;
+#else
+        return runTurntable(o, fbo);
+#endif
+    }
 
     CameraPath path;
     bool hasPath = false;

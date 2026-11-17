@@ -63,7 +63,7 @@ public:
     bool syncTiming = false;  // wait for each timing result (benchmarks)
     bool useCache = true;     // slice cache on (falls back to analytic if unsupported)
     bool useDeferred = true;  // three scene passes with half-resolution lighting (if supported)
-    std::string extraDefines; // added to the scene shader on the next setQuality
+    std::string extraDefines; // added to the scene and bake shaders on the next setQuality
 
     // GPU time of the last cache bake in ms, and how many bakes ran.
     float bakeMs() const { return bakeMs_; }
@@ -71,7 +71,6 @@ public:
 
     bool init() {
         present_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/present4d.fs", "");
-        bake_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/bake4d.fs", "");
         readStaticBound();
         // The cache texture always exists (1 texel until the first bake) so
         // the scene shader's sampler is valid even with the cache off.
@@ -96,6 +95,10 @@ public:
     void setQuality(Quality q) {
         quality_ = q;
         std::string defs = "#define QUALITY " + std::to_string(int(q)) + "\n" + extraDefines;
+        if (GLuint b = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/bake4d.fs", extraDefines)) {
+            if (bake_) glDeleteProgram(bake_);
+            bake_ = b;
+        }
         for (int pass = 0; pass < 4; ++pass) {
             GLuint p = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs",
                                     defs + "#define PASS " + std::to_string(pass) + "\n");

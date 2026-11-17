@@ -54,6 +54,10 @@ static const TurnBinding kTurnBindings[] = {
 };
 constexpr int kTurnCount = sizeof(kTurnBindings) / sizeof(kTurnBindings[0]);
 
+// Display names by Fruit value.
+inline constexpr const char* kFruitNames[] = {"cherry", "strawberry", "grape", "dekopon", "persimmon", "apple",
+                                              "pear", "peach", "pineapple", "melon", "watermelon"};
+
 class Game
 {
 public:
@@ -110,6 +114,8 @@ public:
     bool sheetMode = false;
     std::vector<FruitInstance> sheetFruit;
     std::string sheetTitle;
+    float sheetTitleScale = 0.9f;
+    bool sheetNames = true;           // name under each fruit (off for the turntable)
 
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
         State = GAME_MENU;
@@ -408,7 +414,7 @@ public:
         }
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
         Hit4 hit;
-        if (showPreview) hit = getPlacementMouse(state, boundary, *physics_solver);
+        if (showPreview && !sheetMode) hit = getPlacementMouse(state, boundary, *physics_solver);
         renderer.setPreview(hit.hit, hit.point + glm::vec4(0, 3.0f, 0, 0),
                             FruitManager::getFruitProperties(nextFruit).radius, int(nextFruit));
         renderer.draw(cam, FbWidth, FbHeight, time);
@@ -433,16 +439,15 @@ public:
     }
 
     void RenderSheetLabels() {
-        static const char* names[] = {"cherry", "strawberry", "grape", "dekopon", "persimmon", "apple",
-                                      "pear", "peach", "pineapple", "melon", "watermelon"};
         BeginText();
-        t_rend->RenderText(sheetTitle, 25.0f, 25.0f, 0.9f, glm::vec3(1.0f));
+        t_rend->RenderText(sheetTitle, 25.0f, 25.0f, sheetTitleScale, glm::vec3(1.0f));
+        if (!sheetNames) return;
         float aspect = float(Width) / float(std::max(Height, 1u));
         for (const FruitInstance& f : sheetFruit) {
             glm::vec2 ndc;
             if (!state.cam.project(f.center - glm::vec4(0, f.radius * 1.15f, 0, 0), aspect, ndc)) continue;
             float x = (ndc.x * 0.5f + 0.5f) * Width, y = (0.5f - ndc.y * 0.5f) * Height + 8.0f;
-            std::string name = names[f.type];
+            std::string name = kFruitNames[f.type];
             t_rend->RenderText(name, x - t_rend->GetTextWidth(name, 0.6f) / 2.0f, y, 0.6f, glm::vec3(0.95f));
         }
     }

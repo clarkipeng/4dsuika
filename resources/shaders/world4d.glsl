@@ -490,7 +490,12 @@ vec2 treesSDF(vec4 p, vec2 r) {
 // clouds); it is evaluated live. worldSDF is their union.
 #define WORLD_STATIC_CENTER vec4(0.0, -3.0, 0.0, 0.0)
 #define WORLD_STATIC_RADIUS 17.0
+// TURNTABLE (the review turntable, docs/recording.md) keeps only its subject:
+// 1 = nothing (a fruit alone), 2 = the bowl alone.
 vec2 worldStaticSDF(vec4 p) {
+#ifdef TURNTABLE
+    return TURNTABLE == 2 ? vec2(bowlSDF(p), MAT_BOWL) : vec2(1e3, MAT_NONE);
+#endif
     vec2 r = vec2(bowlSDF(p), MAT_BOWL);
     r = opU(r, pondSDF(p));
     if (length(p - vec4(0.0, -6.0, 0.0, 0.0)) - 13.5 < r.x) r = opU(r, islandSDF(p));
@@ -528,7 +533,7 @@ vec2 worldStaticSDFFor(vec4 p, float mat) {
 }
 
 vec2 worldDynamicSDF(vec4 p, float best) {
-#ifndef SKIP_CLOUDS
+#if !defined(SKIP_CLOUDS) && !defined(TURNTABLE)
     return cloudsSDF(p, best);
 #else
     return vec2(best, MAT_NONE);
@@ -550,6 +555,9 @@ vec2 worldSDF(vec4 p) {
 #define WORLD_SHADOW_SDF
 float worldShadowSDF(vec4 p) {
     float d = bowlSDF(p);
+#ifdef TURNTABLE
+    return TURNTABLE == 2 ? d : 1e3;
+#endif
     vec3 q = p.xzw;
     float depth = clamp((GROUND_Y - p.y) / (GROUND_Y - ISLAND_BASE), 0.0, 1.0);
     float rBase = islandProfile(depth);
