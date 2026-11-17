@@ -1,4 +1,15 @@
 #include "text_renderer.h"
+
+static const int kMaxPolyVerts = 16;
+
+// Uploads one draw's vertices into the bound VBO. Orphaning the storage
+// first lets the driver hand out fresh memory instead of waiting on (and on
+// macOS flushing) earlier draws that still read the buffer: one flush per
+// glyph made the menu cost ~7 ms of CPU a frame.
+static void streamVertices(const void* data, size_t bytes) {
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * kMaxPolyVerts * 3 * 4, nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, data);
+}
 #include <algorithm>
 
 #ifdef __EMSCRIPTEN__
@@ -109,7 +120,6 @@ void uploadGlyph(std::map<char, Character>& characters, char code)
 }
 #endif
 
-static const int kMaxPolyVerts = 16;
 
 void TextRenderer::initRenderData()
 {
@@ -159,7 +169,7 @@ void TextRenderer::FillPoly(const std::vector<glm::vec2>& pts, glm::vec3 color, 
     glBindTexture(GL_TEXTURE_2D, whiteTex);
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, v.size() * sizeof(float), v.data());
+    streamVertices(v.data(), v.size() * sizeof(float));
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 4));
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
@@ -286,7 +296,7 @@ void TextRenderer::RenderText(const std::string& text, float x, float y, float s
         glBindTexture(GL_TEXTURE_2D, ch.TextureID);
 
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        streamVertices(vertices, sizeof(vertices));
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -345,7 +355,7 @@ void TextRenderer::RenderTextScale(const std::string& text, float x, float y, fl
 
         glBindTexture(GL_TEXTURE_2D, ch.TextureID);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        streamVertices(vertices, sizeof(vertices));
         
         glDrawArrays(GL_TRIANGLES, 0, 6);
 

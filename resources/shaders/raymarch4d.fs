@@ -3,10 +3,29 @@
 //
 // Each pixel's ray starts at the camera and runs along
 // uCameraBasis * (slice-space direction, 0), so it stays inside the 3D
-// slice; shading (normals, sun, shadows) uses the full 4D scene.
+// slice.
+//
+// PASS (defined by the host) picks what this program does:
+//   0  everything in one pass (fallback without float render targets)
+//   1  geometry: trace fruit and world, write hit and normal (G-buffer)
+//   2  lighting at half resolution: shadow and AO of the G-buffer hits
+//   3  compose: materials, light, sky, fog, hints, grade; lighting is
+//      upsampled from pass 2 with depth-aware weights
 
-in vec2 vUV;
+#ifndef PASS
+#define PASS 0
+#endif
+
+#if PASS == 1
+layout(location = 0) out vec4 gGeom;   // t, kind, fruit lod, bowl distance
+layout(location = 1) out vec4 gNormal; // smooth normal
+#else
 out vec4 fragColor;
+#endif
+
+uniform sampler2D uGeom;   // pass 1 targets, read by passes 2 and 3
+uniform sampler2D uNormal;
+uniform sampler2D uLight;  // pass 2 target: shadow, AO, t
 
 uniform vec2  uResolution;          // render target size in pixels
 uniform vec4  uCameraPos;
@@ -376,15 +395,12 @@ vec4 shadowDir() {
     return dot(s, s) > 0.0025 ? normalize(s) : vec4(0.0);
 }
 
-// n: lighting (faceted) normal; ns: smooth normal for shadow/AO offsets.
-// wrap: light that passes through (foliage), 0 = opaque.
-vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wrap) {
+// n: lighting (faceted) normal; ns: smooth normal. wrap: light that passes
+// through (foliage), 0 = opaque. light: shadow and AO (lightHit).
+vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wrap, vec2 light) {
     float sunDot = max((dot(n, uSunDir) + wrap) / (1.0 + wrap), 0.0);
-    vec4 sd = shadowDir();
-    float sh = dot(sd, sd) == 0.0 ? 1.0
-             : dot(ns, sd) > -0.1 - wrap ? softShadow(p + ns * 0.02, sd) : 0.0;
-    sh = mix(sh, 1.0, 0.5 * wrap);
-    float ao = ambientOcclusion(p, ns);
+    float sh = mix(light.x, 1.0, 0.5 * wrap);
+    float ao = light.y;
     vec3 sun = SUN_COLOR * sunDot * sh;
     vec3 sky = SKY_AMBIENT * (0.55 + 0.45 * n.y) * (0.3 + 0.7 * ao);
     vec3 bounce = GROUND_BOUNCE * clamp(-n.y, 0.0, 1.0) * ao;
@@ -426,15 +442,27 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     return col;
 }
 
-// ---------------------------------------------------------------- main
+// ---------------------------------------------------------------- passes
 
-void main() {
-    vec2 ndc = vUV * 2.0 - 1.0;
+// What a pixel's ray hit. kind: 0 sky, > 0 world material id,
+// < 0 fruit -(index + 1).
+struct Hit {
+    float t;
+    float kind;
+    float lod;      // fruit detail
+    float bowlNear; // closest approach to the bowl (glow)
+    vec4 ns;        // smooth normal
+};
+
+// Ray through the centre of render-target pixel `px` (in pixels).
+vec4 rayDir(vec2 px) {
+    vec2 ndc = px / uResolution * 2.0 - 1.0;
     float aspect = uResolution.x / uResolution.y;
     vec3 local = normalize(vec3(ndc.x * aspect * uTanHalfFov, ndc.y * uTanHalfFov, -1.0));
-    vec4 ro = uCameraPos;
-    vec4 rd = uCameraBasis * vec4(local, 0.0);
+    return uCameraBasis * vec4(local, 0.0);
+}
 
+Hit traceScene(vec4 ro, vec4 rd) {
     // Fruit (only those crossing the slice are sent): the ray enters each
     // fruit's bound glome analytically, then traces the fruit's own SDF.
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
@@ -451,32 +479,69 @@ void main() {
         if (t > 0.0 && t < tHit) { tHit = t; fruit = i; fruitLodHit = lod; }
     }
 
-    // World: sphere-traced SDF, stopped early at the nearest fruit. The
-    // closest approach to the bowl feeds its glow.
-    float bowlNear = 1e3;
-    vec3 hs = marchStatic(ro, rd, min(tHit, FAR), bowlNear);
+    // World, stopped early at the nearest fruit.
+    Hit h;
+    h.bowlNear = 1e3;
+    vec3 hs = marchStatic(ro, rd, min(tHit, FAR), h.bowlNear);
     vec3 hd = marchDynamic(ro, rd, hs.x);
     vec3 hw = hd.y > 0.0 ? hd : hs;
-    float t = hw.x;
-    float mat = hw.y;
 
+    if (fruit >= 0 && tHit <= hw.x) {
+        vec4 c = uFruitCenters[fruit];
+        vec4 d = uFruitData[fruit];
+        vec4 q = ro + rd * tHit - c;
+        h.t = tHit;
+        h.kind = -float(fruit + 1);
+        h.lod = fruitLodHit;
+        h.ns = fruitLodHit > 0.0 ? fruitNormal(q, d, fruitLodHit) : normalize(q);
+    } else if (hw.y > 0.0) {
+        h.t = hw.x;
+        h.kind = hw.y;
+        h.lod = 0.0;
+        h.ns = worldNormal(ro + rd * hw.x, hw.z, hw.y, hd.y > 0.0);
+    } else {
+        h.t = FAR;
+        h.kind = 0.0;
+        h.lod = 0.0;
+        h.ns = vec4(0.0);
+    }
+    return h;
+}
+
+// Leaves pass some sun through, so canopies seen from below stay green.
+float wrapOf(float kind) { return kind == MAT_LEAVES ? 0.6 : 0.0; }
+
+// Shadow (before wrap) and AO at a hit.
+vec2 lightHit(vec4 ro, vec4 rd, Hit h) {
+    if (h.kind == 0.0) return vec2(1.0);
+    vec4 p = ro + rd * h.t;
+    float wrap = wrapOf(h.kind);
+    vec4 sd = shadowDir();
+    float sh = dot(sd, sd) == 0.0 ? 1.0
+             : dot(h.ns, sd) > -0.1 - wrap ? softShadow(p + h.ns * 0.02, sd) : 0.0;
+    return vec2(sh, ambientOcclusion(p, h.ns));
+}
+
+// Final colour of a pixel from its hit and light (shadow, AO).
+vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     vec3 col = vec3(0.0);
-    float dist;
-    if (fruit >= 0 && tHit <= t) {
-        vec4 p = ro + rd * tHit;
+    float dist = h.t;
+    if (h.kind < 0.0) {
+        int fruit = int(-h.kind) - 1;
+        vec4 p = ro + rd * h.t;
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
         vec4 q = p - c;
         vec4 body = normalize(q); // the physics glome's normal
-        vec4 ns = fruitLodHit > 0.0 ? fruitNormal(q, d, fruitLodHit) : body;
+        vec4 ns = h.ns;
         vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
         // A little self-light keeps each fruit's colour identifiable even
         // when it is back-lit by the low sun.
-        vec3 albedo = fruitAlbedo(q, ns, d.x, d.y, d.w, fruitLodHit);
+        vec3 albedo = fruitAlbedo(q, ns, d.x, d.y, d.w, h.lod);
         // Plus a soft fill from the viewer, so the side we see is never just
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
-        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
+        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
         // 4D lean: a fruit's cross-section normals tilt along the slice
         // normal as it drifts out of the slice. Warm it towards the w-axis
         // gold of the indicator so "about to vanish" reads at a glance.
@@ -484,17 +549,11 @@ void main() {
         float lean = smoothstep(0.35, 0.95, abs(dot(body, uCameraBasis[3])));
         float edge = 0.35 + 0.65 * pow(1.0 - max(dot(body, -rd), 0.0), 2.0);
         col += vec3(0.55, 0.38, 0.06) * lean * edge;
-        dist = tHit;
-    } else if (mat > 0.0) {
-        vec4 p = ro + rd * t;
-        vec4 ns = worldNormal(p, hw.z, mat, hd.y > 0.0);
-        vec4 n = facetBlend(ns, 6.0, 0.0);
-        // Leaves pass some sun through, so canopies seen from below stay green.
-        float wrap = mat == MAT_LEAVES ? 0.6 : 0.0;
-        col = shade(p, n, ns, rd, materialColor(mat, p, n), mat == 2.0 ? 0.25 : 0.0, wrap);
-        dist = t;
-    } else {
-        dist = FAR;
+    } else if (h.kind > 0.0) {
+        vec4 p = ro + rd * h.t;
+        vec4 n = facetBlend(h.ns, 6.0, 0.0);
+        col = shade(p, n, h.ns, rd, materialColor(h.kind, p, n), h.kind == MAT_BOWL ? 0.25 : 0.0,
+                    wrapOf(h.kind), light);
     }
 
     // Sunset fog. The sky (noise clouds, not cheap) is evaluated once, and
@@ -504,8 +563,7 @@ void main() {
 
     // The bowl glows softly, as in the cover art.
     // Not over fruit, which must stay readable.
-    bool hitFruit = fruit >= 0 && tHit <= t;
-    col += vec3(1.0, 0.72, 0.42) * (hitFruit ? 0.0 : 0.22) * exp(-bowlNear * 5.0);
+    col += vec3(1.0, 0.72, 0.42) * (h.kind < 0.0 ? 0.0 : 0.22) * exp(-h.bowlNear * 5.0);
 
     col = drawHints(col, ro, rd, dist);
 
@@ -526,9 +584,72 @@ void main() {
     col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
     float luma = dot(col, vec3(0.299, 0.587, 0.114));
     col = clamp(mix(vec3(luma), col, 1.18), 0.0, 1.0);
-    vec2 v = vUV - 0.5;
+    vec2 v = px / uResolution - 0.5;
     col *= 1.0 - 0.55 * dot(v, v);
-    fragColor = vec4(col, 1.0);
+    return col;
+}
+
+Hit readGeometry(ivec2 texel) {
+    vec4 g = texelFetch(uGeom, texel, 0);
+    Hit h;
+    h.t = g.x;
+    h.kind = g.y;
+    h.lod = g.z;
+    h.bowlNear = g.w;
+    h.ns = texelFetch(uNormal, texel, 0);
+    return h;
+}
+
+// Lighting for full-resolution pixel `texel` (depth t) from the
+// half-resolution pass: bilinear weights times depth similarity, so light
+// never bleeds across silhouettes.
+vec2 upsampleLight(ivec2 texel, float t) {
+    vec2 hp = (vec2(texel) + 0.5) * 0.5 - 0.5;
+    ivec2 base = ivec2(floor(hp));
+    vec2 f = hp - vec2(base);
+    ivec2 size = textureSize(uLight, 0) - 1;
+    vec2 sum = vec2(0.0);
+    float wsum = 0.0;
+    vec2 nearest = vec2(1.0);
+    float best = 1e9;
+    for (int k = 0; k < 4; ++k) {
+        ivec2 o = ivec2(k & 1, k >> 1);
+        vec4 l = texelFetch(uLight, clamp(base + o, ivec2(0), size), 0);
+        float dz = abs(l.z - t) / max(t, 1.0);
+        vec2 bw = mix(1.0 - f, f, vec2(o));
+        float w = bw.x * bw.y / (1e-3 + dz * 50.0);
+        sum += l.xy * w;
+        wsum += w;
+        if (dz < best) { best = dz; nearest = l.xy; }
+    }
+    return best > 0.02 ? nearest : sum / wsum;
+}
+
+// ---------------------------------------------------------------- main
+
+void main() {
+    vec2 px = gl_FragCoord.xy;
+    vec4 ro = uCameraPos;
+#if PASS == 1
+    Hit h = traceScene(ro, rayDir(px));
+    gGeom = vec4(h.t, h.kind, h.lod, h.bowlNear);
+    gNormal = h.ns;
+#elif PASS == 2
+    // Each half-resolution texel lights the top-left pixel of its 2x2 block.
+    ivec2 texel = min(ivec2(px) * 2, ivec2(uResolution) - 1);
+    Hit h = readGeometry(texel);
+    vec2 light = lightHit(ro, rayDir(vec2(texel) + 0.5), h);
+    fragColor = vec4(light, h.t, 1.0);
+#elif PASS == 3
+    ivec2 texel = ivec2(px);
+    Hit h = readGeometry(texel);
+    vec2 light = h.kind == 0.0 ? vec2(1.0) : upsampleLight(texel, h.t);
+    fragColor = vec4(compose(px, ro, rayDir(px), h, light), 1.0);
+#else
+    vec4 rd = rayDir(px);
+    Hit h = traceScene(ro, rd);
+    fragColor = vec4(compose(px, ro, rd, h, lightHit(ro, rd, h)), 1.0);
+#endif
 #ifdef COST_MAP
     // Evaluations / 255 per channel: R static world, G moving world, B fruit.
     fragColor = vec4(vec3(gCost) / 255.0, 1.0);

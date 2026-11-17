@@ -76,6 +76,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --adaptive             keep adaptive resolution on (otherwise fixed --scale)
 //   --perf                 show the F3 performance overlay
 //   --no-cache             march the analytic world SDF (no slice cache), to compare
+//   --single-pass          scene in one pass (no deferred half-resolution lighting), to compare
 //   --bench-turn deg       with --bench: turn xw by deg every frame (rebakes the cache)
 //   --cost-map out.png     analytic SDF evaluations per pixel instead of colour (R static
 //                          world, G moving world, B fruit) with statistics; deterministic,
@@ -108,6 +109,7 @@ struct Options {
     bool adaptive = false;
     bool perf = false;
     bool noCache = false;
+    bool singlePass = false;
     float benchTurn = 0.0f;
     std::string costMap;
     float cursorX = -1.0f, cursorY = -1.0f;
@@ -157,6 +159,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--adaptive") o.adaptive = true;
         else if (a == "--perf") o.perf = true;
         else if (a == "--no-cache") o.noCache = true;
+        else if (a == "--single-pass") o.singlePass = true;
         else if (a == "--bench-turn") o.benchTurn = std::atof(next().c_str());
         else if (a == "--cost-map") o.costMap = next();
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
@@ -355,6 +358,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.renderer.useCache = !o.noCache;
+    game.renderer.useDeferred = !o.singlePass;
     auto showMenuState = [&](const std::string& st) {
         game.State = st == "menu" || st == "settings" || st == "controls" ? GAME_MENU
                    : st == "pause" ? GAME_PAUSED : st == "over" ? GAME_OVER : GAME_ACTIVE;
