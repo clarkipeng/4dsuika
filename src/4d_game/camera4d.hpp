@@ -91,7 +91,7 @@ struct Camera4D {
     float fovY = glm::radians(45.0f);
 
     static constexpr float kDefaultPitch = -0.40f;
-    static constexpr float kDefaultDistance = 11.0f;
+    static constexpr float kDefaultDistance = 13.0f;
     static constexpr float kOffsetMax = 3.0f;
 
     Rot4 orbit() const {
@@ -130,6 +130,18 @@ struct Camera4D {
         pitch = glm::clamp(pitch + dpitch, -1.45f, 1.45f);
     }
     void zoom(float d) { distance = glm::clamp(distance - d, 4.0f, 40.0f); }
+
+    // Slow cinematic view of the whole island for the menu: drifts around it
+    // and sways the slice gently through xw so the 4D shows from the start.
+    static Camera4D showcase(float time) {
+        Camera4D c;
+        c.distance = 26.0f;
+        c.pitch = -0.30f;
+        c.yaw = 0.06f * time;
+        c.target = glm::vec4(0.0f, -1.5f, 0.0f, 0.0f);
+        c.turnLocal(AX_X, AX_W, 0.30f * std::sin(0.11f * time));
+        return c;
+    }
     void moveAlongNormal(float d) { offset = glm::clamp(offset + d, -kOffsetMax, kOffsetMax); }
 
     // One step of the "back to the default slice" animation; returns true when home.

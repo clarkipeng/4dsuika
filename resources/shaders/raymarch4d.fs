@@ -150,6 +150,14 @@ vec4 worldNormal(vec4 p) {
                      k4 * worldSDF(p + h * k4).x);
 }
 
+// Shadows and AO may use a cheaper, coarser world distance if the world
+// provides one (#define WORLD_SHADOW_SDF and float worldShadowSDF(vec4)).
+#ifdef WORLD_SHADOW_SDF
+float occluderSDF(vec4 p) { return worldShadowSDF(p); }
+#else
+float occluderSDF(vec4 p) { return worldSDF(p).x; }
+#endif
+
 // Soft shadow towards the sun: the world is marched in 4D, fruit are analytic.
 float softShadow(vec4 ro, vec4 rd) {
     float res = 1.0;
@@ -160,7 +168,7 @@ float softShadow(vec4 ro, vec4 rd) {
     float t = 0.05;
     for (int i = 0; i < SHADOW_STEPS; ++i) {
         if (res < 0.01) break;
-        float h = worldSDF(ro + rd * t).x;
+        float h = occluderSDF(ro + rd * t);
         res = min(res, 10.0 * h / t);
         t += clamp(h, 0.03, 2.5);
         if (res < 0.01 || t > 25.0) break;
@@ -172,7 +180,7 @@ float ambientOcclusion(vec4 p, vec4 n) {
     float occ = 0.0, w = 1.0;
     for (int i = 1; i <= AO_SAMPLES; ++i) {
         float h = 0.3 * float(i * i) / float(AO_SAMPLES * AO_SAMPLES) * 5.0;
-        occ += (h - worldSDF(p + n * h).x) * w;
+        occ += (h - occluderSDF(p + n * h)) * w;
         w *= 0.6;
     }
     float ao = clamp(1.0 - 1.4 * occ, 0.0, 1.0);
@@ -189,7 +197,7 @@ vec4 facetBlend(vec4 ns, float density, float seed) {
 }
 
 const vec3 SUN_COLOR = vec3(2.1, 1.25, 0.62);
-const vec3 SKY_AMBIENT = vec3(0.30, 0.21, 0.38);
+const vec3 SKY_AMBIENT = vec3(0.32, 0.28, 0.40);
 const vec3 GROUND_BOUNCE = vec3(0.40, 0.24, 0.12);
 
 // n: lighting (faceted) normal; ns: smooth normal for shadow/AO offsets.
@@ -277,7 +285,10 @@ void main() {
         vec4 d = uFruitData[fruit];
         vec4 ns = normalize(p - c);
         vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
-        col = shade(p, n, ns, rd, fruitColor(d.y), 0.5) + d.z * vec3(1.0, 0.9, 0.7);
+        // A little self-light keeps each fruit's colour identifiable even
+        // when it is back-lit by the low sun.
+        vec3 albedo = fruitColor(d.y);
+        col = shade(p, n, ns, rd, albedo, 0.5) + albedo * 0.22 + d.z * vec3(1.0, 0.9, 0.7);
         // 4D lean: a fruit's cross-section normals tilt along the slice
         // normal as it drifts out of the slice. Warm it towards the w-axis
         // gold of the indicator so "about to vanish" reads at a glance.
@@ -302,7 +313,9 @@ void main() {
     col = mix(col, skyColor(rd), fog);
 
     // The bowl glows softly, as in the cover art.
-    col += vec3(1.0, 0.72, 0.42) * 0.22 * exp(-bowlNear * 5.0);
+    // Not over fruit, which must stay readable.
+    bool hitFruit = fruit >= 0 && tHit <= t;
+    col += vec3(1.0, 0.72, 0.42) * (hitFruit ? 0.0 : 0.22) * exp(-bowlNear * 5.0);
 
     col = drawHints(col, ro, rd, dist);
 

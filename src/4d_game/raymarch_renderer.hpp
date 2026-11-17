@@ -47,7 +47,7 @@ public:
     // Resolution control. The scene is marched at `renderScale` of the
     // output, capped by the quality preset's pixel budget. With `adaptive`,
     // the scale follows the measured GPU time of the scene pass towards
-    // `targetMs`, between half the cap and the cap.
+    // `targetMs`, between kMinScaleOfCap of the cap and the cap.
     bool adaptive = true;
     float targetMs = 11.0f;   // scene pass budget inside a 16.7 ms frame
     float renderScale = 1.0f; // current scale (set directly when not adaptive)
@@ -156,6 +156,7 @@ public:
 
 private:
     static constexpr int kQueries = 4;
+    static constexpr float kMinScaleOfCap = 0.35f; // adaptive floor: keep frame rate over sharpness
     GLuint scene_ = 0, present_ = 0, vao_ = 0;
     GLuint fbo_ = 0, color_ = 0;
     int fboW_ = 0, fboH_ = 0;
@@ -209,7 +210,7 @@ private:
         }
         float ratio = std::sqrt(targetMs / std::max(ms, 0.1f));
         float step = std::clamp(ratio, 0.97f, 1.01f);
-        renderScale = std::clamp(renderScale * step, cap * 0.5f, cap);
+        renderScale = std::clamp(renderScale * step, cap * kMinScaleOfCap, cap);
     }
 
     static GLint loc(GLuint p, const char* name) { return glGetUniformLocation(p, name); }
