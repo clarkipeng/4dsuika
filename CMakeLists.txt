@@ -11,78 +11,107 @@ include(FetchContent)
 
 # --- Dependencies ---
 
-# GLM
-FetchContent_Declare(
-    glm
-    GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 1.0.1
-)
-FetchContent_MakeAvailable(glm)
+find_package(glm CONFIG QUIET)
+if(NOT TARGET glm::glm)
+    FetchContent_Declare(
+        glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 1.0.1
+    )
+    FetchContent_MakeAvailable(glm)
+endif()
 
-# GLFW
-FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.3.8
-)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(glfw)
+if(NOT EMSCRIPTEN)
+    find_package(glfw3 CONFIG QUIET)
+    if(TARGET glfw)
+        set(SUIKA_GLFW_TARGET glfw)
+    else()
+        FetchContent_Declare(
+            glfw
+            GIT_REPOSITORY https://github.com/glfw/glfw.git
+            GIT_TAG 3.3.8
+        )
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(glfw)
+        set(SUIKA_GLFW_TARGET glfw)
+    endif()
 
-# SDL2
-FetchContent_Declare(
-    SDL2
-    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG release-2.30.3
-)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_TEST OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(SDL2)
+    find_package(SDL2 CONFIG QUIET)
+    if(TARGET SDL2::SDL2)
+        set(SUIKA_SDL2_TARGET SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        set(SUIKA_SDL2_TARGET SDL2::SDL2-static)
+    else()
+        FetchContent_Declare(
+            SDL2
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+            GIT_TAG release-2.30.3
+        )
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(SDL2)
+        set(SUIKA_SDL2_TARGET SDL2::SDL2-static)
+    endif()
 
-# SDL2_mixer
-FetchContent_Declare(
-    SDL2_mixer
-    GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
-    GIT_TAG release-2.6.3
-)
-set(SDL2_MIXER_VENDORED ON CACHE BOOL "" FORCE)
-set(SDL2_MIXER_SAMPLES OFF CACHE BOOL "" FORCE)
-set(SDL2_MIXER_OPUS OFF CACHE BOOL "" FORCE)
-set(SDL2_MIXER_FLAC OFF CACHE BOOL "" FORCE)
-set(SDL2_MIXER_MOD_MIKMOD OFF CACHE BOOL "" FORCE)
-# Use both prefixes to be safe across different CMake script versions
-set(SDL2MIXER_OPUS OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_FLAC OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_MOD_MIKMOD OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_MOD_MODPLUG OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_MIDI_FLUIDSYNTH OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_MIDI_TIMIDITY OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_MIDI_NATIVE OFF CACHE BOOL "" FORCE)
-set(SDL2MIXER_MOD OFF CACHE BOOL "" FORCE)  # IMPORTANT: Disable the format entirely
-set(SDL2MIXER_MIDI OFF CACHE BOOL "" FORCE) # IMPORTANT: Disable the format entirely
-FetchContent_MakeAvailable(SDL2_mixer)
+    find_package(SDL2_mixer CONFIG QUIET)
+    if(TARGET SDL2_mixer::SDL2_mixer)
+        set(SUIKA_SDL2_MIXER_TARGET SDL2_mixer::SDL2_mixer)
+    elseif(TARGET SDL2_mixer::SDL2_mixer-static)
+        set(SUIKA_SDL2_MIXER_TARGET SDL2_mixer::SDL2_mixer-static)
+    else()
+        FetchContent_Declare(
+            SDL2_mixer
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
+            GIT_TAG release-2.6.3
+        )
+        set(SDL2_MIXER_VENDORED ON CACHE BOOL "" FORCE)
+        set(SDL2_MIXER_SAMPLES OFF CACHE BOOL "" FORCE)
+        set(SDL2_MIXER_OPUS OFF CACHE BOOL "" FORCE)
+        set(SDL2_MIXER_FLAC OFF CACHE BOOL "" FORCE)
+        set(SDL2_MIXER_MOD_MIKMOD OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_OPUS OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_FLAC OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MOD_MIKMOD OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MOD_MODPLUG OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MIDI_FLUIDSYNTH OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MIDI_TIMIDITY OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MIDI_NATIVE OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MOD OFF CACHE BOOL "" FORCE)
+        set(SDL2MIXER_MIDI OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(SDL2_mixer)
+        set(SUIKA_SDL2_MIXER_TARGET SDL2_mixer::SDL2_mixer-static)
+    endif()
 
-# FreeType
-FetchContent_Declare(
-    freetype
-    GIT_REPOSITORY https://github.com/freetype/freetype.git
-    GIT_TAG VER-2-13-2
-)
-set(FT_WITH_ZLIB ON CACHE BOOL "" FORCE)
-set(FT_WITH_BZIP2 OFF CACHE BOOL "" FORCE)
-set(FT_WITH_PNG OFF CACHE BOOL "" FORCE)
-set(FT_WITH_HARFBUZZ OFF CACHE BOOL "" FORCE)
-set(FT_WITH_BROTLI OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(freetype)
+    find_package(Freetype QUIET)
+    if(TARGET Freetype::Freetype)
+        set(SUIKA_FREETYPE_TARGET Freetype::Freetype)
+    elseif(TARGET freetype)
+        set(SUIKA_FREETYPE_TARGET freetype)
+    else()
+        FetchContent_Declare(
+            freetype
+            GIT_REPOSITORY https://github.com/freetype/freetype.git
+            GIT_TAG VER-2-13-2
+        )
+        set(FT_WITH_ZLIB ON CACHE BOOL "" FORCE)
+        set(FT_WITH_BZIP2 OFF CACHE BOOL "" FORCE)
+        set(FT_WITH_PNG OFF CACHE BOOL "" FORCE)
+        set(FT_WITH_HARFBUZZ OFF CACHE BOOL "" FORCE)
+        set(FT_WITH_BROTLI OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(freetype)
+        set(SUIKA_FREETYPE_TARGET freetype)
+    endif()
+endif()
 
 # --- Core Libraries ---
-add_library(STB_IMAGE STATIC src/stb_image.cpp)
-target_include_directories(STB_IMAGE PRIVATE includes)
-add_library(GLAD STATIC src/glad.c)
-target_include_directories(GLAD PRIVATE includes)
+if(NOT EMSCRIPTEN)
+    add_library(GLAD STATIC src/glad.c)
+    target_include_directories(GLAD PRIVATE includes)
+endif()
 
 # --- Executable ---
 file(GLOB_RECURSE SOURCES 
@@ -92,17 +121,10 @@ file(GLOB_RECURSE SOURCES
     "src/4d_game/*.vs" 
     "src/4d_game/*.fs"
 )
-list(REMOVE_ITEM SOURCES 
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/4d_game/shader.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/4d_game/shader.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/4d_game/resource_manager.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/4d_game/resource_manager.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/4d_game/texture.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/4d_game/texture.h"
-)
 add_executable(4d_game ${SOURCES})
 
 target_include_directories(4d_game PRIVATE 
+    src/platform
     includes
     ${CMAKE_BINARY_DIR}/configuration
 )
@@ -112,16 +134,36 @@ configure_file(configuration/root_directory.h.in configuration/root_directory.h)
 
 # Link Libraries
 target_link_libraries(4d_game PRIVATE
-    GLAD
-    STB_IMAGE
     glm::glm
-    glfw
-    SDL2::SDL2-static
-    SDL2_mixer::SDL2_mixer-static
-    freetype
 )
 
-if(WIN32)
+if(EMSCRIPTEN)
+    target_link_options(4d_game PRIVATE
+        "-sUSE_GLFW=3"
+        "-sFULL_ES3=1"
+        "-sMIN_WEBGL_VERSION=2"
+        "-sMAX_WEBGL_VERSION=2"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "--preload-file" "${CMAKE_SOURCE_DIR}/resources@resources"
+        "--shell-file" "${CMAKE_SOURCE_DIR}/web_template.html"
+    )
+    set_target_properties(4d_game PROPERTIES
+        OUTPUT_NAME "4DGame_Web"
+        SUFFIX ".html"
+    )
+else()
+    target_link_libraries(4d_game PRIVATE
+        GLAD
+        ${SUIKA_GLFW_TARGET}
+        ${SUIKA_SDL2_TARGET}
+        ${SUIKA_SDL2_MIXER_TARGET}
+        ${SUIKA_FREETYPE_TARGET}
+    )
+endif()
+
+if(EMSCRIPTEN)
+    # Browser build is configured entirely by the Emscripten link options above.
+elseif(WIN32)
     target_link_libraries(4d_game PRIVATE opengl32)
     target_compile_definitions(4d_game PRIVATE _CRT_SECURE_NO_WARNINGS)
 elseif(APPLE)
