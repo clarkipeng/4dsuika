@@ -134,6 +134,11 @@ float sdGem(vec4 p, float r, float seed, vec4 scale) {
     return d * min(min(scale.x, scale.y), min(scale.z, scale.w));
 }
 
+// Rounder, finer-faceted gem: the intersection of two differently rotated gems.
+float sdGem2(vec4 p, float r, float seed, vec4 scale) {
+    return max(sdGem(p, r * 1.06, seed, scale), sdGem(p, r * 1.06, seed + 0.37, scale));
+}
+
 // ---- island -------------------------------------------------------------------
 // Directions in (x, z, w) for the faceted rim of the island: icosahedron vertices and a
 // twisted copy, 24 faces in all.
@@ -167,6 +172,8 @@ float hillField(vec3 q) {
     h += 2.6 * max(0.0, 1.0 - length(q - vec3(-6.0, -5.5,  5.5)) / 4.5);
     h += 3.2 * max(0.0, 1.0 - length(q - vec3( 5.5, -6.0, -6.0)) / 5.0);
     h += 1.8 * max(0.0, 1.0 - length(q - vec3(-1.5,  6.5, -6.5)) / 4.0);
+    h += 2.4 * max(0.0, 1.0 - length(q - vec3( 6.0, -3.5,  5.0)) / 4.0);
+    h += 2.8 * max(0.0, 1.0 - length(q - vec3(-5.0, -3.0, -5.5)) / 4.5);
     h += 1.2 * max(0.0, 1.0 - length(q - vec3( 7.0, -5.0,  0.5)) / 3.5);  // visible at w = 0
     return h;
 }
@@ -225,6 +232,8 @@ vec2 islandSDF(vec4 p) {
     // the bowl sits in a socket: nothing of the island inside the bowl's glome
     float d = max(max(top, side), BOWL_R + BOWL_HALF + 0.04 - length(p));
     float m = (p.y > gh - 0.75) ? MAT_GRASS : MAT_DIRT;
+    // a muddy bank where the ground dips into the pond
+    if (abs(pondDist(q) - 0.15) < 0.4 && p.y < gh + 0.2) m = MAT_DIRT;
     return vec2(d, m);
 }
 
@@ -244,21 +253,53 @@ float bowlSDF(vec4 p) {
 
 // ---- rocks --------------------------------------------------------------------
 // (x, z, w) on the ground, size, seed. Some sit at w far from 0: rotate to find them.
-vec2 rocksSDF(vec4 p, float best) {
-    float d = best;
-    vec4 R[9] = vec4[9](
+const vec4 ROCKS[9] = vec4[9](
         vec4( 7.4,  2.4,  0.0, 1.25), vec4( 5.4,  4.6,  0.4, 0.6),
         vec4(-6.2,  1.6, -0.3, 0.55), vec4(-6.8,  3.8,  0.2, 0.45),
         vec4( 2.0,  7.4, -0.5, 0.5),  vec4( 3.6, -3.0,  5.2, 1.4),
         vec4(-4.0,  2.0, -5.8, 1.6),  vec4( 0.5, -7.0,  6.8, 1.1),
         vec4(-7.5, -1.0,  4.5, 0.9));
+
+vec2 rocksSDF(vec4 p, float best) {
+    float d = best;
     for (int i = 0; i < 9; i++) {
-        vec4 r = R[i];
+        vec4 r = ROCKS[i];
         // bound first (the ground under a rock lies within 4 of GROUND_Y), then place it
         vec4 q = p - vec4(r.x, GROUND_Y, r.y, r.z);
         if (length(vec4(q.x, max(abs(q.y + 0.5) - 4.0, 0.0), q.zw)) - 1.8 * r.w > d) continue;
         q.y -= groundHeight(vec3(r.x, r.y, r.z)) - GROUND_Y + 0.15 * r.w;
         d = min(d, sdGem(q, r.w, float(i) + 3.0, vec4(1.15, 0.75, 1.0, 1.0)));
+    }
+    return vec2(d, MAT_STONE);
+}
+
+// ---- standing stones --------------------------------------------------------
+// Spherinders (a 3-ball swept along an axis) leaning into w, all away from w = 0 so
+// the default slice matches the cover. A turned slice cuts them as upright
+// cylinders, leaning ellipsoids or round stones depending on the angle, the
+// cue Miegakure's spherinder grove uses.
+float sdSpherinder(vec4 q, vec4 axis, float r, float h) {
+    float a = dot(q, axis);
+    vec2 d = vec2(length(q - axis * a) - r, abs(a) - h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - 0.06;
+}
+
+// (x, z, w) on the ground, and the lean into w
+const vec4 STONES[4] = vec4[4](vec4( 7.5,  1.0,  4.0,  0.45), vec4(-7.0,  3.0,  3.5, -0.5),
+                               vec4( 2.0, -7.5, -4.5,  0.55), vec4(-2.5, -6.5,  4.5, -0.4));
+
+vec2 stonesSDF(vec4 p, float best) {
+    float d = best;
+    for (int i = 0; i < 4; i++) {
+        vec4 s = STONES[i];
+        vec4 q = p - vec4(s.x, GROUND_Y + 1.3, s.y, s.z);
+        if (length(q) - 2.6 > d) continue;
+        vec4 axis = normalize(vec4(0.12 * float(i - 1), 1.0, 0.08, s.w));
+        // faceted: a spherinder cut by a few planes reads as hewn stone
+        float st = sdSpherinder(q, axis, 0.55, 1.6);
+        st = max(st, dot(q, normalize(vec4(1.0, 0.3, 0.2, 0.5))) - 0.5);
+        st = max(st, dot(q, normalize(vec4(-0.6, 0.2, 1.0, -0.4))) - 0.48);
+        d = min(d, st);
     }
     return vec2(d, MAT_STONE);
 }
@@ -285,10 +326,10 @@ vec2 treeSDF(vec4 p, vec4 base, float s, float seed) {
     q = qq;
     // canopy: big faceted glomes at the bough ends, one reaching off into w
     vec4 sq = vec4(1.0, 0.82, 1.0, 0.55);   // thinner in w than the wood
-    float can = sdGem(q - vec4(-3.4, 9.0, 0.4, -0.3), 2.4, seed + 1.0, sq);
-    can = min(can, sdGem(q - vec4(2.9, 8.3, -0.2, 0.4), 2.45, seed + 2.0, sq));
-    can = min(can, sdGem(q - vec4(-0.3, 10.6, -0.6, 1.0), 2.7, seed + 3.0, sq));
-    can = min(can, sdGem(q - vec4(0.6, 9.2, 1.4, -0.8), 1.9, seed + 4.0, sq));
+    float can = sdGem2(q - vec4(-3.4, 9.0, 0.4, -0.3), 2.4, seed + 1.0, sq);
+    can = min(can, sdGem2(q - vec4(2.9, 8.3, -0.2, 0.4), 2.45, seed + 2.0, sq));
+    can = min(can, sdGem2(q - vec4(-0.3, 10.6, -0.6, 1.0), 2.7, seed + 3.0, sq));
+    can = min(can, sdGem2(q - vec4(0.6, 9.2, 1.4, -0.8), 1.9, seed + 4.0, sq));
     return (trunk < can) ? vec2(trunk * s, MAT_BARK) : vec2(can * s, MAT_LEAVES);
 }
 
@@ -308,20 +349,30 @@ vec2 fenceSDF(vec4 p) {
 // ---- clouds -------------------------------------------------------------------
 // A sea of faceted cloud banks drifting below and around the island, spread through
 // x, z and w so every slice shows a different set.
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
 vec2 cloudsSDF(vec4 p, float best) {
     float t = uTime * 0.02;
     float d = best;
     for (int i = 0; i < 10; i++) {
         float fi = float(i);
         float ang = fi * 0.628 + t;
-        float rad = 30.0 + 10.0 * hash1(fi * 3.1);
+        float rad = 34.0 + 10.0 * hash1(fi * 3.1);
         vec4 c = vec4(rad * cos(ang), -17.0 + 4.0 * hash1(fi * 5.3), rad * sin(ang),
                       14.0 * sin(fi * 1.7 + t * 0.7));
         vec4 q = p - c;
-        if (length(q) - 12.5 > d) continue;
-        float cl = sdGem(q, 4.5, fi + 20.0, vec4(1.7, 0.7, 1.4, 1.3));
-        cl = min(cl, sdGem(q - vec4(4.5, 1.0, 1.0, 0.5), 3.4, fi + 40.0, vec4(1.3, 0.8, 1.2, 1.1)));
-        cl = min(cl, sdGem(q - vec4(-4.8, 0.4, -1.0, -0.8), 3.0, fi + 60.0, vec4(1.3, 0.75, 1.2, 1.1)));
+        if (length(q) - 11.0 > d) continue;
+        // a flat-bottomed cumulus: soft union of glomes along a 4D direction
+        vec4 along = normalize(vec4(cos(fi * 2.3), 0.0, sin(fi * 2.3), 0.7 * sin(fi * 1.3)));
+        float cl = length(q) - 4.2;
+        cl = smin(cl, length(q - along * 4.6 - vec4(0.0, -0.6, 0.0, 0.0)) - 3.2, 1.5);
+        cl = smin(cl, length(q + along * 4.4 - vec4(0.0, -0.8, 0.0, 0.0)) - 2.9, 1.5);
+        cl = smin(cl, length(q - along * 1.8 - vec4(0.0, 2.4, 0.0, 0.0)) - 2.6, 1.5);
+        cl = smin(cl, length(q + along * 7.6 - vec4(0.0, -1.6, 0.0, 0.0)) - 1.8, 1.2);
+        cl = max(cl, -2.2 - q.y);
         d = min(d, cl);
     }
     return vec2(d, MAT_CLOUD);
@@ -340,6 +391,8 @@ vec2 worldSDF(vec4 p) {
     if (length(p - vec4(-7.4, GROUND_Y + 1.0, -1.6, 0.0)) - 3.0 < r.x) r = opU(r, fenceSDF(p));
     vec2 rk = rocksSDF(p, r.x);
     if (rk.x < r.x) r = rk;
+    vec2 sn = stonesSDF(p, r.x);
+    if (sn.x < r.x) r = sn;
     // the main tree, and two that exist only far along w: rotate in xw or zw to find them
     vec4 t0 = vec4(5.6, GROUND_Y, -3.2, 0.0);
     vec4 t1 = vec4(-4.5, GROUND_Y + 0.3, -5.0, 6.2);
@@ -385,7 +438,7 @@ vec3 skySrgb(vec4 dir) {
     vec4 cp = dir * vec4(2.6, 6.5, 2.6, 2.6) + vec4(t, 0.0, -t * 0.5, t * 0.3);
     float n = valueNoise4(cp) * 0.6 + valueNoise4(cp * 2.3) * 0.3 + valueNoise4(cp * 5.0) * 0.1;
     float band = smoothstep(0.02, 0.1, y) * smoothstep(0.75, 0.25, y);
-    float cov = smoothstep(0.52, 0.55, n) * band;
+    float cov = smoothstep(0.53, 0.54, n) * band;
     vec3 cloudLit = mix(vec3(0.58, 0.27, 0.27), vec3(0.88, 0.42, 0.28), smoothstep(0.6, 0.98, s));
     c = mix(c, cloudLit, cov * 0.8);
     // the cloud sea below the horizon: dusky purple-blue, lighter tops
@@ -401,9 +454,14 @@ vec3 skyColor(vec4 dir) { return toLinear(skySrgb(dir));
 
 // ---- materials ----------------------------------------------------------------
 // Albedo per material, sampled from footage/gameImage.png.
-vec3 materialSrgb(float id, vec4 p) {
+vec3 materialSrgb(float id, vec4 p, vec4 n) {
     float v = facetNoise3(p.xzw * 0.9 + p.y * 0.37);   // tint variation that follows the facets
-    if (id == MAT_GRASS)  return mix(vec3(0.17, 0.27, 0.07), vec3(0.27, 0.34, 0.08), v);
+    if (id == MAT_GRASS) {
+        // sunlit tops lean yellow-green, the steep lip and banks lean deep green
+        vec3 top = mix(vec3(0.16, 0.31, 0.07), vec3(0.27, 0.38, 0.08), v);
+        vec3 lip = vec3(0.09, 0.21, 0.08);
+        return mix(lip, top, smoothstep(0.35, 0.85, n.y));
+    }
     if (id == MAT_BOWL)   return vec3(0.96, 0.74, 0.52);
     if (id == MAT_DIRT)   return mix(vec3(0.34, 0.15, 0.05), vec3(0.46, 0.21, 0.07), v);
     if (id == MAT_STONE)  return mix(vec3(0.17, 0.22, 0.27), vec3(0.24, 0.29, 0.33), v);
@@ -415,5 +473,5 @@ vec3 materialSrgb(float id, vec4 p) {
     return vec3(1.0, 0.0, 1.0);
 }
 
-vec3 materialColor(float id, vec4 p, vec4 n) { return toLinear(materialSrgb(id, p));
+vec3 materialColor(float id, vec4 p, vec4 n) { return toLinear(materialSrgb(id, p, n));
 }
