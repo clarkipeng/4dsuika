@@ -163,6 +163,7 @@ public:
     bool homing = false;              // easing back to the default slice
     float turnVel[kTurnCount] = {};   // radians per second, per binding
     float offsetVel = 0.0f;
+    glm::vec2 orbitVel{0.0f};         // mouse-orbit glide after release (rad/s)
     float time = 0.0f;
     bool showPerf = false;            // F3: GPU time and render scale
 
@@ -284,17 +285,31 @@ public:
         offsetVel += (wantOffset - offsetVel) * ease;
         state.cam.moveAlongNormal(offsetVel * dt);
 
+        // Mouse turning: applied at once while dragging, then glides out.
+        if (state.rotating) {
+            if (dt > 0.0f) {
+                orbitVel += (glm::vec2(state.pendingYaw, state.pendingPitch) / dt - orbitVel) * ease;
+            }
+            state.cam.orbitBy(state.pendingYaw, state.pendingPitch);
+        } else {
+            state.cam.orbitBy(orbitVel.x * dt, orbitVel.y * dt);
+            orbitVel *= std::exp(-dt * 4.0f);
+        }
+        state.pendingYaw = state.pendingPitch = 0.0f;
+
         float orbitYaw = float(keyDown(GLFW_KEY_LEFT)) - float(keyDown(GLFW_KEY_RIGHT));
         float orbitPitch = float(keyDown(GLFW_KEY_UP)) - float(keyDown(GLFW_KEY_DOWN));
         state.cam.orbitBy(orbitYaw * 1.5f * dt, orbitPitch * 1.0f * dt);
 
         if (keyPressedOnce(GLFW_KEY_H) || keyPressedOnce(GLFW_KEY_SPACE)) homing = true;
         if (anyInput || state.rotating) homing = false;  // the player takes over
+        if (homing) orbitVel = glm::vec2(0.0f);
         if (homing && state.cam.easeHome(dt)) homing = false;
     }
 
     void ProcessInput(float dt){
         if (State == GAME_ACTIVE) UpdateCamera(dt);
+        else state.pendingYaw = state.pendingPitch = 0.0f;
 
         if (State == GAME_MENU && keyPressedOnce(GLFW_KEY_ENTER)) State = GAME_ACTIVE;
         if (State == GAME_OVER && keyPressedOnce(GLFW_KEY_ENTER)) Reset();
@@ -409,7 +424,7 @@ public:
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
             const PhysicsObject& obj = physics_solver->objects[i];
-            fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash});
+            fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i});
         }
         renderer.setFruit(fruit);
         Hit4 hit;

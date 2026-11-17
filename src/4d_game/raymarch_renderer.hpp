@@ -24,6 +24,7 @@ struct FruitInstance {
     float radius;
     int type;
     float flash = 0.0f; // 0..1 highlight, e.g. just merged
+    int id = 0;         // stable per fruit while it lives; varies its facets
 };
 
 enum class Quality { Low = 0, Medium = 1, High = 2, Ultra = 3 };
@@ -234,7 +235,7 @@ private:
         for (int i = 0; i < n; ++i) {
             const FruitInstance& f = *visible[i].second;
             centers[i] = f.center;
-            data[i] = glm::vec4(f.radius, float(f.type), f.flash, 0.0f);
+            data[i] = glm::vec4(f.radius, float(f.type), f.flash, float(f.id + 1));
         }
         glUniform1i(loc(scene_, "uFruitCount"), n);
         if (n > 0) {

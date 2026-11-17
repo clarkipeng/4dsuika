@@ -17,7 +17,7 @@ uniform vec4  uSunDir;
 
 uniform int   uFruitCount;
 uniform vec4  uFruitCenters[MAX_FRUIT];
-uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, unused
+uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, facet seed
 uniform int   uHintCount;            // fruit just off the slice
 uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
 uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
@@ -114,10 +114,22 @@ vec4 d4Round(vec4 x) {
     return f;
 }
 
-// density: facets across the surface; higher = smaller facets.
-vec4 facetNormal(vec4 n, float density) {
-    vec4 q = d4Round(n * density);
-    return dot(q, q) > 0.0 ? normalize(q) : n;
+// Quaternion product, vec4 = (x, y, z, w) with w real. Left-multiplying a
+// 4D vector by a unit quaternion is a rotation in SO(4).
+vec4 qmul(vec4 a, vec4 b) {
+    return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+vec4 qconj(vec4 q) { return vec4(-q.xyz, q.w); }
+
+// density: facets across the surface; higher = smaller facets. A seed turns
+// the lattice by its own 4D rotation, so each fruit gets its own facets.
+vec4 facetNormal(vec4 n, float density, float seed) {
+    vec4 r = normalize(sin(vec4(1.7, 2.3, 3.1, 4.9) * (seed + 1.0) + vec4(0.3, 1.1, 2.2, 0.7)));
+    vec4 m = seed > 0.0 ? qmul(r, n) : n;
+    vec4 q = d4Round(m * density);
+    if (dot(q, q) == 0.0) return n;
+    q = normalize(q);
+    return seed > 0.0 ? qmul(qconj(r), q) : q;
 }
 
 // ---------------------------------------------------------------- scene
@@ -171,8 +183,8 @@ float ambientOcclusion(vec4 p, vec4 n) {
 }
 
 // Normal used for lighting: smooth normal ns bent towards its facet normal.
-vec4 facetBlend(vec4 ns, float density) {
-    return uFacet > 0.0 ? normalize(mix(ns, facetNormal(ns, density), uFacet)) : ns;
+vec4 facetBlend(vec4 ns, float density, float seed) {
+    return uFacet > 0.0 ? normalize(mix(ns, facetNormal(ns, density, seed), uFacet)) : ns;
 }
 
 const vec3 SUN_COLOR = vec3(2.1, 1.25, 0.62);
@@ -263,13 +275,20 @@ void main() {
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
         vec4 ns = normalize(p - c);
-        vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x));
+        vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
         col = shade(p, n, ns, rd, fruitColor(d.y), 0.5) + d.z * vec3(1.0, 0.9, 0.7);
+        // 4D lean: a fruit's cross-section normals tilt along the slice
+        // normal as it drifts out of the slice. Warm it towards the w-axis
+        // gold of the indicator so "about to vanish" reads at a glance.
+        // Added light (mostly at the rim), so the fruit keeps its own hue.
+        float lean = smoothstep(0.35, 0.95, abs(dot(ns, uCameraBasis[3])));
+        float edge = 0.35 + 0.65 * pow(1.0 - max(dot(ns, -rd), 0.0), 2.0);
+        col += vec3(0.55, 0.38, 0.06) * lean * edge;
         dist = tHit;
     } else if (mat > 0.0) {
         vec4 p = ro + rd * t;
         vec4 ns = worldNormal(p);
-        vec4 n = facetBlend(ns, 6.0);
+        vec4 n = facetBlend(ns, 6.0, 0.0);
         col = shade(p, n, ns, rd, materialColor(mat, p, n), mat == 2.0 ? 0.25 : 0.0);
         dist = t;
     } else {
