@@ -29,6 +29,7 @@ public:
 
     float renderScale = 1.0f; // fraction of window resolution the scene is marched at
     float dim = 0.0f;         // darken the scene behind menus, 0..1
+    float facet = 0.85f;      // low-poly facet strength, 0 = smooth
     glm::vec4 sunDir = glm::normalize(glm::vec4(-0.55f, 0.32f, -0.75f, 0.18f));
 
     bool init() {
@@ -71,6 +72,7 @@ public:
         glUniform1f(loc(scene_, "uTanHalfFov"), std::tan(cam.fovY * 0.5f));
         glUniform1f(loc(scene_, "uTime"), time);
         glUniform4fv(loc(scene_, "uSunDir"), 1, glm::value_ptr(sunDir));
+        glUniform1f(loc(scene_, "uFacet"), facet);
         uploadFruit(pos, basis[3]);
         glUniform4fv(loc(scene_, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
         glUniform4fv(loc(scene_, "uPreviewData"), 1, glm::value_ptr(previewData_));
