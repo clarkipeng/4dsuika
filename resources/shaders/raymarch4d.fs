@@ -44,6 +44,7 @@ uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform float uFogStart;             // distance where fog begins (just past the orbit target)
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
+uniform float uNearCut;              // world surfaces closer to the camera than this are cut away
 
 // Slice cache (docs/4D.md): worldStaticSDF baked over a cube in slice
 // coordinates. x in [0, uCacheSize]^3 maps to uCacheOrigin + uCacheBasis * x.
@@ -268,7 +269,8 @@ bool cacheSpan(vec3 o, vec3 d, out float t0, out float t1) {
 // bowlNear collects the closest approach to the bowl for its glow.
 vec3 marchStatic(vec4 ro, vec4 rd, float tMax, inout float bowlNear) {
     if (uCacheMode == 0) {
-        float t = 0.0;
+        float t = uNearCut; // cutaway, as below
+        for (int i = 0; i < 24 && worldStaticSDF(ro + rd * t).x < 0.02; ++i) t += 0.1;
         for (int i = 0; i < MAX_STEPS; ++i) {
             vec4 p = ro + rd * t;
             vec2 h = worldStaticSDF(p);
@@ -284,6 +286,19 @@ vec3 marchStatic(vec4 ro, vec4 rd, float tMax, inout float bowlNear) {
     float t, t1;
     if (!cacheSpan(o, d, t, t1)) return vec3(tMax, 0.0, 0.0);
     t1 = min(t1, tMax);
+    // Cutaway: in a turned slice a hill that lives at some w can rise around
+    // the camera. Nothing nearer than uNearCut is drawn; a ray that starts
+    // inside a solid there walks out of it before tracing.
+    if (t < uNearCut) {
+        t = uNearCut;
+        for (int i = 0; i < 24; ++i) {
+            vec4 p = ro + rd * t;
+            float c = cacheDist(o + d * t);
+            float h = c < uCacheVoxel ? worldStaticSDF(p).x : c;
+            if (h > 0.02) break;
+            t += max(-h, 0.0) + 0.05;
+        }
+    }
     float margin = 0.9 * uCacheVoxel + 0.01;
     for (int i = 0; i < MAX_STEPS; ++i) {
         vec4 p = ro + rd * t;
@@ -452,6 +467,8 @@ struct Hit {
     float lod;      // fruit detail
     float bowlNear; // closest approach to the bowl (glow)
     vec4 ns;        // smooth normal
+    float behind;   // bowl hits: fruit seen through the wall, index + 1 (0 = none)
+    float behindT;  // and its distance
 };
 
 // Ray through the centre of render-target pixel `px` (in pixels).
@@ -486,6 +503,8 @@ Hit traceScene(vec4 ro, vec4 rd) {
     vec3 hd = marchDynamic(ro, rd, hs.x);
     vec3 hw = hd.y > 0.0 ? hd : hs;
 
+    h.behind = 0.0;
+    h.behindT = 0.0;
     if (fruit >= 0 && tHit <= hw.x) {
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
@@ -499,6 +518,10 @@ Hit traceScene(vec4 ro, vec4 rd) {
         h.kind = hw.y;
         h.lod = 0.0;
         h.ns = worldNormal(ro + rd * hw.x, hw.z, hw.y, hd.y > 0.0);
+        if (hw.y == MAT_BOWL && fruit >= 0) {
+            h.behind = float(fruit + 1);
+            h.behindT = tHit;
+        }
     } else {
         h.t = FAR;
         h.kind = 0.0;
@@ -554,6 +577,19 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         vec4 n = facetBlend(h.ns, 6.0, 0.0);
         col = shade(p, n, h.ns, rd, materialColor(h.kind, p, n), h.kind == MAT_BOWL ? 0.25 : 0.0,
                     wrapOf(h.kind), light);
+        // The bowl is frosted glass for the fruit inside: they show through
+        // its wall, softened, so the player never loses them behind it.
+        if (h.behind > 0.0) {
+            int i = int(h.behind) - 1;
+            vec4 d = uFruitData[i];
+            vec4 q = ro + rd * h.behindT - uFruitCenters[i];
+            vec4 fn = normalize(q);
+            vec3 albedo = fruitAlbedo(q, fn, d.x, d.y, d.w, 0.0);
+            float lit = 0.35 + 0.65 * max(dot(fn, uSunDir), 0.0) + 0.3 * max(dot(fn, -rd), 0.0);
+            vec3 seen = albedo * lit * vec3(1.0, 0.9, 0.8) * 1.6;
+            float rim = pow(1.0 - abs(dot(h.ns, rd)), 2.0);
+            col = mix(seen, col, 0.35 + 0.5 * rim);
+        }
     }
 
     // Sunset fog. The sky (noise clouds, not cheap) is evaluated once, and
@@ -594,8 +630,11 @@ Hit readGeometry(ivec2 texel) {
     Hit h;
     h.t = g.x;
     h.kind = g.y;
-    h.lod = g.z;
-    h.bowlNear = g.w;
+    bool bowl = h.kind == MAT_BOWL;
+    h.lod = bowl ? 0.0 : g.z;
+    h.bowlNear = bowl ? 0.0 : g.w;
+    h.behind = bowl ? g.z : 0.0;
+    h.behindT = bowl ? g.w : 0.0;
     h.ns = texelFetch(uNormal, texel, 0);
     return h;
 }
@@ -632,7 +671,10 @@ void main() {
     vec4 ro = uCameraPos;
 #if PASS == 1
     Hit h = traceScene(ro, rayDir(px));
-    gGeom = vec4(h.t, h.kind, h.lod, h.bowlNear);
+    // z: fruit lod, or for bowl hits the fruit behind the wall; w: bowl
+    // distance (glow), or for bowl hits that fruit's distance.
+    bool bowl = h.kind == MAT_BOWL;
+    gGeom = vec4(h.t, h.kind, bowl ? h.behind : h.lod, bowl ? h.behindT : h.bowlNear);
     gNormal = h.ns;
 #elif PASS == 2
     // Each half-resolution texel lights the top-left pixel of its 2x2 block.
@@ -650,7 +692,7 @@ void main() {
     Hit h = traceScene(ro, rd);
     fragColor = vec4(compose(px, ro, rd, h, lightHit(ro, rd, h)), 1.0);
 #endif
-#ifdef COST_MAP
+#if defined(COST_MAP) && PASS != 1
     // Evaluations / 255 per channel: R static world, G moving world, B fruit.
     fragColor = vec4(vec3(gCost) / 255.0, 1.0);
 #endif

@@ -61,6 +61,9 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --mute                do not initialize, load, or play audio
 //   --scripted-playtest   headless demo sequence for screenshot/playtest jobs
 //   --playtest-seconds s   run deterministic drops/rotation for s simulated seconds
+//   --pose-at t            camera pose of the scripted playtest at time t (seconds)
+//   --playtest-render dir  also render every 10th frame (timed) and save a frame
+//                          to dir every 30 simulated seconds
 //   --size WxH             offscreen size in pixels (default 1920x1080)
 //   --state game|menu|pause|settings|controls|over   (menu = start screen)
 //   --focus N              focused menu row (for screenshots of the focus state)
@@ -118,6 +121,8 @@ struct Options {
     int fps = 60;
     float seconds = 0.0f;
     float playtestSeconds = 0.0f;
+    std::string playtestRender;
+    float poseAt = -1.0f;
     bool forceHeadless = false;
     bool mute = false;
     std::string fruitSheet;
@@ -169,6 +174,8 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
         else if (a == "--seconds") o.seconds = std::atof(next().c_str());
         else if (a == "--camera-path") o.cameraPath = next();
+        else if (a == "--playtest-render") o.playtestRender = next();
+        else if (a == "--pose-at") o.poseAt = std::atof(next().c_str());
         else if (a == "--playtest-seconds") o.playtestSeconds = std::max(0.0f, float(std::atof(next().c_str())));
         else {
             // Fail loudly: a typo must never fall through to a visible, audible launch.
@@ -285,7 +292,13 @@ static void setScriptedPlaytestCursor(int dropIndex, int w, int h) {
     game.state.m_ypos = glm::clamp(y, 0.18f, 0.86f) * float(h);
 }
 
-static int runScriptedPlaytest(const Options& o) {
+static bool savePng(const std::string& path, int w, int h);
+
+static int runScriptedPlaytest(const Options& o, GLuint fbo) {
+    const bool render = !o.playtestRender.empty();
+    std::vector<float> renderMs;
+    std::vector<int> renderObjects;
+    std::FILE* times = nullptr; // per rendered frame: time, ms, objects, tilt, bake ms
     std::srand(20261117);
     game.State = GAME_ACTIVE;
     game.page = Game::Page::None;
@@ -320,16 +333,55 @@ static int runScriptedPlaytest(const Options& o) {
         maxY = std::max(maxY, highestObjectY());
         maxTilt = std::max(maxTilt, game.state.cam.tilt());
 
+        if (render && frame % 10 == 0) {
+            auto t0 = std::chrono::steady_clock::now();
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glViewport(0, 0, o.width, o.height);
+            game.Render();
+            glFinish();
+            renderMs.push_back(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            renderObjects.push_back(activeObjectCount());
+            if (!times) times = std::fopen((o.playtestRender + "/times.csv").c_str(), "w");
+            if (times) std::fprintf(times, "%.2f,%.2f,%d,%.1f,%.2f\n", t, renderMs.back(), renderObjects.back(),
+                                    glm::degrees(game.state.cam.tilt()), game.renderer.bakeMs());
+            if (frame % 1800 == 0) {
+                char name[64];
+                std::snprintf(name, sizeof name, "/t%04d.png", int(t + 0.5f));
+                savePng(o.playtestRender + name, o.width, o.height);
+            }
+        }
+
         if (game.State == GAME_OVER) {
             ++losses;
             game.Reset();
         }
+    }
+    if (times) std::fclose(times);
+    if (render && !renderMs.empty()) {
+        std::vector<float> sorted = renderMs;
+        std::sort(sorted.begin(), sorted.end());
+        float worst = sorted.back();
+        int worstObjects = renderObjects[std::max_element(renderMs.begin(), renderMs.end()) - renderMs.begin()];
+        printf("playtest render %dx%d: %zu frames, median %.2f ms, p95 %.2f ms, p99 %.2f ms, max %.2f ms (%d objects)\n",
+               o.width, o.height, sorted.size(), sorted[sorted.size() / 2], sorted[sorted.size() * 95 / 100],
+               sorted[sorted.size() * 99 / 100], worst, worstObjects);
     }
 
     printf("scripted playtest %.1fs: frames %d, attempts %d, hit %d, placed %d, missed %d, full %d, merges %d, losses %d, max objects %d, score %d, high score %d, max y %.2f, max tilt %.1f deg\n",
            o.playtestSeconds, totalFrames, attempts, hit, placed, attempts - hit, full, merges, losses,
            maxObjects, game.total_points, game.high_score, maxY, glm::degrees(maxTilt));
     return placed > 0 ? 0 : 1;
+}
+
+// Writes the bound read framebuffer (w x h, RGBA8) as a top-down PNG.
+static bool savePng(const std::string& path, int w, int h) {
+    std::vector<unsigned char> px(size_t(w) * h * 4);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    size_t row = size_t(w) * 4;
+    for (int y = 0; y < h / 2; ++y)
+        std::swap_ranges(px.begin() + y * row, px.begin() + (y + 1) * row, px.begin() + (h - 1 - y) * row);
+    return stbi_write_png(path.c_str(), w, h, 4, px.data(), int(row)) != 0;
 }
 
 static int runHeadless(GLFWwindow* window, const Options& o) {
@@ -370,7 +422,8 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     bool late = o.state == "over" || o.state == "pause";  // play first, then show the menu
     showMenuState(late ? "game" : o.state);
     applyCameraOptions(o, game.state.cam);
-    if (o.playtestSeconds > 0.0f) return runScriptedPlaytest(o);
+    if (o.poseAt >= 0.0f) setScriptedPlaytestPose(o.poseAt);
+    if (o.playtestSeconds > 0.0f) return runScriptedPlaytest(o, fbo);
 
     CameraPath path;
     bool hasPath = false;
