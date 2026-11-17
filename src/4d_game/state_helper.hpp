@@ -16,6 +16,7 @@ struct ViewState {
 
     bool rotating = false;
     double lastX = 0.0, lastY = 0.0;
+    float pendingYaw = 0.0f, pendingPitch = 0.0f; // mouse turn since last frame
 
     int windowWidth = 0, windowHeight = 0;
     float m_xpos = 0.0f, m_ypos = 0.0f;
@@ -48,7 +49,8 @@ struct ViewState {
         mouseMoved = true;
         if (!rotating) return;
         const float sensitivity = 0.005f;
-        cam.orbitBy(-float(xpos - lastX) * sensitivity, -float(ypos - lastY) * sensitivity);
+        pendingYaw -= float(xpos - lastX) * sensitivity;
+        pendingPitch -= float(ypos - lastY) * sensitivity;
         lastX = xpos;
         lastY = ypos;
     }
