@@ -2,7 +2,7 @@
 
 <img width="1604" alt="game photo" src="footage/gameImage.png"> 
 
-This repository was forked from the LearnOpenGL [github repo](https://github.com/JoeyDeVries/LearnOpenGL)
+This repository was originally forked from the LearnOpenGL [github repo](https://github.com/JoeyDeVries/LearnOpenGL). The current renderer is a fullscreen 4D raymarched SDF scene.
 
 The itch.io page is [here](https://werus23.itch.io/4d-suika).
 
@@ -34,7 +34,7 @@ The itch.io page is [here](https://werus23.itch.io/4d-suika).
 ### macOS
 Install dependencies via Homebrew:
 ```bash
-brew install cmake assimp glm glfw freetype sdl2 sdl2_mixer
+brew install cmake emscripten glfw sdl2-compat sdl2_mixer freetype glm
 ```
 
 ### Linux (Ubuntu/Debian)
@@ -67,12 +67,10 @@ Automated builds for Windows and macOS are handled via GitHub Actions. The built
 If you prefer manual building with CMake:
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -j 8
+nice -n 10 cmake --build build --config Release -j 4
 ```
 
 
 # Asset Credits
 
 credit to Chris Haugen for the theme (Morning Mandolin)[https://www.youtube.com/watch?v=jDQgLlmCivI]
-
-credit to LAPDOR for (Floating Island)[https://sketchfab.com/3d-models/floating-island-3a5aca0e003d4effae29c107787e2012]

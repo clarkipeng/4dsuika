@@ -10,8 +10,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#ifndef __EMSCRIPTEN__
 #include <SDL.h>
 #include <SDL_mixer.h>
+#endif
 
 #include "globals.h"
 #include "learnopengl/shader.h"
@@ -138,10 +140,15 @@ public:
     PhysicSolver *physics_solver;
     tp::ThreadPool *thread_pool;
 
+#ifndef __EMSCRIPTEN__
     Mix_Chunk* mergeSound = nullptr;
     Mix_Chunk* loseSound = nullptr;
     Mix_Chunk* placeSound = nullptr;
     Mix_Music* themeMusic = nullptr;
+    bool sdlReady = false;
+    bool audioReady = false;
+    bool audioMuted = false;
+#endif
 
     HemisphereBoundary boundary;
     Fruit nextFruit;
@@ -179,12 +186,29 @@ public:
         total_points = 0;
     }
     ~Game(){
-        Mix_FreeChunk(mergeSound);
-        Mix_CloseAudio();
-        SDL_Quit();
+#ifndef __EMSCRIPTEN__
+        if (mergeSound) Mix_FreeChunk(mergeSound);
+        if (loseSound) Mix_FreeChunk(loseSound);
+        if (placeSound) Mix_FreeChunk(placeSound);
+        if (themeMusic) Mix_FreeMusic(themeMusic);
+        if (audioReady) Mix_CloseAudio();
+        if (sdlReady) SDL_Quit();
+#endif
         delete t_rend;
+        delete text_shader;
         delete physics_solver;
         delete thread_pool;
+    }
+    void SetAudioState(bool sdlInitialized, bool mixerInitialized, bool muted) {
+#ifndef __EMSCRIPTEN__
+        sdlReady = sdlInitialized;
+        audioReady = mixerInitialized;
+        audioMuted = muted;
+#else
+        (void)sdlInitialized;
+        (void)mixerInitialized;
+        (void)muted;
+#endif
     }
     void Reset(){
         for (int i = 0; i < MAX_OBJECTS; ++i) {
@@ -216,18 +240,24 @@ public:
         nextFruit = fm.getRandomFruit();
         state.Init(window);
 
-        mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
-        if (!mergeSound) std::cerr << "Warning: Could not load drop.wav: " << Mix_GetError() << std::endl;
-        loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
-        if (!loseSound) std::cerr << "Warning: Could not load game_over.wav: " << Mix_GetError() << std::endl;
-        placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
-        if (!placeSound) std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
-        themeMusic = Mix_LoadMUS(FileSystem::getPath("resources/audio/theme.wav").c_str());
-        if (!themeMusic) std::cerr << "Mix_LoadMUS error: " << Mix_GetError() << std::endl;
+#ifndef __EMSCRIPTEN__
+        if (audioReady && !audioMuted) {
+            mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
+            if (!mergeSound) std::cerr << "Warning: Could not load drop.wav: " << Mix_GetError() << std::endl;
+            loseSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/game_over.wav").c_str());
+            if (!loseSound) std::cerr << "Warning: Could not load game_over.wav: " << Mix_GetError() << std::endl;
+            placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
+            if (!placeSound) std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
+            themeMusic = Mix_LoadMUS(FileSystem::getPath("resources/audio/theme.wav").c_str());
+            if (!themeMusic) std::cerr << "Mix_LoadMUS error: " << Mix_GetError() << std::endl;
+        }
+#endif
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        if (themeMusic) Mix_PlayMusic(themeMusic, -1);
+#ifndef __EMSCRIPTEN__
+        if (audioReady && !audioMuted && themeMusic) Mix_PlayMusic(themeMusic, -1);
+#endif
     }
 
     bool keyDown(int key) const { return key >= 0 && key < 1024 && Keys[key]; }
@@ -281,11 +311,14 @@ public:
 
     void ApplyVolumeSettings()
     {
+#ifndef __EMSCRIPTEN__
+        if (!audioReady || audioMuted) return;
         Mix_VolumeMusic(static_cast<int>(vset.musicVolume * MIX_MAX_VOLUME));
         int sfx_volume_sdl = static_cast<int>(vset.sfxVolume * MIX_MAX_VOLUME);
         if (mergeSound) Mix_VolumeChunk(mergeSound, sfx_volume_sdl);
         if (loseSound)  Mix_VolumeChunk(loseSound, sfx_volume_sdl);
         if (placeSound) Mix_VolumeChunk(placeSound, sfx_volume_sdl);
+#endif
     }
 
     void Update(float dt)
@@ -298,15 +331,21 @@ public:
         switch (State)
         {
             case GAME_ACTIVE:
-                if (Mix_PausedMusic() == 1) Mix_ResumeMusic();
+#ifndef __EMSCRIPTEN__
+                if (audioReady && !audioMuted && Mix_PausedMusic() == 1) Mix_ResumeMusic();
+#endif
                 UpdateGameActive(dt);
                 break;
             case GAME_OVER:
                 UpdateGameOver(dt);
-                if (State == GAME_OVER) Mix_PauseMusic();
+#ifndef __EMSCRIPTEN__
+                if (audioReady && !audioMuted && State == GAME_OVER) Mix_PauseMusic();
+#endif
                 break;
             case GAME_MENU:
-                if (Mix_PausedMusic() == 1) Mix_ResumeMusic();
+#ifndef __EMSCRIPTEN__
+                if (audioReady && !audioMuted && Mix_PausedMusic() == 1) Mix_ResumeMusic();
+#endif
                 vset.UpdateLayout(Width, Height);
                 vset.UpdateControls();
                 ApplyVolumeSettings();
@@ -321,7 +360,9 @@ public:
             if (!physics_solver->has_obj[i]) continue;
             if (physics_solver->objects[i].position.y < -3) {
                 if (total_points > high_score) high_score = total_points;
+#ifndef __EMSCRIPTEN__
                 if (State == GAME_ACTIVE && loseSound != nullptr) Mix_PlayChannel(-1, loseSound, 0);
+#endif
                 State = GAME_OVER;
                 return;
             }
@@ -343,8 +384,11 @@ public:
         total_points = physics_solver->total_points;
     }
     int Sound(){
+#ifndef __EMSCRIPTEN__
+        if (!audioReady || audioMuted) return 0;
         if (physics_solver->just_merged > 0 && mergeSound != nullptr) Mix_PlayChannel(-1, mergeSound, 0);
         if (ballPlaced && placeSound != nullptr) Mix_PlayChannel(-1, placeSound, 0);
+#endif
         return 0;
     }
 
@@ -365,7 +409,7 @@ public:
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
             const PhysicsObject& obj = physics_solver->objects[i];
-            fruit.push_back({obj.position, obj.radius, int(obj.fruit)});
+            fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash});
         }
         renderer.setFruit(fruit);
         Hit4 hit;

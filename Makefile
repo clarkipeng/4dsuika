@@ -2,14 +2,16 @@
 
 BUILD_DIR = build
 CMAKE = cmake
+NICE = nice -n 10
+JOBS = 4
 
 .PHONY: all build run clean package
 
 all: build
 
 build:
-	$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release
-	$(CMAKE) --build $(BUILD_DIR) --config Release -j 8
+	$(NICE) $(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release
+	$(NICE) $(CMAKE) --build $(BUILD_DIR) --config Release -j $(JOBS)
 
 run: build
 	./$(BUILD_DIR)/4d_game.app/Contents/MacOS/4d_game

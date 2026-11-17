@@ -41,14 +41,21 @@ private:
 
   static std::string const & getRoot()
   {
+#ifdef __EMSCRIPTEN__
+    static std::string root = "";
+#else
     static char const * envRoot = getenv("LOGL_ROOT_PATH");
     static char const * givenRoot = (envRoot != nullptr ? envRoot : logl_root);
     static std::string root = (givenRoot != nullptr ? givenRoot : "");
+#endif
     return root;
   }
 
   static Builder getPathBuilder()
   {
+#ifdef __EMSCRIPTEN__
+    return &FileSystem::getPathRelativeWeb;
+#endif
     if (getRoot() != "") {
       return &FileSystem::getPathRelativeRoot;
     }
@@ -69,6 +76,11 @@ private:
   static std::string getPathRelativeBinary(const std::string& path)
   {
     return "../../../" + path;
+  }
+
+  static std::string getPathRelativeWeb(const std::string& path)
+  {
+    return path;
   }
 };
 

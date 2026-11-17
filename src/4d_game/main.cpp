@@ -8,22 +8,31 @@
 ******************************************************************/
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#ifndef GLFW_FOCUS_ON_SHOW
+#define GLFW_FOCUS_ON_SHOW 0x0002000C
+#endif
 
+#ifndef __EMSCRIPTEN__
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <SDL_mixer.h>
+#else
+#include <emscripten/emscripten.h>
+#endif
 
 #include "game.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 const float TARGET_FPS = 60.0f;
 const float FRAME_TIME = 1.0f / TARGET_FPS;
@@ -43,8 +52,11 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 
 // Command line. With --screenshot or --bench the game runs headless: a hidden
 // window that never takes focus, rendering into an offscreen framebuffer.
+//   --headless            render hidden/offscreen, optionally without capture
 //   --screenshot out.png   render, save a PNG, exit
 //   --bench N              render N frames as fast as possible, print timings
+//   --mute                do not initialize, load, or play audio
+//   --scripted-playtest   headless demo sequence for screenshot/playtest jobs
 //   --size WxH             offscreen size in pixels (default 1920x1080)
 //   --state game|menu|over
 //   --turn xw:30,yw:0,zw:0,xy:0   4D turns in degrees, camera-local planes
@@ -76,7 +88,10 @@ struct Options {
     bool adaptive = false;
     bool perf = false;
     float cursorX = -1.0f, cursorY = -1.0f;
-    bool headless() const { return !screenshot.empty() || bench > 0; }
+    bool forceHeadless = false;
+    bool mute = false;
+    bool headless() const { return forceHeadless || !screenshot.empty() || bench > 0; }
+    bool muted() const { return mute || headless(); }
 };
 
 static Options parseOptions(int argc, char* argv[]) {
@@ -84,7 +99,15 @@ static Options parseOptions(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-        if (a == "--screenshot") o.screenshot = next();
+        if (a == "--headless") o.forceHeadless = true;
+        else if (a == "--mute") o.mute = true;
+        else if (a == "--scripted-playtest") {
+            o.forceHeadless = true;
+            o.state = "game";
+            o.demo = std::max(o.demo, 8);
+            o.frames = std::max(o.frames, 160);
+        }
+        else if (a == "--screenshot") o.screenshot = next();
         else if (a == "--bench") o.bench = std::atoi(next().c_str());
         else if (a == "--size") sscanf(next().c_str(), "%dx%d", &o.width, &o.height);
         else if (a == "--state") o.state = next();
@@ -207,21 +230,75 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     return 0;
 }
 
+static void runInteractiveFrame(GLFWwindow* window, float& fixedUpdateAccumulator, float& lastFrame, bool throttle) {
+    float currentFrame = glfwGetTime();
+    float deltaTime = currentFrame - lastFrame;
+    if (deltaTime > 0.25f) deltaTime = 0.25f;
+    lastFrame = currentFrame;
+
+    glfwPollEvents();
+    game.ProcessInput(deltaTime);
+
+    fixedUpdateAccumulator += deltaTime;
+    while (fixedUpdateAccumulator >= FIXED_TIMESTEP)
+    {
+        game.FixedUpdate(FIXED_TIMESTEP);
+        fixedUpdateAccumulator -= FIXED_TIMESTEP;
+    }
+    game.Update(deltaTime);
+    game.renderer.reportFrameTime(deltaTime * 1000.0f);
+
+    glfwGetFramebufferSize(window, &game.FbWidth, &game.FbHeight);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, game.FbWidth, game.FbHeight);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    game.Render();
+
+    glfwSwapBuffers(window);
+
+#ifndef __EMSCRIPTEN__
+    if (throttle) {
+        float frameDuration = glfwGetTime() - currentFrame;
+        if (frameDuration < FRAME_TIME)
+        {
+            std::this_thread::sleep_for(std::chrono::duration<float>(FRAME_TIME - frameDuration));
+        }
+    }
+#else
+    (void)throttle;
+#endif
+}
+
 int main(int argc, char* argv[])
 {
     Options opt = parseOptions(argc, argv);
     try {
+#ifndef __EMSCRIPTEN__
         if (opt.headless()) {
             // Never show a window, take focus, or join the Dock.
+#ifdef __APPLE__
             glfwInitHint(GLFW_COCOA_MENUBAR, GLFW_FALSE);
+#endif
+        }
+        if (opt.muted()) {
             SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
         }
-        glfwInit();
+#endif
+        if (!glfwInit()) {
+            std::cerr << "Failed to initialize GLFW" << std::endl;
+            return -1;
+        }
+#ifdef __EMSCRIPTEN__
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#else
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
 #endif
         glfwWindowHint(GLFW_RESIZABLE, true);
         if (opt.headless()) {
@@ -238,17 +315,30 @@ int main(int argc, char* argv[])
         glfwMakeContextCurrent(window);
         if (opt.bench > 0) glfwSwapInterval(0);
 
-        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-            std::cerr << "Warning: SDL_Init error: " << SDL_GetError() << std::endl;
-        } else if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
-            std::cerr << "Warning: Mix_OpenAudio error: " << Mix_GetError() << std::endl;
+        bool sdlReady = false;
+        bool audioReady = false;
+#ifndef __EMSCRIPTEN__
+        if (!opt.muted()) {
+            if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+                std::cerr << "Warning: SDL_Init error: " << SDL_GetError() << std::endl;
+            } else {
+                sdlReady = true;
+                if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+                    std::cerr << "Warning: Mix_OpenAudio error: " << Mix_GetError() << std::endl;
+                } else {
+                    audioReady = true;
+                }
+            }
         }
+#endif
 
+#ifndef __EMSCRIPTEN__
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
         {
             std::cout << "Failed to initialize GLAD" << std::endl;
             return -1;
         }
+#endif
 
         glfwSetKeyCallback(window, key_callback);
         glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -257,6 +347,7 @@ int main(int argc, char* argv[])
         glfwSetCursorPosCallback(window, cursorPosCallback);
         glfwSetScrollCallback(window, scrollCallback);
 
+        game.SetAudioState(sdlReady, audioReady, opt.muted());
         game.Init(window);
 
         if (opt.headless()) {
@@ -265,44 +356,35 @@ int main(int argc, char* argv[])
             return rc;
         }
 
+#ifdef __EMSCRIPTEN__
+        struct LoopContext {
+            GLFWwindow* window = nullptr;
+            float fixedUpdateAccumulator = 0.0f;
+            float lastFrame = 0.0f;
+        };
+        static LoopContext loop;
+        loop.window = window;
+        loop.lastFrame = glfwGetTime();
+        emscripten_set_main_loop_arg([](void* arg) {
+            auto* ctx = static_cast<LoopContext*>(arg);
+            if (glfwWindowShouldClose(ctx->window)) {
+                emscripten_cancel_main_loop();
+                return;
+            }
+            runInteractiveFrame(ctx->window, ctx->fixedUpdateAccumulator, ctx->lastFrame, false);
+        }, &loop, 0, 1);
+        return 0;
+#else
         float fixedUpdateAccumulator = 0.0f;
         float lastFrame = glfwGetTime();
         while (!glfwWindowShouldClose(window))
         {
-            float currentFrame = glfwGetTime();
-            float deltaTime = currentFrame - lastFrame;
-            if (deltaTime > 0.25f) deltaTime = 0.25f; // clamp delta to prevent spiral of death
-            lastFrame = currentFrame;
-
-            glfwPollEvents();
-            game.ProcessInput(deltaTime);
-
-            fixedUpdateAccumulator += deltaTime;
-            while (fixedUpdateAccumulator >= FIXED_TIMESTEP)
-            {
-                game.FixedUpdate(FIXED_TIMESTEP);
-                fixedUpdateAccumulator -= FIXED_TIMESTEP;
-            }
-            game.Update(deltaTime);
-            game.renderer.reportFrameTime(deltaTime * 1000.0f);
-
-            glfwGetFramebufferSize(window, &game.FbWidth, &game.FbHeight);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(0, 0, game.FbWidth, game.FbHeight);
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-            game.Render();
-
-            glfwSwapBuffers(window);
-
-            float frameDuration = glfwGetTime() - currentFrame;
-            if (frameDuration < FRAME_TIME)
-            {
-                std::this_thread::sleep_for(std::chrono::duration<float>(FRAME_TIME - frameDuration));
-            }
+            runInteractiveFrame(window, fixedUpdateAccumulator, lastFrame, true);
         }
 
         glfwTerminate();
         return 0;
+#endif
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         glfwTerminate();

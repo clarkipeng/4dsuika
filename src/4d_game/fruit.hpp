@@ -3,8 +3,6 @@
 
 #include <unordered_map>
 #include <string>
-#include "learnopengl/filesystem.h"
-#include "render_helper.hpp"
 
 enum Fruit {
     CHERRY,
@@ -54,7 +52,7 @@ public:
             0.8f,   // roughness
             1.0f,   // ao
             1.0f,   // alpha
-            loadTexture(FileSystem::getPath("resources/textures/fruits/cherry.png").c_str()),
+            0,
             1,
         };
         
@@ -64,7 +62,7 @@ public:
             0.7f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/strawberry.png").c_str()),
+            0,
             3,
         };
         
@@ -74,7 +72,7 @@ public:
             0.6f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/grape.png").c_str()),
+            0,
             6,
         };
         
@@ -84,7 +82,7 @@ public:
             0.5f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/dekopon.png").c_str()),
+            0,
             10,
         };
         
@@ -94,7 +92,7 @@ public:
             0.6f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/persimmon.png").c_str()),
+            0,
             15,
         };
         
@@ -104,7 +102,7 @@ public:
             0.4f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/apple.png").c_str()),
+            0,
             21,
         };
         
@@ -114,7 +112,7 @@ public:
             0.5f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/pear.png").c_str()),
+            0,
             28,
         };
         
@@ -124,7 +122,7 @@ public:
             0.3f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/peach.png").c_str()),
+            0,
             36,
         };
         
@@ -134,7 +132,7 @@ public:
             0.7f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/pineapple.png").c_str()),
+            0,
             45,
         };
         
@@ -144,7 +142,7 @@ public:
             0.4f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/melon.png").c_str()),
+            0,
             55,
         };
         
@@ -154,7 +152,7 @@ public:
             0.5f,
             1.0f,
             1.0f,
-            loadTexture(FileSystem::getPath("resources/textures/fruits/watermelon.png").c_str()),
+            0,
             66,
         };
     }
@@ -229,10 +227,6 @@ public:
 
     // Cleanup textures
     static void cleanup() {
-        // Delete all loaded textures
-        for (auto& pair : fruitPropertiesMap) {
-            glDeleteTextures(1, &pair.second.texture);
-        }
         fruitPropertiesMap.clear();
     }
 };

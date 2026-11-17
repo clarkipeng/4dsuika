@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <filesystem>
 
 class Shader
 {
@@ -41,8 +42,8 @@ public:
             vShaderFile.close();
             fShaderFile.close();
             // convert stream into string
-            vertexCode = vShaderStream.str();
-            fragmentCode = fShaderStream.str();			
+            vertexCode = preprocessShader(vShaderStream.str(), std::filesystem::path(vertexPath).parent_path());
+            fragmentCode = preprocessShader(fShaderStream.str(), std::filesystem::path(fragmentPath).parent_path());
             // if geometry shader path is present, also load a geometry shader
             if(geometryPath != nullptr)
             {
@@ -50,7 +51,7 @@ public:
                 std::stringstream gShaderStream;
                 gShaderStream << gShaderFile.rdbuf();
                 gShaderFile.close();
-                geometryCode = gShaderStream.str();
+                geometryCode = preprocessShader(gShaderStream.str(), std::filesystem::path(geometryPath).parent_path());
             }
         }
         catch (std::ifstream::failure& e)
@@ -75,25 +76,35 @@ public:
         unsigned int geometry;
         if(geometryPath != nullptr)
         {
+#ifndef __EMSCRIPTEN__
             const char * gShaderCode = geometryCode.c_str();
             geometry = glCreateShader(GL_GEOMETRY_SHADER);
             glShaderSource(geometry, 1, &gShaderCode, NULL);
             glCompileShader(geometry);
             checkCompileErrors(geometry, "GEOMETRY");
+#else
+            std::cout << "ERROR::SHADER::GEOMETRY_NOT_SUPPORTED_ON_WEBGL" << std::endl;
+#endif
         }
         // shader Program
         ID = glCreateProgram();
         glAttachShader(ID, vertex);
         glAttachShader(ID, fragment);
         if(geometryPath != nullptr)
+#ifndef __EMSCRIPTEN__
             glAttachShader(ID, geometry);
+#else
+            ;
+#endif
         glLinkProgram(ID);
         checkCompileErrors(ID, "PROGRAM");
         // delete the shaders as they're linked into our program now and no longer necessary
         glDeleteShader(vertex);
         glDeleteShader(fragment);
+#ifndef __EMSCRIPTEN__
         if(geometryPath != nullptr)
             glDeleteShader(geometry);
+#endif
 
     }
     // activate the shader
@@ -162,6 +173,55 @@ public:
     }
 
 private:
+    inline static std::string preprocessShader(const std::string& source, const std::filesystem::path& basePath)
+    {
+        std::stringstream input(source);
+        std::stringstream output;
+        std::string line;
+        bool sawVersion = false;
+
+        while (std::getline(input, line)) {
+            if (line.rfind("#version", 0) == 0) {
+#ifdef __EMSCRIPTEN__
+                output << "#version 300 es\n";
+                output << "precision highp float;\n";
+                output << "precision highp int;\n";
+#else
+                output << line << "\n";
+#endif
+                output << "#ifndef MAX_FRUIT\n#define MAX_FRUIT 100\n#endif\n";
+                sawVersion = true;
+                continue;
+            }
+
+            const std::string includeToken = "#include \"";
+            const std::size_t includeStart = line.find(includeToken);
+            if (includeStart != std::string::npos) {
+                const std::size_t pathStart = includeStart + includeToken.size();
+                const std::size_t pathEnd = line.find('"', pathStart);
+                if (pathEnd != std::string::npos) {
+                    const std::filesystem::path includePath = basePath / line.substr(pathStart, pathEnd - pathStart);
+                    std::ifstream includeFile(includePath);
+                    if (!includeFile) {
+                        std::cout << "ERROR::SHADER::INCLUDE_NOT_READ: " << includePath << std::endl;
+                    } else {
+                        std::stringstream includeStream;
+                        includeStream << includeFile.rdbuf();
+                        output << preprocessShader(includeStream.str(), includePath.parent_path());
+                    }
+                    continue;
+                }
+            }
+
+            output << line << "\n";
+        }
+
+        if (!sawVersion) {
+            return std::string("#ifndef MAX_FRUIT\n#define MAX_FRUIT 100\n#endif\n") + output.str();
+        }
+        return output.str();
+    }
+
     // utility function for checking shader compilation/linking errors.
     // ------------------------------------------------------------------------
     inline void checkCompileErrors(GLuint shader, std::string type)

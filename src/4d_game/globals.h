@@ -16,10 +16,14 @@ struct RayInter{
     bool hit = false;
     float distance = FLT_MAX;
     glm::vec3 point = glm::vec3(0.0f);
+    glm::vec4 point4 = glm::vec4(0.0f);
     
     RayInter() = default;
     
     RayInter(bool h, float d, glm::vec3 p)
-        : hit(h), distance(d), point(p) {}
+        : hit(h), distance(d), point(p), point4(glm::vec4(p, 0.0f)) {}
+
+    RayInter(bool h, float d, glm::vec4 p)
+        : hit(h), distance(d), point(glm::vec3(p)), point4(p) {}
 };
 #endif

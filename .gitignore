@@ -1,8 +1,10 @@
 # ignores following folders
 bin/
 build/
+build-web/
 out/
 vendor/
+.playwright-cli/
 .gemini/
 .specstory/
 .vscode/
