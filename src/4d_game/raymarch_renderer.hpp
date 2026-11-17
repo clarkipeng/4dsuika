@@ -2,6 +2,8 @@
 // The one renderer: raymarches the 4D SDF scene (resources/shaders/raymarch4d.fs
 // with world4d.glsl pasted in) into an offscreen target at `renderScale` of
 // the output, then a present pass upscales it and draws the slice indicator.
+// The scene runs as three passes (geometry into a G-buffer, shadow and AO at
+// half resolution, compose) when float render targets exist, else as one.
 // Resolution adapts to the measured GPU time; a quality preset caps it and
 // sets the march budgets.
 //
@@ -55,10 +57,11 @@ public:
     // the scale follows the measured GPU time of the scene pass towards
     // `targetMs`, between kMinScaleOfCap of the cap and the cap.
     bool adaptive = true;
-    float targetMs = 11.0f;   // scene pass budget inside a 16.7 ms frame
+    float targetMs = 13.0f;   // scene passes' budget inside a 16.7 ms frame (UI, bakes, the rest)
     float renderScale = 1.0f; // current scale (set directly when not adaptive)
     bool syncTiming = false;  // wait for each timing result (benchmarks)
     bool useCache = true;     // slice cache on (falls back to analytic if unsupported)
+    bool useDeferred = true;  // three scene passes with half-resolution lighting (if supported)
     std::string extraDefines; // added to the scene shader on the next setQuality
 
     // GPU time of the last cache bake in ms, and how many bakes ran.
@@ -85,17 +88,20 @@ public:
         glGenQueries(kQueries, queries_);
 #endif
         setQuality(quality_);
-        return scene_ && present_;
+        return scene_[0] && present_;
     }
 
     Quality quality() const { return quality_; }
     void setQuality(Quality q) {
         quality_ = q;
         std::string defs = "#define QUALITY " + std::to_string(int(q)) + "\n" + extraDefines;
-        GLuint p = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs", defs);
-        if (p) {
-            if (scene_) glDeleteProgram(scene_);
-            scene_ = p;
+        for (int pass = 0; pass < 4; ++pass) {
+            GLuint p = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs",
+                                    defs + "#define PASS " + std::to_string(pass) + "\n");
+            if (p) {
+                if (scene_[pass]) glDeleteProgram(scene_[pass]);
+                scene_[pass] = p;
+            }
         }
         renderScale = 1.0f; // re-clamped against the new cap next frame
         cacheValid_ = false;
@@ -148,38 +154,34 @@ public:
         glBindVertexArray(vao_);
         bool cached = useCache && updateCache(cam, time);
 
-        // Scene pass.
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glViewport(0, 0, rw, rh);
-        glUseProgram(scene_);
+        // Scene: in three passes (geometry, half-resolution lighting,
+        // compose) when float targets are available, else in one.
         glm::mat4 basis = cam.basis();
         glm::vec4 pos = cam.position();
-        uniform(scene_, "uResolution", glm::vec2(rw, rh));
-        glUniform4fv(loc(scene_, "uCameraPos"), 1, glm::value_ptr(pos));
-        glUniformMatrix4fv(loc(scene_, "uCameraBasis"), 1, GL_FALSE, glm::value_ptr(basis));
-        glUniform1f(loc(scene_, "uTanHalfFov"), std::tan(cam.fovY * 0.5f));
-        glUniform1f(loc(scene_, "uTime"), time);
-        glUniform4fv(loc(scene_, "uSunDir"), 1, glm::value_ptr(sunDir));
-        glUniform1f(loc(scene_, "uFacet"), facet);
-        glUniform1f(loc(scene_, "uFogStart"), cam.distance + 5.0f);
-        uploadFruit(pos, basis[3]);
-        glUniform4fv(loc(scene_, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
-        glUniform4fv(loc(scene_, "uPreviewData"), 1, glm::value_ptr(previewData_));
-        glUniform1i(loc(scene_, "uCacheMode"), cached ? 1 : 0);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_3D, cacheTex_);
-        glUniform1i(loc(scene_, "uCache"), 1);
-        glUniform4fv(loc(scene_, "uCacheOrigin"), 1, glm::value_ptr(cacheOrigin_));
-        glUniformMatrix4fv(loc(scene_, "uCacheBasis"), 1, GL_FALSE, glm::value_ptr(cacheBasis_));
-        glUniform1f(loc(scene_, "uCacheSize"), cacheSize_);
-        glUniform1f(loc(scene_, "uCacheVoxel"), cacheVoxel_);
-        // Texture coordinates of the baked corner: scale, and the clamp that
-        // keeps filtering off texels outside it.
-        float span = float(cacheTexels_) / float(std::max(cacheRes_, 1));
-        glUniform3f(loc(scene_, "uCacheUV"), span, 0.5f / std::max(cacheRes_, 1),
-                    (cacheTexels_ - 0.5f) / std::max(cacheRes_, 1));
+        bool deferred = useDeferred && gbufOk_ && extraDefines.find("COST_MAP") == std::string::npos;
+        int lw = (rw + 1) / 2, lh = (rh + 1) / 2;
         beginTimer();
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (deferred) {
+            glBindFramebuffer(GL_FRAMEBUFFER, gbufFbo_);
+            glViewport(0, 0, rw, rh);
+            sceneUniforms(scene_[1], cam, basis, pos, rw, rh, time, cached);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, lightFbo_);
+            glViewport(0, 0, lw, lh);
+            sceneUniforms(scene_[2], cam, basis, pos, rw, rh, time, cached);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+            glViewport(0, 0, rw, rh);
+            sceneUniforms(scene_[3], cam, basis, pos, rw, rh, time, cached);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        } else {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+            glViewport(0, 0, rw, rh);
+            sceneUniforms(scene_[0], cam, basis, pos, rw, rh, time, cached);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
         endTimer();
 
         // Present pass.
@@ -204,7 +206,11 @@ public:
 private:
     static constexpr int kQueries = 4;
     static constexpr float kMinScaleOfCap = 0.35f; // adaptive floor: keep frame rate over sharpness
-    GLuint scene_ = 0, present_ = 0, bake_ = 0, vao_ = 0;
+    GLuint scene_[4] = {}; // by PASS: 0 single, 1 geometry, 2 lighting, 3 compose
+    GLuint present_ = 0, bake_ = 0, vao_ = 0;
+    // Deferred targets: G-buffer (hit, normal) at the scene size, light at half.
+    GLuint gbufFbo_ = 0, geomTex_ = 0, normalTex_ = 0, lightFbo_ = 0, lightTex_ = 0;
+    bool gbufOk_ = false;
     // Slice cache.
     GLuint cacheTex_ = 0, cacheFbo_ = 0, bakeQuery_ = 0;
     int cacheRes_ = 0;      // texture size
@@ -351,8 +357,14 @@ private:
         bool timed = syncTiming && bakeQuery_;
         if (timed) glBeginQuery(GL_TIME_ELAPSED, bakeQuery_);
 #endif
-        for (int z = 0; z < cacheTexels_; ++z) {
-            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, cacheTex_, 0, z);
+        // Four layers per draw, one per colour attachment (all sizes are
+        // multiples of 4): fewer, fuller draws.
+        const GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2,
+                                GL_COLOR_ATTACHMENT3};
+        glDrawBuffers(4, bufs);
+        for (int z = 0; z < cacheTexels_; z += 4) {
+            for (int k = 0; k < 4; ++k)
+                glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + k, cacheTex_, 0, z + k);
             glUniform1f(layerLoc, float(z));
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
@@ -368,10 +380,50 @@ private:
         return true;
     }
 
+    // Binds program p with everything a scene pass may read.
+    void sceneUniforms(GLuint p, const Camera4D& cam, const glm::mat4& basis, const glm::vec4& pos, int rw, int rh,
+                       float time, bool cached) {
+        glUseProgram(p);
+        uniform(p, "uResolution", glm::vec2(rw, rh));
+        glUniform4fv(loc(p, "uCameraPos"), 1, glm::value_ptr(pos));
+        glUniformMatrix4fv(loc(p, "uCameraBasis"), 1, GL_FALSE, glm::value_ptr(basis));
+        glUniform1f(loc(p, "uTanHalfFov"), std::tan(cam.fovY * 0.5f));
+        glUniform1f(loc(p, "uTime"), time);
+        glUniform4fv(loc(p, "uSunDir"), 1, glm::value_ptr(sunDir));
+        glUniform1f(loc(p, "uFacet"), facet);
+        glUniform1f(loc(p, "uFogStart"), cam.distance + 5.0f);
+        uploadFruit(p, pos, basis[3]);
+        glUniform4fv(loc(p, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
+        glUniform4fv(loc(p, "uPreviewData"), 1, glm::value_ptr(previewData_));
+        glUniform1i(loc(p, "uCacheMode"), cached ? 1 : 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_3D, cacheTex_);
+        glUniform1i(loc(p, "uCache"), 1);
+        glUniform4fv(loc(p, "uCacheOrigin"), 1, glm::value_ptr(cacheOrigin_));
+        glUniformMatrix4fv(loc(p, "uCacheBasis"), 1, GL_FALSE, glm::value_ptr(cacheBasis_));
+        glUniform1f(loc(p, "uCacheSize"), cacheSize_);
+        glUniform1f(loc(p, "uCacheVoxel"), cacheVoxel_);
+        // Texture coordinates of the baked corner: scale, and the clamp that
+        // keeps filtering off texels outside it.
+        float span = float(cacheTexels_) / float(std::max(cacheRes_, 1));
+        glUniform3f(loc(p, "uCacheUV"), span, 0.5f / std::max(cacheRes_, 1),
+                    (cacheTexels_ - 0.5f) / std::max(cacheRes_, 1));
+        // G-buffer inputs only for the passes that read them (never bound
+        // while being drawn into).
+        bool reads = p == scene_[2] || p == scene_[3];
+        GLuint inputs[3] = {reads ? geomTex_ : 0, reads ? normalTex_ : 0, p == scene_[3] ? lightTex_ : 0};
+        const char* names[3] = {"uGeom", "uNormal", "uLight"};
+        for (int k = 0; k < 3; ++k) {
+            glActiveTexture(GL_TEXTURE2 + k);
+            glBindTexture(GL_TEXTURE_2D, inputs[k]);
+            glUniform1i(loc(p, names[k]), 2 + k);
+        }
+    }
+
     static GLint loc(GLuint p, const char* name) { return glGetUniformLocation(p, name); }
     static void uniform(GLuint p, const char* name, glm::vec2 v) { glUniform2f(loc(p, name), v.x, v.y); }
 
-    void uploadFruit(const glm::vec4& camPos, const glm::vec4& normal) {
+    void uploadFruit(GLuint prog, const glm::vec4& camPos, const glm::vec4& normal) {
         // Rays never leave the slice, so a fruit is visible only if its glome
         // crosses the slice hyperplane; fruit within kHintRange beyond that
         // become depth hints. Nearest (to the camera, then the slice) first.
@@ -393,10 +445,10 @@ private:
             centers[i] = f.center;
             data[i] = glm::vec4(f.radius, float(f.type), f.flash, float(f.id + 1));
         }
-        glUniform1i(loc(scene_, "uFruitCount"), n);
+        glUniform1i(loc(prog, "uFruitCount"), n);
         if (n > 0) {
-            glUniform4fv(loc(scene_, "uFruitCenters"), n, glm::value_ptr(centers[0]));
-            glUniform4fv(loc(scene_, "uFruitData"), n, glm::value_ptr(data[0]));
+            glUniform4fv(loc(prog, "uFruitCenters"), n, glm::value_ptr(centers[0]));
+            glUniform4fv(loc(prog, "uFruitData"), n, glm::value_ptr(data[0]));
         }
 
         int h = std::min<int>(int(nearby.size()), kMaxHints);
@@ -409,10 +461,10 @@ private:
             float strength = 1.0f - gap / kHintRange;
             hd[i] = glm::vec4(f.radius, float(f.type), off, strength * strength);
         }
-        glUniform1i(loc(scene_, "uHintCount"), h);
+        glUniform1i(loc(prog, "uHintCount"), h);
         if (h > 0) {
-            glUniform4fv(loc(scene_, "uHintCenters"), h, glm::value_ptr(hc[0]));
-            glUniform4fv(loc(scene_, "uHintData"), h, glm::value_ptr(hd[0]));
+            glUniform4fv(loc(prog, "uHintCenters"), h, glm::value_ptr(hc[0]));
+            glUniform4fv(loc(prog, "uHintData"), h, glm::value_ptr(hd[0]));
         }
     }
 
@@ -429,6 +481,34 @@ private:
         glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_, 0);
         fboW_ = w; fboH_ = h;
+
+        // Deferred targets, read with texelFetch only.
+        if (!gbufFbo_) {
+            glGenFramebuffers(1, &gbufFbo_);
+            glGenFramebuffers(1, &lightFbo_);
+            glGenTextures(1, &geomTex_);
+            glGenTextures(1, &normalTex_);
+            glGenTextures(1, &lightTex_);
+        }
+        auto alloc = [](GLuint tex, GLenum fmt, int tw, int th) {
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, fmt, tw, th, 0, GL_RGBA, GL_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        };
+        alloc(geomTex_, GL_RGBA32F, w, h);
+        alloc(normalTex_, GL_RGBA16F, w, h);
+        alloc(lightTex_, GL_RGBA16F, (w + 1) / 2, (h + 1) / 2);
+        glBindFramebuffer(GL_FRAMEBUFFER, gbufFbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, geomTex_, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, normalTex_, 0);
+        const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+        glDrawBuffers(2, bufs);
+        gbufOk_ = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        glBindFramebuffer(GL_FRAMEBUFFER, lightFbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lightTex_, 0);
+        gbufOk_ = gbufOk_ && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        if (!gbufOk_) std::cerr << "Float render targets unsupported; scene in one pass\n";
     }
 
     static std::string readFile(const std::string& rel) {
