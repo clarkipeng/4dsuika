@@ -3,8 +3,11 @@
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdlib>
 
+#include "camera4d.hpp"
 #include "globals.h"
 
 #include "fruit.hpp"
@@ -25,6 +28,8 @@ public:
     bool   growing; // used to prevent artificial velocity on first update
     float  flash;
     Fruit fruit;
+    Rot4   orientation; // local fruit frame -> world frame
+    std::array<float, 6> angular_velocity; // xy, xz, xw, yz, yw, zw radians/second
     // constructor(s)
     PhysicsObject()
         : position(0.0f),
@@ -36,15 +41,27 @@ public:
           hidden(true),
           growing(false),
           flash(0.0f),
-          fruit(Fruit::CHERRY)
+          fruit(Fruit::CHERRY),
+          orientation(),
+          angular_velocity{}
     {
     }
-    PhysicsObject(glm::vec4 pos, Fruit f, bool dyn, bool hid): position(pos),last_position(pos), fruit(f), acceleration(0.0f, 0.0f, 0.0f, 0.0f),  dynamic(dyn), hidden(hid)
+    PhysicsObject(glm::vec4 pos, Fruit f, bool dyn, bool hid)
+        : position(pos),
+          last_position(pos),
+          acceleration(0.0f, 0.0f, 0.0f, 0.0f),
+          target_radius(0.0f),
+          radius(0.0f),
+          dynamic(dyn),
+          hidden(hid),
+          growing(true),
+          flash(0.0f),
+          fruit(f),
+          orientation(),
+          angular_velocity{}
     {
-        radius = 0;
         target_radius = FruitManager::getFruitProperties(fruit).radius;
-        growing=true;
-        flash = 0.0f;
+        randomizeOrientation();
     }
 
     RayInter testRay(float w, const glm::vec3& rayOrigin, const glm::vec3& rayDirection){
@@ -117,6 +134,7 @@ public:
         position                = new_position;
         acceleration = {0.0f, 0.0f, 0.0f, 0.0f};
         flash = std::max(0.0f, flash - dt * 2.4f);
+        integrateSpin(dt);
     }
 
     void stop()
@@ -137,6 +155,76 @@ public:
     glm::vec4 getVelocity() const
     {
         return position - last_position;
+    }
+
+    glm::mat4 worldToLocalFrame() const
+    {
+        return glm::transpose(orientation.matrix());
+    }
+
+    void randomizeOrientation()
+    {
+        orientation = Rot4{};
+        const Axis4 planes[6][2] = {
+            {AX_X, AX_Y}, {AX_X, AX_Z}, {AX_X, AX_W},
+            {AX_Y, AX_Z}, {AX_Y, AX_W}, {AX_Z, AX_W}
+        };
+        for (int i = 0; i < 6; ++i) {
+            float u = float(std::rand()) / float(RAND_MAX);
+            float angle = (u * 2.0f - 1.0f) * 3.14159265359f;
+            orientation = Rot4::plane(planes[i][0], planes[i][1], angle) * orientation;
+        }
+        orientation.normalize();
+    }
+
+    void addRollingSpin(glm::vec4 contact_normal, glm::vec4 tangent_velocity, float strength = 1.0f)
+    {
+        if (hidden || radius <= EPS) return;
+        float n_len = glm::length(contact_normal);
+        if (n_len <= EPS) return;
+        contact_normal /= n_len;
+        tangent_velocity -= contact_normal * glm::dot(tangent_velocity, contact_normal);
+        if (glm::dot(tangent_velocity, tangent_velocity) <= EPS * EPS) return;
+
+        const float k = strength / std::max(radius, 0.08f);
+        angular_velocity[0] += (contact_normal.x * tangent_velocity.y - contact_normal.y * tangent_velocity.x) * k;
+        angular_velocity[1] += (contact_normal.x * tangent_velocity.z - contact_normal.z * tangent_velocity.x) * k;
+        angular_velocity[2] += (contact_normal.x * tangent_velocity.w - contact_normal.w * tangent_velocity.x) * k;
+        angular_velocity[3] += (contact_normal.y * tangent_velocity.z - contact_normal.z * tangent_velocity.y) * k;
+        angular_velocity[4] += (contact_normal.y * tangent_velocity.w - contact_normal.w * tangent_velocity.y) * k;
+        angular_velocity[5] += (contact_normal.z * tangent_velocity.w - contact_normal.w * tangent_velocity.z) * k;
+        clampSpin();
+    }
+
+    void integrateSpin(float dt)
+    {
+        const Axis4 planes[6][2] = {
+            {AX_X, AX_Y}, {AX_X, AX_Z}, {AX_X, AX_W},
+            {AX_Y, AX_Z}, {AX_Y, AX_W}, {AX_Z, AX_W}
+        };
+        bool changed = false;
+        for (int i = 0; i < 6; ++i) {
+            float angle = angular_velocity[i] * dt;
+            if (std::abs(angle) > 1e-5f) {
+                orientation = Rot4::plane(planes[i][0], planes[i][1], angle) * orientation;
+                changed = true;
+            }
+        }
+        if (changed) orientation.normalize();
+
+        const float damping = std::exp(-1.35f * dt);
+        for (float& w : angular_velocity) w *= damping;
+    }
+
+    void clampSpin()
+    {
+        float mag2 = 0.0f;
+        for (float w : angular_velocity) mag2 += w * w;
+        const float max_spin = 18.0f;
+        if (mag2 > max_spin * max_spin) {
+            float s = max_spin / std::sqrt(mag2);
+            for (float& w : angular_velocity) w *= s;
+        }
     }
 
     void addVelocity(glm::vec4 v)

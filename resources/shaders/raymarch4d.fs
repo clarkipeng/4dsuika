@@ -37,6 +37,7 @@ uniform vec4  uSunDir;
 uniform int   uFruitCount;
 uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, facet seed
+uniform mat4  uFruitWorldToLocal[MAX_FRUIT]; // rotates (p - centre) into the fruit frame
 uniform int   uHintCount;            // fruit just off the slice
 uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
 uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
@@ -113,16 +114,28 @@ float fruitLod(float r, float t, float pixel) {
     return smoothstep(6.0, 24.0, r / max(pixel * t, 1e-6));
 }
 
+vec4 fruitLocalPoint(int i, vec4 p) {
+    return uFruitWorldToLocal[i] * (p - uFruitCenters[i]);
+}
+
+vec4 fruitLocalVector(int i, vec4 v) {
+    return uFruitWorldToLocal[i] * v;
+}
+
+vec4 fruitWorldVector(int i, vec4 v) {
+    return transpose(uFruitWorldToLocal[i]) * v;
+}
+
 // Sphere-trace a fruit's own SDF between t0 and t1 (its bound glome). At
 // lod 0 the fruit is its physics glome, hit analytically.
-float fruitMarch(vec4 ro, vec4 rd, vec4 c, vec4 d, float t0, float t1, float lod) {
+float fruitMarch(vec4 ro, vec4 rd, vec4 d, float t0, float t1, float lod) {
     if (lod <= 0.0) {
-        float th = glomeHit(ro, rd, c, d.x);
+        float th = glomeHit(ro, rd, vec4(0.0), d.x);
         return th > 0.0 ? th : -1.0;
     }
     float t = t0;
     for (int k = 0; k < 24; ++k) {
-        float h = fruitSDF(ro + rd * t - c, d.x, d.y, lod);
+        float h = fruitSDF(ro + rd * t, d.x, d.y, lod);
         COST_FRUIT(1);
         if (h < 0.002 * d.x) return t;
         t += h;
@@ -131,7 +144,7 @@ float fruitMarch(vec4 ro, vec4 rd, vec4 c, vec4 d, float t0, float t1, float lod
     return -1.0;
 }
 
-vec4 fruitNormal(vec4 q, vec4 d, float lod) {
+vec4 fruitLocalNormal(vec4 q, vec4 d, float lod) {
     float h = 0.002 * d.x;
     const float s = 0.4472136;
     const vec4 k0 = vec4( 1.0,  1.0,  1.0, -s);
@@ -142,6 +155,10 @@ vec4 fruitNormal(vec4 q, vec4 d, float lod) {
     return normalize(k0 * fruitSDF(q + h * k0, d.x, d.y, lod) + k1 * fruitSDF(q + h * k1, d.x, d.y, lod) +
                      k2 * fruitSDF(q + h * k2, d.x, d.y, lod) + k3 * fruitSDF(q + h * k3, d.x, d.y, lod) +
                      k4 * fruitSDF(q + h * k4, d.x, d.y, lod));
+}
+
+vec4 fruitWorldNormal(int i, vec4 q, vec4 d, float lod) {
+    return normalize(fruitWorldVector(i, fruitLocalNormal(q, d, lod)));
 }
 
 // Nearest positive hit of ray (ro, rd) with the glome |p - c| = r.
@@ -492,7 +509,9 @@ Hit traceScene(vec4 ro, vec4 rd) {
         float t0, t1;
         if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= tHit) continue;
         float lod = fruitLod(d.x, t0, pixel);
-        float t = fruitMarch(ro, rd, uFruitCenters[i], d, t0, min(t1, tHit), lod);
+        vec4 localRo = fruitLocalPoint(i, ro);
+        vec4 localRd = fruitLocalVector(i, rd);
+        float t = fruitMarch(localRo, localRd, d, t0, min(t1, tHit), lod);
         if (t > 0.0 && t < tHit) { tHit = t; fruit = i; fruitLodHit = lod; }
     }
 
@@ -508,11 +527,12 @@ Hit traceScene(vec4 ro, vec4 rd) {
     if (fruit >= 0 && tHit <= hw.x) {
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
-        vec4 q = ro + rd * tHit - c;
+        vec4 p = ro + rd * tHit;
+        vec4 q = fruitLocalPoint(fruit, p);
         h.t = tHit;
         h.kind = -float(fruit + 1);
         h.lod = fruitLodHit;
-        h.ns = fruitLodHit > 0.0 ? fruitNormal(q, d, fruitLodHit) : normalize(q);
+        h.ns = fruitLodHit > 0.0 ? fruitWorldNormal(fruit, q, d, fruitLodHit) : normalize(p - c);
     } else if (hw.y > 0.0) {
         h.t = hw.x;
         h.kind = hw.y;
@@ -554,13 +574,14 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         vec4 p = ro + rd * h.t;
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
-        vec4 q = p - c;
-        vec4 body = normalize(q); // the physics glome's normal
+        vec4 qWorld = p - c;
+        vec4 q = fruitLocalPoint(fruit, p);
+        vec4 body = normalize(qWorld); // the physics glome's normal
         vec4 ns = h.ns;
         vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
         // A little self-light keeps each fruit's colour identifiable even
         // when it is back-lit by the low sun.
-        vec3 albedo = fruitAlbedo(q, ns, d.x, d.y, d.w, h.lod);
+        vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(fruit, ns)), d.x, d.y, d.w, h.lod);
         // Plus a soft fill from the viewer, so the side we see is never just
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
@@ -582,10 +603,12 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         if (h.behind > 0.0) {
             int i = int(h.behind) - 1;
             vec4 d = uFruitData[i];
-            vec4 q = ro + rd * h.behindT - uFruitCenters[i];
+            vec4 p = ro + rd * h.behindT;
+            vec4 q = fruitLocalPoint(i, p);
             vec4 fn = normalize(q);
+            vec4 fnWorld = normalize(fruitWorldVector(i, fn));
             vec3 albedo = fruitAlbedo(q, fn, d.x, d.y, d.w, 0.0);
-            float lit = 0.35 + 0.65 * max(dot(fn, uSunDir), 0.0) + 0.3 * max(dot(fn, -rd), 0.0);
+            float lit = 0.35 + 0.65 * max(dot(fnWorld, uSunDir), 0.0) + 0.3 * max(dot(fnWorld, -rd), 0.0);
             vec3 seen = albedo * lit * vec3(1.0, 0.9, 0.8) * 1.6;
             float rim = pow(1.0 - abs(dot(h.ns, rd)), 2.0);
             col = mix(seen, col, 0.35 + 0.5 * rim);

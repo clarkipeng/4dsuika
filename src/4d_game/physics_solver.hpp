@@ -69,16 +69,29 @@ struct PhysicSolver
         const float combined_radius = obj_1.radius + obj_2.radius;
 
         if (dist2 < combined_radius * combined_radius && dist2 > EPS) {
+            const float dist = std::sqrt(dist2);
+            const glm::vec4 normal = o2_o1 / dist;
+            const glm::vec4 vel_1 = obj_1.getVelocity();
+            const glm::vec4 vel_2 = obj_2.getVelocity();
+            const glm::vec4 rel_velocity = vel_1 - vel_2;
+            const glm::vec4 tangent_velocity = rel_velocity - normal * glm::dot(rel_velocity, normal);
+
             if (obj_1.fruit == obj_2.fruit){// && atom_1_idx<atom_2_idx
                 // Simple merge - preserve velocity and position smoothly
-                glm::vec4 vel_1 = obj_1.position - obj_1.last_position;
-                glm::vec4 vel_2 = obj_2.position - obj_2.last_position;
+                Rot4 merged_orientation = Rot4::slerp(obj_1.orientation, obj_2.orientation, 0.5f);
+                std::array<float, 6> merged_spin{};
+                for (int k = 0; k < 6; ++k) {
+                    merged_spin[k] = (obj_1.angular_velocity[k] + obj_2.angular_velocity[k]) * 0.5f;
+                }
                 
                 total_points += FruitManager::getFruitProperties(obj_2.fruit).merge_points;
                 just_merged++;
                 removeObject(atom_2_idx);
                 obj_1.setPosition((obj_1.position + obj_2.position) / 2.0f);
                 obj_1.upgrade_fruit();
+                obj_1.orientation = merged_orientation;
+                obj_1.angular_velocity = merged_spin;
+                obj_1.addRollingSpin(normal, tangent_velocity, 0.45f);
                 obj_1.flash = 1.0f;
                 
                 // Preserve momentum but dampen it slightly
@@ -87,7 +100,6 @@ struct PhysicSolver
                 return;
             }
 
-            const float dist = std::sqrt(dist2);
             const float penetration = (combined_radius - dist);// / combined_radius;
 
             if (penetration > 0.0f) {
@@ -96,6 +108,8 @@ struct PhysicSolver
 
                 obj_1.position += o2_o1 * (RESPONSE_COEF * penetration * w2) / ((w1+w2)*dist);
                 obj_2.position -= o2_o1 * (RESPONSE_COEF * penetration * w1) / ((w1+w2)*dist);
+                if (obj_1.dynamic) obj_1.addRollingSpin(normal, tangent_velocity, 0.65f);
+                if (obj_2.dynamic) obj_2.addRollingSpin(-normal, -tangent_velocity, 0.65f);
 
                 // if (obj_1.just_spawned || obj_2.just_spawned){
                 //     obj_1.last_position = obj_1.position;
@@ -209,7 +223,15 @@ struct PhysicSolver
             thread_pool.dispatch(static_cast<uint32_t>(objects.size()), [&](uint32_t start, uint32_t end) {
                 for (uint32_t i = start; i < end; ++i) {
                     if (!has_obj[i]) continue;
+                    const glm::vec4 before = objects[i].position;
+                    const glm::vec4 velocity = objects[i].getVelocity();
                     bound_obj->checkSphere(objects[i]);
+                    const glm::vec4 push = objects[i].position - before;
+                    if (glm::dot(push, push) > EPS * EPS) {
+                        glm::vec4 normal = glm::normalize(push);
+                        glm::vec4 tangent = velocity - normal * glm::dot(velocity, normal);
+                        objects[i].addRollingSpin(normal, tangent, 1.0f);
+                    }
                 }
             });
         }
