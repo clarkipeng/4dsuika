@@ -26,6 +26,7 @@ uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
 
 #include "world4d.glsl"
+#include "fruit4d.glsl"
 
 // QUALITY 0..3 (Low, Medium, High, Ultra) is defined by the host.
 #ifndef QUALITY
