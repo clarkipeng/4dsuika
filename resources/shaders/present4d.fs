@@ -5,6 +5,7 @@ in vec2 vUV;
 out vec4 fragColor;
 
 uniform sampler2D uScene;
+uniform vec2 uUVScale;  // part of the target the scene filled
 uniform mat4 uCameraBasis;
 uniform float uDim;    // darken behind menus (indicator hidden too)
 uniform vec4 uGizmo;   // centre x, y (pixels, origin bottom-left), size, slice offset / max
@@ -57,7 +58,7 @@ vec4 gizmo(vec2 px) {
 }
 
 void main() {
-    vec3 col = texture(uScene, vUV).rgb * (1.0 - uDim);
+    vec3 col = texture(uScene, vUV * uUVScale).rgb * (1.0 - uDim);
     vec4 g = uDim > 0.0 ? vec4(0.0) : gizmo(gl_FragCoord.xy);
     fragColor = vec4(mix(col, g.rgb, g.a), 1.0);
 }

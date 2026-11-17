@@ -27,8 +27,21 @@ uniform float uFacet;                // low-poly facet strength, 0 = smooth
 
 #include "world4d.glsl"
 
+// QUALITY 0..3 (Low, Medium, High, Ultra) is defined by the host.
+#ifndef QUALITY
+#define QUALITY 2
+#endif
+#if QUALITY == 0
+const int MAX_STEPS = 72;  const int SHADOW_STEPS = 16; const int AO_SAMPLES = 2;
+#elif QUALITY == 1
+const int MAX_STEPS = 96;  const int SHADOW_STEPS = 28; const int AO_SAMPLES = 3;
+#elif QUALITY == 2
+const int MAX_STEPS = 128; const int SHADOW_STEPS = 40; const int AO_SAMPLES = 4;
+#else
+const int MAX_STEPS = 160; const int SHADOW_STEPS = 64; const int AO_SAMPLES = 5;
+#endif
+
 const float FAR = 80.0;
-const int   MAX_STEPS = 128;
 
 const float MAT_FRUIT = 3.0;
 
@@ -60,13 +73,23 @@ float glomeHit(vec4 ro, vec4 rd, vec4 c, float r) {
     return t > 0.0 ? t : (-b + h > 0.0 ? 0.0 : -1.0);
 }
 
-float fruitSDF(vec4 p) {
-    float d = FAR;
-    for (int i = 0; i < MAX_FRUIT; ++i) {
-        if (i >= uFruitCount) break;
-        d = min(d, length(p - uFruitCenters[i]) - uFruitData[i].x);
-    }
-    return d;
+// Soft shadow cast by a glome on a ray (analytic; dot products only, so it
+// holds in 4D as in 3D).
+float glomeShadow(vec4 ro, vec4 rd, vec4 c, float r) {
+    vec4 oc = ro - c;
+    float b = dot(oc, rd);
+    float h = b * b - (dot(oc, oc) - r * r);
+    float d = sqrt(max(0.0, r * r - h)) - r;
+    float t = -b - sqrt(max(h, 0.0));
+    return t < 0.0 ? 1.0 : smoothstep(0.0, 1.0, 2.5 * 10.0 * d / t);
+}
+
+// Ambient light a glome blocks from a surface point (analytic approximation).
+float glomeOcclusion(vec4 p, vec4 n, vec4 c, float r) {
+    vec4 di = c - p;
+    float l = length(di);
+    float h = l / r;
+    return max(0.0, dot(n, di / l)) / (h * h);
 }
 
 // ---------------------------------------------------------------- facets
@@ -99,7 +122,6 @@ vec4 facetNormal(vec4 n, float density) {
 
 // ---------------------------------------------------------------- scene
 
-float sceneSDF(vec4 p) { return min(worldSDF(p).x, fruitSDF(p)); }
 
 // Gradient from the five vertices of a regular 5-cell (4D tetrahedron trick).
 vec4 worldNormal(vec4 p) {
@@ -115,14 +137,19 @@ vec4 worldNormal(vec4 p) {
                      k4 * worldSDF(p + h * k4).x);
 }
 
-// Soft shadow marched through the 4D scene towards the sun.
+// Soft shadow towards the sun: the world is marched in 4D, fruit are analytic.
 float softShadow(vec4 ro, vec4 rd) {
     float res = 1.0;
+    for (int i = 0; i < MAX_FRUIT; ++i) {
+        if (i >= uFruitCount) break;
+        res = min(res, glomeShadow(ro, rd, uFruitCenters[i], uFruitData[i].x));
+    }
     float t = 0.05;
-    for (int i = 0; i < 48; ++i) {
-        float h = sceneSDF(ro + rd * t);
+    for (int i = 0; i < SHADOW_STEPS; ++i) {
+        if (res < 0.01) break;
+        float h = worldSDF(ro + rd * t).x;
         res = min(res, 10.0 * h / t);
-        t += clamp(h, 0.03, 0.6);
+        t += clamp(h, 0.03, 2.5);
         if (res < 0.01 || t > 25.0) break;
     }
     return clamp(res, 0.0, 1.0);
@@ -130,12 +157,17 @@ float softShadow(vec4 ro, vec4 rd) {
 
 float ambientOcclusion(vec4 p, vec4 n) {
     float occ = 0.0, w = 1.0;
-    for (int i = 1; i <= 5; ++i) {
-        float h = 0.06 * float(i * i);
-        occ += (h - sceneSDF(p + n * h)) * w;
+    for (int i = 1; i <= AO_SAMPLES; ++i) {
+        float h = 0.3 * float(i * i) / float(AO_SAMPLES * AO_SAMPLES) * 5.0;
+        occ += (h - worldSDF(p + n * h).x) * w;
         w *= 0.6;
     }
-    return clamp(1.0 - 1.4 * occ, 0.0, 1.0);
+    float ao = clamp(1.0 - 1.4 * occ, 0.0, 1.0);
+    for (int i = 0; i < MAX_FRUIT; ++i) {
+        if (i >= uFruitCount) break;
+        ao *= 1.0 - clamp(glomeOcclusion(p, n, uFruitCenters[i], uFruitData[i].x), 0.0, 1.0);
+    }
+    return ao;
 }
 
 // Normal used for lighting: smooth normal ns bent towards its facet normal.

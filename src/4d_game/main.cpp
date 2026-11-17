@@ -54,6 +54,9 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --frames N             frames simulated before the capture (default 90, more with --demo)
 //   --scale s              render scale (fraction of output resolution)
 //   --facet f              low-poly facet strength (0 = smooth)
+//   --quality q            low | medium | high | ultra (default high)
+//   --adaptive             keep adaptive resolution on (otherwise fixed --scale)
+//   --perf                 show the F3 performance overlay
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 struct Options {
     std::string screenshot;
@@ -67,6 +70,9 @@ struct Options {
     int frames = 90;
     float scale = 1.0f;
     float facet = -1.0f;
+    std::string quality = "high";
+    bool adaptive = false;
+    bool perf = false;
     float cursorX = -1.0f, cursorY = -1.0f;
     bool headless() const { return !screenshot.empty() || bench > 0; }
 };
@@ -87,6 +93,9 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--frames") o.frames = std::atoi(next().c_str());
         else if (a == "--scale") o.scale = std::atof(next().c_str());
         else if (a == "--facet") o.facet = std::atof(next().c_str());
+        else if (a == "--quality") o.quality = next();
+        else if (a == "--adaptive") o.adaptive = true;
+        else if (a == "--perf") o.perf = true;
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
         else std::cerr << "Unknown option " << a << std::endl;
     }
@@ -130,7 +139,14 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.FbHeight = o.height;
     game.state.m_xpos = o.cursorX >= 0 ? o.cursorX : o.width * 0.5f;
     game.state.m_ypos = o.cursorY >= 0 ? o.cursorY : o.height * 0.55f;
-    game.renderer.renderScale = o.scale;
+    Quality q = o.quality == "low" ? Quality::Low : o.quality == "medium" ? Quality::Medium
+              : o.quality == "ultra" ? Quality::Ultra : Quality::High;
+    if (q != game.renderer.quality()) game.renderer.setQuality(q);
+    // Headless runs render at a fixed scale (of the preset's cap) so results
+    // are reproducible; adaptive resolution is for live play.
+    game.renderer.adaptive = o.adaptive;
+    game.showPerf = o.perf;
+    game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.State = o.state == "menu" ? GAME_MENU : GAME_ACTIVE;
     applyCameraOptions(o, game.state.cam);
@@ -152,13 +168,24 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (o.state == "over") game.State = GAME_OVER;
 
     if (o.bench > 0) {
+        // GPU time of the scene pass from timer queries (the number that
+        // decides 60 fps), plus wall time per whole frame for reference.
+        game.renderer.syncTiming = true;
         frame(FIXED_TIMESTEP);
         glFinish();
+        std::vector<float> gpu;
         auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < o.bench; ++i) frame(0.0f);
+        for (int i = 0; i < o.bench; ++i) {
+            frame(0.0f);
+            gpu.push_back(game.renderer.lastGpuMs());
+        }
         glFinish();
-        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / o.bench;
-        printf("bench %dx%d scale %.2f: %.2f ms/frame (%.1f fps)\n", o.width, o.height, o.scale, ms, 1000.0 / ms);
+        double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / o.bench;
+        std::sort(gpu.begin(), gpu.end());
+        float median = gpu[gpu.size() / 2], p95 = gpu[std::min(gpu.size() - 1, gpu.size() * 95 / 100)];
+        printf("bench %dx%d %s scale %.2f: scene GPU median %.2f ms, p95 %.2f ms; frame wall %.2f ms (%.0f fps)\n",
+               o.width, o.height, qualityName(game.renderer.quality()), game.renderer.renderScale,
+               median, p95, wall, 1000.0 / wall);
     }
     if (!o.screenshot.empty()) {
         frame(0.0f);
@@ -253,6 +280,7 @@ int main(int argc, char* argv[])
                 fixedUpdateAccumulator -= FIXED_TIMESTEP;
             }
             game.Update(deltaTime);
+            game.renderer.reportFrameTime(deltaTime * 1000.0f);
 
             glfwGetFramebufferSize(window, &game.FbWidth, &game.FbHeight);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);

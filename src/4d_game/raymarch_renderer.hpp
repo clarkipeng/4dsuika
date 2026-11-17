@@ -1,8 +1,11 @@
 #pragma once
 // The one renderer: raymarches the 4D SDF scene (resources/shaders/raymarch4d.fs
 // with world4d.glsl pasted in) into an offscreen target at `renderScale` of
-// the window, then a present pass upscales it and draws the slice indicator.
+// the output, then a present pass upscales it and draws the slice indicator.
+// Resolution adapts to the measured GPU time; a quality preset caps it and
+// sets the march budgets.
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -23,23 +26,66 @@ struct FruitInstance {
     float flash = 0.0f; // 0..1 highlight, e.g. just merged
 };
 
+enum class Quality { Low = 0, Medium = 1, High = 2, Ultra = 3 };
+
+inline const char* qualityName(Quality q) {
+    static const char* names[] = {"Low", "Medium", "High", "Ultra"};
+    return names[int(q)];
+}
+
 class RaymarchRenderer {
 public:
     static constexpr int kMaxFruit = 64; // with hints, fits WebGL2's 224-vec4 minimum
     static constexpr int kMaxHints = 16;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
 
-    float renderScale = 1.0f; // fraction of window resolution the scene is marched at
     float dim = 0.0f;         // darken the scene behind menus, 0..1
     float facet = 0.85f;      // low-poly facet strength, 0 = smooth
     glm::vec4 sunDir = glm::normalize(glm::vec4(-0.55f, 0.32f, -0.75f, 0.18f));
 
+    // Resolution control. The scene is marched at `renderScale` of the
+    // output, capped by the quality preset's pixel budget. With `adaptive`,
+    // the scale follows the measured GPU time of the scene pass towards
+    // `targetMs`, between half the cap and the cap.
+    bool adaptive = true;
+    float targetMs = 11.0f;   // scene pass budget inside a 16.7 ms frame
+    float renderScale = 1.0f; // current scale (set directly when not adaptive)
+    bool syncTiming = false;  // wait for each timing result (benchmarks)
+
     bool init() {
-        scene_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs");
-        present_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/present4d.fs");
+        present_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/present4d.fs", "");
         glGenVertexArrays(1, &vao_);
+#ifndef __EMSCRIPTEN__
+        glGenQueries(kQueries, queries_);
+#endif
+        setQuality(quality_);
         return scene_ && present_;
     }
+
+    Quality quality() const { return quality_; }
+    void setQuality(Quality q) {
+        quality_ = q;
+        std::string defs = "#define QUALITY " + std::to_string(int(q)) + "\n";
+        GLuint p = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs", defs);
+        if (p) {
+            if (scene_) glDeleteProgram(scene_);
+            scene_ = p;
+        }
+        renderScale = 1.0f; // re-clamped against the new cap next frame
+    }
+
+    // Largest scale the preset allows at this output size.
+    float maxScale(int width, int height) const {
+        static const float budget[] = {960.0f * 540.0f, 1280.0f * 720.0f, 1920.0f * 1080.0f, 1e12f};
+        return std::min(1.0f, std::sqrt(budget[int(quality_)] / float(std::max(width * height, 1))));
+    }
+
+    // Smoothed GPU time of the scene pass in ms (0 when timers are unavailable).
+    float gpuMs() const { return gpuMs_; }
+    float lastGpuMs() const { return lastGpuMs_; }
+
+    // Without GPU timers (WebGL), adapt from whole-frame time instead.
+    void reportFrameTime(float ms) { frameMs_ += (ms - frameMs_) * 0.1f; }
 
     // Fruit for this frame, in world space. Only fruit that cross the
     // camera's slice are visible; they are the ones uploaded.
@@ -54,9 +100,15 @@ public:
     void draw(const Camera4D& cam, int width, int height, float time) {
         GLint target = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
-        int rw = std::max(1, int(width * renderScale + 0.5f));
-        int rh = std::max(1, int(height * renderScale + 0.5f));
-        ensureTarget(rw, rh);
+        float cap = maxScale(width, height);
+        pollTimers();
+        if (adaptive) adapt(cap);
+        renderScale = std::clamp(renderScale, 0.25f, cap);
+        // The target is sized for the cap; smaller scales use a sub-rectangle,
+        // so changing scale never reallocates.
+        ensureTarget(std::max(1, int(std::ceil(width * cap))), std::max(1, int(std::ceil(height * cap))));
+        int rw = std::clamp(int(width * renderScale + 0.5f), 1, fboW_);
+        int rh = std::clamp(int(height * renderScale + 0.5f), 1, fboH_);
 
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
@@ -78,7 +130,9 @@ public:
         uploadFruit(pos, basis[3]);
         glUniform4fv(loc(scene_, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
         glUniform4fv(loc(scene_, "uPreviewData"), 1, glm::value_ptr(previewData_));
+        beginTimer();
         glDrawArrays(GL_TRIANGLES, 0, 3);
+        endTimer();
 
         // Present pass.
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
@@ -87,6 +141,7 @@ public:
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, color_);
         glUniform1i(loc(present_, "uScene"), 0);
+        uniform(present_, "uUVScale", glm::vec2(float(rw) / fboW_, float(rh) / fboH_));
         glUniformMatrix4fv(loc(present_, "uCameraBasis"), 1, GL_FALSE, glm::value_ptr(basis));
         float size = std::max(28.0f, height * 0.045f);
         glm::vec4 gizmo(size * 1.9f, size * 1.9f, size, cam.offset / Camera4D::kOffsetMax);
@@ -99,11 +154,62 @@ public:
     }
 
 private:
+    static constexpr int kQueries = 4;
     GLuint scene_ = 0, present_ = 0, vao_ = 0;
     GLuint fbo_ = 0, color_ = 0;
     int fboW_ = 0, fboH_ = 0;
+    Quality quality_ = Quality::High;
     std::vector<FruitInstance> fruit_;
     glm::vec4 previewCenter_{0.0f}, previewData_{0.0f};
+    GLuint queries_[kQueries] = {};
+    bool queryPending_[kQueries] = {};
+    int queryNext_ = 0;
+    float gpuMs_ = 0.0f, lastGpuMs_ = 0.0f, frameMs_ = 0.0f;
+
+    void beginTimer() {
+#ifndef __EMSCRIPTEN__
+        if (queryPending_[queryNext_]) return; // slot still in flight: skip timing this frame
+        glBeginQuery(GL_TIME_ELAPSED, queries_[queryNext_]);
+#endif
+    }
+    void endTimer() {
+#ifndef __EMSCRIPTEN__
+        if (queryPending_[queryNext_]) return;
+        glEndQuery(GL_TIME_ELAPSED);
+        queryPending_[queryNext_] = true;
+        if (syncTiming) pollTimers(true);
+        queryNext_ = (queryNext_ + 1) % kQueries;
+#endif
+    }
+    void pollTimers(bool wait = false) {
+#ifndef __EMSCRIPTEN__
+        for (int i = 0; i < kQueries; ++i) {
+            if (!queryPending_[i]) continue;
+            GLint ready = 0;
+            if (!wait) glGetQueryObjectiv(queries_[i], GL_QUERY_RESULT_AVAILABLE, &ready);
+            if (!wait && !ready) continue;
+            GLuint64 ns = 0;
+            glGetQueryObjectui64v(queries_[i], GL_QUERY_RESULT, &ns);
+            queryPending_[i] = false;
+            lastGpuMs_ = float(ns) * 1e-6f;
+            gpuMs_ = gpuMs_ == 0.0f ? lastGpuMs_ : gpuMs_ + (lastGpuMs_ - gpuMs_) * 0.15f;
+        }
+#endif
+    }
+    // Cost scales with pixel count (scale squared), so step the scale by the
+    // square root of the time ratio, gently, in both directions.
+    void adapt(float cap) {
+        float ms = gpuMs_ > 0.0f ? gpuMs_ : 0.0f;
+        if (ms == 0.0f) {
+            // Frame-time fallback: vsync hides headroom, so only back off when
+            // frames run long and creep up slowly otherwise.
+            if (frameMs_ <= 0.0f) return;
+            ms = frameMs_ > 18.5f ? targetMs * frameMs_ / 16.7f : targetMs * 0.9f;
+        }
+        float ratio = std::sqrt(targetMs / std::max(ms, 0.1f));
+        float step = std::clamp(ratio, 0.97f, 1.01f);
+        renderScale = std::clamp(renderScale * step, cap * 0.5f, cap);
+    }
 
     static GLint loc(GLuint p, const char* name) { return glGetUniformLocation(p, name); }
     static void uniform(GLuint p, const char* name, glm::vec2 v) { glUniform2f(loc(p, name), v.x, v.y); }
@@ -154,6 +260,7 @@ private:
     }
 
     void ensureTarget(int w, int h) {
+        // Keep the buffer if it is already exactly this size.
         if (fbo_ && w == fboW_ && h == fboH_) return;
         if (!fbo_) { glGenFramebuffers(1, &fbo_); glGenTextures(1, &color_); }
         glBindTexture(GL_TEXTURE_2D, color_);
@@ -177,7 +284,7 @@ private:
 
     // Prepends the GLSL version for this platform and pastes `#include "x"`
     // lines with files from resources/shaders/.
-    static std::string preprocess(const std::string& src) {
+    static std::string preprocess(const std::string& src, const std::string& defines) {
 #ifdef __EMSCRIPTEN__
         std::string out = "#version 300 es\nprecision highp float;\nprecision highp int;\n";
 #else
@@ -185,6 +292,7 @@ private:
 #endif
         out += "#define MAX_FRUIT " + std::to_string(kMaxFruit) + "\n";
         out += "#define MAX_HINTS " + std::to_string(kMaxHints) + "\n";
+        out += defines;
         std::istringstream in(src);
         std::string line;
         while (std::getline(in, line)) {
@@ -216,9 +324,9 @@ private:
         return s;
     }
 
-    static GLuint buildProgram(const char* vsPath, const char* fsPath) {
-        GLuint vs = compile(GL_VERTEX_SHADER, preprocess(readFile(vsPath)), vsPath);
-        GLuint fs = compile(GL_FRAGMENT_SHADER, preprocess(readFile(fsPath)), fsPath);
+    static GLuint buildProgram(const char* vsPath, const char* fsPath, const std::string& defines) {
+        GLuint vs = compile(GL_VERTEX_SHADER, preprocess(readFile(vsPath), defines), vsPath);
+        GLuint fs = compile(GL_FRAGMENT_SHADER, preprocess(readFile(fsPath), defines), fsPath);
         if (!vs || !fs) return 0;
         GLuint p = glCreateProgram();
         glAttachShader(p, vs);
