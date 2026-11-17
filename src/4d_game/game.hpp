@@ -419,7 +419,8 @@ public:
 
     // ------------------------------------------------------------ rendering
 
-    void RenderScene(bool showPreview) {
+    void RenderScene(bool showPreview) { RenderScene(showPreview, state.cam); }
+    void RenderScene(bool showPreview, const Camera4D& cam) {
         std::vector<FruitInstance> fruit;
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
@@ -431,7 +432,7 @@ public:
         if (showPreview) hit = getPlacementMouse(state, boundary, *physics_solver);
         renderer.setPreview(hit.hit, hit.point + glm::vec4(0, 3.0f, 0, 0),
                             FruitManager::getFruitProperties(nextFruit).radius, int(nextFruit));
-        renderer.draw(state.cam, FbWidth, FbHeight, time);
+        renderer.draw(cam, FbWidth, FbHeight, time);
     }
 
     void BeginText() {
@@ -495,8 +496,8 @@ public:
     }
 
     void RenderMenu() {
-        renderer.dim = 0.55f;
-        RenderScene(false);
+        renderer.dim = 0.35f;
+        RenderScene(false, Camera4D::showcase(time));
         renderer.dim = 0.0f;
         BeginText();
 
