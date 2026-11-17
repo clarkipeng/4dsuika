@@ -61,7 +61,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --state game|menu|over
 //   --turn xw:30,yw:0,zw:0,xy:0   4D turns in degrees, camera-local planes
 //   --orbit yaw,pitch      degrees
-//   --distance d           camera distance from the bowl (default 11; 34 frames the island)
+//   --distance d           camera distance from the bowl (default 13; 34 frames the island)
 //   --offset v             slice offset along its normal
 //   --demo N               drop N fruit and let them settle first
 //   --frames N             frames simulated before the capture (default 90, more with --demo)
@@ -71,6 +71,8 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --adaptive             keep adaptive resolution on (otherwise fixed --scale)
 //   --perf                 show the F3 performance overlay
 //   --cursor x,y           mouse position in pixels (for the drop preview)
+//   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
+//                          --sheet-turn (default yw:35), stacked in one image
 struct Options {
     std::string screenshot;
     int bench = 0;
@@ -90,7 +92,9 @@ struct Options {
     float cursorX = -1.0f, cursorY = -1.0f;
     bool forceHeadless = false;
     bool mute = false;
-    bool headless() const { return forceHeadless || !screenshot.empty() || bench > 0; }
+    std::string fruitSheet;
+    std::string sheetTurn = "yw:35";
+    bool headless() const { return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty(); }
     bool muted() const { return mute || headless(); }
 };
 
@@ -123,23 +127,59 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--adaptive") o.adaptive = true;
         else if (a == "--perf") o.perf = true;
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
-        else std::cerr << "Unknown option " << a << std::endl;
+        else if (a == "--fruit-sheet") o.fruitSheet = next();
+        else if (a == "--sheet-turn") o.sheetTurn = next();
+        else {
+            // Fail loudly: a typo must never fall through to a visible, audible launch.
+            std::cerr << "Unknown option " << a << std::endl;
+            std::exit(2);
+        }
     }
     return o;
 }
+
+static void applyTurns(const std::string& turns, Camera4D& cam);
 
 static void applyCameraOptions(const Options& o, Camera4D& cam) {
     cam.yaw = glm::radians(o.yaw);
     cam.pitch = glm::radians(o.pitch);
     cam.offset = o.offset;
     cam.distance = o.distance;
-    std::stringstream ss(o.turn);
+    applyTurns(o.turn, cam);
+}
+
+static void applyTurns(const std::string& turns, Camera4D& cam) {
+    std::stringstream ss(turns);
     std::string item;
     while (std::getline(ss, item, ',')) {
         if (item.size() < 4 || item[2] != ':') continue;
         auto axis = [](char c) { return c == 'x' ? AX_X : c == 'y' ? AX_Y : c == 'z' ? AX_Z : AX_W; };
         cam.turnLocal(axis(item[0]), axis(item[1]), glm::radians(float(std::atof(item.c_str() + 3))));
     }
+}
+
+// All 11 fruit in a row along x, high above the island against the sky. The
+// row lies on the camera's x axis, so a camera-local yw or zw turn still cuts
+// every fruit through its centre.
+static void setupFruitSheet() {
+    game.sheetMode = true;
+    game.sheetFruit.clear();
+    const float gap = 0.5f, y = 12.0f;
+    float width = -gap;
+    for (int t = 0; t <= int(WATERMELON); ++t) width += 2.0f * FruitManager::getFruitProperties(Fruit(t)).radius + gap;
+    float x = -width * 0.5f;
+    for (int t = 0; t <= int(WATERMELON); ++t) {
+        float r = FruitManager::getFruitProperties(Fruit(t)).radius;
+        game.sheetFruit.push_back({glm::vec4(x + r, y, 0.0f, 0.0f), r, t, 0.0f, t});
+        x += 2.0f * r + gap;
+    }
+    Camera4D& cam = game.state.cam;
+    cam = Camera4D{};
+    cam.target = glm::vec4(0.0f, y, 0.0f, 0.0f);
+    cam.pitch = 0.0f;
+    cam.fovY = glm::radians(16.0f); // narrow lens: no stretching at the row's ends
+    float aspect = float(game.FbWidth) / float(game.FbHeight);
+    cam.distance = (width * 0.5f + 1.0f) / (std::tan(cam.fovY * 0.5f) * aspect) + 2.0f;
 }
 
 // Demo fruit scattered through 4D so screenshots show glomes crossing the
@@ -214,18 +254,40 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
                o.width, o.height, qualityName(game.renderer.quality()), game.renderer.renderScale,
                median, p95, wall, 1000.0 / wall);
     }
-    if (!o.screenshot.empty()) {
+    // Read the frame, flipped to top-down rows, appended to px.
+    auto capture = [&](std::vector<unsigned char>& px) {
         frame(0.0f);
-        std::vector<unsigned char> px(size_t(o.width) * o.height * 4);
+        size_t row = size_t(o.width) * 4, at = px.size();
+        px.resize(at + row * o.height);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, o.width, o.height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        stbi_flip_vertically_on_write(1);
-        if (!stbi_write_png(o.screenshot.c_str(), o.width, o.height, 4, px.data(), o.width * 4)) {
-            std::cerr << "Could not write " << o.screenshot << std::endl;
-            return 1;
+        glReadPixels(0, 0, o.width, o.height, GL_RGBA, GL_UNSIGNED_BYTE, px.data() + at);
+        for (int y = 0; y < o.height / 2; ++y)
+            std::swap_ranges(px.begin() + at + y * row, px.begin() + at + (y + 1) * row,
+                             px.begin() + at + (o.height - 1 - y) * row);
+    };
+    auto save = [&](const std::string& path, const std::vector<unsigned char>& px, int h) {
+        if (!stbi_write_png(path.c_str(), o.width, h, 4, px.data(), o.width * 4)) {
+            std::cerr << "Could not write " << path << std::endl;
+            return false;
         }
-        std::cout << "wrote " << o.screenshot << std::endl;
+        std::cout << "wrote " << path << std::endl;
+        return true;
+    };
+    if (!o.screenshot.empty()) {
+        std::vector<unsigned char> px;
+        capture(px);
+        if (!save(o.screenshot, px, o.height)) return 1;
+    }
+    if (!o.fruitSheet.empty()) {
+        std::vector<unsigned char> px;
+        setupFruitSheet();
+        game.sheetTitle = "slice tilt 0";
+        capture(px);
+        applyTurns(o.sheetTurn, game.state.cam);
+        game.sheetTitle = "after a camera-local " + o.sheetTurn + " deg turn";
+        capture(px);
+        if (!save(o.fruitSheet, px, o.height * 2)) return 1;
     }
     return 0;
 }

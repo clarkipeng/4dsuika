@@ -128,6 +128,7 @@ public:
         glUniform1f(loc(scene_, "uTime"), time);
         glUniform4fv(loc(scene_, "uSunDir"), 1, glm::value_ptr(sunDir));
         glUniform1f(loc(scene_, "uFacet"), facet);
+        glUniform1f(loc(scene_, "uFogStart"), cam.distance + 5.0f);
         uploadFruit(pos, basis[3]);
         glUniform4fv(loc(scene_, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
         glUniform4fv(loc(scene_, "uPreviewData"), 1, glm::value_ptr(previewData_));
