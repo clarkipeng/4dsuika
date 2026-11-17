@@ -49,6 +49,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --state game|menu|over
 //   --turn xw:30,yw:0,zw:0,xy:0   4D turns in degrees, camera-local planes
 //   --orbit yaw,pitch      degrees
+//   --distance d           camera distance from the bowl (default 11; 34 frames the island)
 //   --offset v             slice offset along its normal
 //   --demo N               drop N fruit and let them settle first
 //   --frames N             frames simulated before the capture (default 90, more with --demo)
@@ -66,6 +67,7 @@ struct Options {
     std::string turn;
     float yaw = 0.0f, pitch = glm::degrees(Camera4D::kDefaultPitch);
     float offset = 0.0f;
+    float distance = Camera4D::kDefaultDistance;
     int demo = 0;
     int frames = 90;
     float scale = 1.0f;
@@ -88,6 +90,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--state") o.state = next();
         else if (a == "--turn") o.turn = next();
         else if (a == "--orbit") sscanf(next().c_str(), "%f,%f", &o.yaw, &o.pitch);
+        else if (a == "--distance") o.distance = std::atof(next().c_str());
         else if (a == "--offset") o.offset = std::atof(next().c_str());
         else if (a == "--demo") o.demo = std::atoi(next().c_str());
         else if (a == "--frames") o.frames = std::atoi(next().c_str());
@@ -106,6 +109,7 @@ static void applyCameraOptions(const Options& o, Camera4D& cam) {
     cam.yaw = glm::radians(o.yaw);
     cam.pitch = glm::radians(o.pitch);
     cam.offset = o.offset;
+    cam.distance = o.distance;
     std::stringstream ss(o.turn);
     std::string item;
     while (std::getline(ss, item, ',')) {
