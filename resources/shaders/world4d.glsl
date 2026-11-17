@@ -217,7 +217,7 @@ float pondDist(vec3 q) {
 }
 
 // the pond's water level sits a little below the grass around it
-const float WATER_Y = GROUND_Y - 0.55;
+const float WATER_Y = GROUND_Y - 0.3;
 
 // The ground's height in (x, z, w). `facets` adds the 0..0.35 low-poly bumps; without
 // them the ground is never above the real one (the shadow occluder uses that).
@@ -232,7 +232,7 @@ float groundHeight(vec3 q, bool facets) {
     h = mix(GROUND_Y, h, bowlPad);
     // the pond basin
     float pd = pondDist(q);
-    h = mix(h, min(h, WATER_Y - 0.6), smoothstep(0.5, -0.6, pd));
+    h = mix(h, min(h, WATER_Y - 0.5), smoothstep(0.3, -0.5, pd));
     return h;
 }
 
@@ -279,13 +279,20 @@ vec2 islandSDF(vec4 p) {
     // the bowl sits in a socket: nothing of the island inside the bowl's glome
     float d = max(max(top, side), BOWL_R + BOWL_HALF + 0.04 - length(p));
     float m = (p.y > gh - 0.75) ? MAT_GRASS : MAT_DIRT;
-    // a muddy bank where the ground dips into the pond
-    if (abs(pondDist(q) - 0.15) < 0.4 && p.y < gh + 0.2) m = MAT_DIRT;
+    // grass runs down to the pond; a thin dark waterline just above the water
+    if (p.y < WATER_Y + 0.08 && pondDist(q) < 0.4) m = MAT_DIRT;
     return vec2(d, m);
 }
 
+// The water is a slab with flat, faceted ripples (static, so a cached slice stays valid).
 vec2 pondSDF(vec4 p) {
-    float d = max(max(p.y - WATER_Y, WATER_Y - 1.2 - p.y), pondDist(p.xzw) + 0.1);
+    // reaches under the bank, so the grass always meets the water and no wall shows
+    float rim = pondDist(p.xzw) - 0.25;
+    float d = max(max(p.y - WATER_Y, WATER_Y - 1.2 - p.y), rim);
+    if (d < 0.3) {
+        float wy = WATER_Y + 0.05 * facetNoise3(p.xzw * 1.3);
+        d = max(max((p.y - wy) * 0.9, WATER_Y - 1.2 - p.y), rim);
+    }
     return vec2(d, MAT_WATER);
 }
 
@@ -585,7 +592,12 @@ vec3 materialSrgb(float id, vec4 p, vec4 n) {
     if (id == MAT_STONE)  return mix(vec3(0.17, 0.22, 0.27), vec3(0.24, 0.29, 0.33), v);
     if (id == MAT_BARK)   return vec3(0.33, 0.15, 0.06);
     if (id == MAT_LEAVES) return mix(vec3(0.10, 0.24, 0.12), vec3(0.17, 0.31, 0.12), v);
-    if (id == MAT_WATER)  return vec3(0.07, 0.20, 0.20);
+    if (id == MAT_WATER) {
+        // deep teal like the cover's pond, with ripple facets catching the warm sky
+        vec3 c = mix(vec3(0.03, 0.18, 0.18), vec3(0.07, 0.27, 0.26), v);
+        float streak = facetNoise3(vec3(p.x * 0.5, p.z * 2.6, p.w * 2.6) + 7.0);
+        return mix(c, vec3(0.66, 0.40, 0.25), 0.55 * smoothstep(0.76, 0.82, streak));
+    }
     if (id == MAT_WOOD)   return vec3(0.30, 0.17, 0.09);
     if (id == MAT_CLOUD)  return vec3(0.55, 0.42, 0.50);
     return vec3(1.0, 0.0, 1.0);
