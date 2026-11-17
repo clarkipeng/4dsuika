@@ -34,6 +34,7 @@ uniform vec4      uCacheOrigin;
 uniform mat4      uCacheBasis;       // columns: slice axes x, y, z, slice normal
 uniform float     uCacheSize;        // cube side, 0 = no static world in this slice
 uniform float     uCacheVoxel;
+uniform vec3      uCacheUV;          // scale of the baked corner, min and max texture coordinate
 
 #include "world4d.glsl"
 #include "fruit4d.glsl"
@@ -228,7 +229,9 @@ vec4 worldNormal(vec4 p, float f0, float mat, bool dynamic) {
 
 vec3 toCache(vec4 p) { return (transpose(uCacheBasis) * (p - uCacheOrigin)).xyz; }
 vec3 dirToCache(vec4 d) { return (transpose(uCacheBasis) * d).xyz; }
-float cacheDist(vec3 x) { return texture(uCache, x / uCacheSize).r; }
+float cacheDist(vec3 x) {
+    return texture(uCache, clamp(x / uCacheSize * uCacheUV.x, uCacheUV.y, uCacheUV.z)).r;
+}
 bool inCache(vec3 x) { return all(greaterThanEqual(x, vec3(0.0))) && all(lessThanEqual(x, vec3(uCacheSize))); }
 
 // Entry and exit of the ray with the cache cube; false if it misses.

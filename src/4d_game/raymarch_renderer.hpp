@@ -173,6 +173,11 @@ public:
         glUniformMatrix4fv(loc(scene_, "uCacheBasis"), 1, GL_FALSE, glm::value_ptr(cacheBasis_));
         glUniform1f(loc(scene_, "uCacheSize"), cacheSize_);
         glUniform1f(loc(scene_, "uCacheVoxel"), cacheVoxel_);
+        // Texture coordinates of the baked corner: scale, and the clamp that
+        // keeps filtering off texels outside it.
+        float span = float(cacheTexels_) / float(std::max(cacheRes_, 1));
+        glUniform3f(loc(scene_, "uCacheUV"), span, 0.5f / std::max(cacheRes_, 1),
+                    (cacheTexels_ - 0.5f) / std::max(cacheRes_, 1));
         beginTimer();
         glDrawArrays(GL_TRIANGLES, 0, 3);
         endTimer();
@@ -202,7 +207,8 @@ private:
     GLuint scene_ = 0, present_ = 0, bake_ = 0, vao_ = 0;
     // Slice cache.
     GLuint cacheTex_ = 0, cacheFbo_ = 0, bakeQuery_ = 0;
-    int cacheRes_ = 0;
+    int cacheRes_ = 0;      // texture size
+    int cacheTexels_ = 0;   // texels per side of the current bake (cacheRes_ or half)
     bool cacheValid_ = false, cacheUnsupported_ = false;
     glm::vec4 staticCenter_{0.0f, -3.0f, 0.0f, 0.0f};
     float staticRadius_ = 17.0f;
@@ -308,9 +314,14 @@ private:
 
         // The slice: through target + offset * normal, spanned by the slice's
         // first three axes. The orbit turns only within it, so it never rebakes.
+        // While it turns, bake at half resolution (an eighth of the work)
+        // into the low corner of the texture; once it holds still, bake once
+        // at full resolution.
         glm::mat4 M = cam.slice.matrix();
         glm::vec4 o = cam.target + cam.offset * M[3];
-        if (cacheValid_ && o == bakedSliceOrigin_ && M == bakedSlice_) return true;
+        bool moved = !cacheValid_ || o != bakedSliceOrigin_ || M != bakedSlice_;
+        if (!moved && cacheTexels_ == cacheRes_) return true;
+        cacheTexels_ = moved && cacheValid_ ? cacheRes_ / 2 : cacheRes_;
         bakedSliceOrigin_ = o;
         bakedSlice_ = M;
         cacheValid_ = true;
@@ -325,10 +336,10 @@ private:
         glm::vec3 corner = centre - glm::vec3(rho);
         cacheOrigin_ = o + M * glm::vec4(corner, 0.0f);
         cacheSize_ = 2.0f * rho;
-        cacheVoxel_ = cacheSize_ / float(cacheRes_);
+        cacheVoxel_ = cacheSize_ / float(cacheTexels_);
 
         glBindFramebuffer(GL_FRAMEBUFFER, cacheFbo_);
-        glViewport(0, 0, cacheRes_, cacheRes_);
+        glViewport(0, 0, cacheTexels_, cacheTexels_);
         glUseProgram(bake_);
         glUniform1f(loc(bake_, "uTime"), time);
         glUniform4fv(loc(bake_, "uSunDir"), 1, glm::value_ptr(sunDir));
@@ -340,7 +351,7 @@ private:
         bool timed = syncTiming && bakeQuery_;
         if (timed) glBeginQuery(GL_TIME_ELAPSED, bakeQuery_);
 #endif
-        for (int z = 0; z < cacheRes_; ++z) {
+        for (int z = 0; z < cacheTexels_; ++z) {
             glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, cacheTex_, 0, z);
             glUniform1f(layerLoc, float(z));
             glDrawArrays(GL_TRIANGLES, 0, 3);
