@@ -2,24 +2,27 @@
 //
 // The renderer pastes this after world4d.glsl (it reuses hash1, hash4,
 // valueNoise4, sdLimb, smin and toLinear from there). Plain GLSL ES 3.00, no
-// uniforms. Everything is in fruit-local units: q = (p - centre) / radius, so
-// the physics collision glome is |q| = 1 and the body stays close to it.
+// uniforms. Shapes are built in fruit-local units, q / r, so the physics
+// collision glome is |q| = r and every body stays close to it.
 //
-// Contract:
-//   FRUIT_BOUND                         every part lies within this many radii of the centre
-//   vec2 fruitSDF(vec4 q, float type, float seed)
-//        x = distance in radius units, y = part (FRUIT_SKIN, _STEM, _LEAF, _CROWN)
-//   vec3 fruitAlbedo(vec4 q, vec4 n, float type, float part, float seed, float detail)
-//        linear albedo at local point q with unit normal n; detail 0..1 fades the
-//        surface pattern for small or distant fruit
-//   float fruitGloss(float type, float part)   specular strength 0..1
+// Contract (renderer side in raymarch4d.fs):
+//   q     point minus the fruit centre, world axes (y up; fruit do not rotate)
+//   r     current radius (grows on spawn and merge)
+//   type  0..10, the Fruit enum: cherry, strawberry, grape, dekopon, persimmon,
+//         apple, pear, peach, pineapple, melon, watermelon
+//   seed  stable per-fruit id >= 1, for variation
+//   lod   detail 0..1: 1 full, 0 when the fruit covers only a few pixels
 //
-// Types follow fruit.hpp: 0 cherry, 1 strawberry, 2 grape, 3 dekopon,
-// 4 persimmon, 5 apple, 6 pear, 7 peach, 8 pineapple, 9 melon, 10 watermelon.
-// seed (> 0, per fruit) leans each fruit a little. Stems, leaves and crowns are
-// real 4D shapes reaching into w, so they change shape when the slice turns.
+//   FRUIT_BOUND          fruitSDF stays inside the glome |q| = FRUIT_BOUND * r
+//   float fruitSDF(vec4 q, float r, float type, float lod)
+//   vec3  fruitAlbedo(vec4 q, vec4 n, float r, float type, float seed, float lod)   linear RGB
+//   vec3  fruitBaseColor(float type)   one colour per fruit, for hints and the drop preview
+//   float fruitGloss(float type)       specular strength 0..1 for the skin
+//
+// Stems, leaves and crowns are real 4D shapes reaching into w, so they change
+// shape when the slice turns. Below lod 0.35 they are left out.
 
-const float FRUIT_BOUND = 1.6;
+#define FRUIT_BOUND 1.6
 
 const float FRUIT_SKIN  = 0.0;
 const float FRUIT_STEM  = 1.0;
@@ -27,14 +30,6 @@ const float FRUIT_LEAF  = 2.0;
 const float FRUIT_CROWN = 3.0;
 
 // ---- helpers ------------------------------------------------------------------
-
-// Small per-fruit lean (up to ~17 degrees in xy) so a bowl of fruit isn't all
-// stems-up. No lean into w: thin stems would leave the default slice.
-vec4 fruitTilt(vec4 q, float seed) {
-    float b = (hash1(seed * 2.71 + 0.5) - 0.5) * 0.6;
-    q.xy = mat2(cos(b), sin(b), -sin(b), cos(b)) * q.xy;
-    return q;
-}
 
 float smax(float a, float b, float k) { return -smin(-a, -b, k); }
 
@@ -84,9 +79,9 @@ vec2 fruitPart(vec2 a, float d, float part) { return d < a.x ? vec2(d, part) : a
 // thicker along w than across: a turn thins and reshapes them before they go.
 vec4 wThick(vec4 q) { return vec4(q.xyz, q.w * 0.35); }
 
-vec2 fruitSDF(vec4 q, float type, float seed) {
-    q = fruitTilt(q, seed);
-    vec4 qs = wThick(q);
+// Shape in fruit-local units: (distance, part). With parts false, only the skin.
+vec2 fruitShape(vec4 q, float type, bool parts) {
+    vec4 qs = parts ? wThick(q) : vec4(0.0, 1e3, 0.0, 0.0);   // far away: parts never win
     int t = int(type + 0.5);
     vec4 up = vec4(0.0, 1.0, 0.0, 0.0);
     vec2 r;
@@ -271,8 +266,15 @@ vec3 fruitSkinSrgb(int t, vec4 q, vec4 n, float detail) {
     return mix(c, vec3(0.62, 0.66, 0.30), smoothstep(-0.7, -1.0, q.y) * 0.6);   // pale ground spot
 }
 
-vec3 fruitAlbedo(vec4 q, vec4 n, float type, float part, float seed, float detail) {
-    q = fruitTilt(q, seed);
+// ---- contract -----------------------------------------------------------------
+
+float fruitSDF(vec4 q, float r, float type, float lod) {
+    return fruitShape(q / r, type, lod >= 0.35).x * r;
+}
+
+vec3 fruitAlbedo(vec4 q, vec4 n, float r, float type, float seed, float lod) {
+    q /= r;
+    float part = fruitShape(q, type, lod >= 0.35).y;
     int t = int(type + 0.5);
     vec3 c;
     if (part == FRUIT_STEM) c = (t == 2 || t == 0) ? vec3(0.32, 0.45, 0.14) : vec3(0.36, 0.22, 0.10);
@@ -280,12 +282,28 @@ vec3 fruitAlbedo(vec4 q, vec4 n, float type, float part, float seed, float detai
     else if (part == FRUIT_CROWN) c = t == 4 ? vec3(0.28, 0.32, 0.10)
                                    : t == 8 ? mix(vec3(0.18, 0.40, 0.16), vec3(0.36, 0.55, 0.22), smoothstep(0.7, 1.4, q.y))
                                    : vec3(0.18, 0.45, 0.12);
-    else c = fruitSkinSrgb(t, q, n, clamp(detail, 0.0, 1.0));
+    else c = fruitSkinSrgb(t, q, n, clamp(lod, 0.0, 1.0));
     return toLinear(c);
 }
 
-float fruitGloss(float type, float part) {
-    if (part != FRUIT_SKIN) return 0.1;
+// One colour per fruit (the skin's mean), for depth hints and the drop preview.
+vec3 fruitBaseColor(float type) {
+    int t = int(type + 0.5);
+    vec3 c = t == 0 ? vec3(0.50, 0.03, 0.09)
+           : t == 1 ? vec3(0.86, 0.13, 0.13)
+           : t == 2 ? vec3(0.42, 0.18, 0.55)
+           : t == 3 ? vec3(0.98, 0.54, 0.09)
+           : t == 4 ? vec3(0.90, 0.35, 0.06)
+           : t == 5 ? vec3(0.78, 0.15, 0.08)
+           : t == 6 ? vec3(0.76, 0.75, 0.24)
+           : t == 7 ? vec3(0.96, 0.52, 0.36)
+           : t == 8 ? vec3(0.88, 0.63, 0.18)
+           : t == 9 ? vec3(0.55, 0.62, 0.26)
+           :          vec3(0.20, 0.47, 0.16);
+    return toLinear(c);
+}
+
+float fruitGloss(float type) {
     int t = int(type + 0.5);
     if (t == 0 || t == 5) return 0.8;               // cherry, apple: shiny
     if (t == 2 || t == 3 || t == 4) return 0.5;
