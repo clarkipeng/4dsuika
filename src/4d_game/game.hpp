@@ -28,86 +28,16 @@
 #include "physics_solver.hpp"
 
 #include "state_helper.hpp"
+#include "menu.hpp"
 #include "fruit.hpp"
 
 enum GameState {
     GAME_ACTIVE,
-    GAME_MENU,
+    GAME_MENU,    // start screen
+    GAME_PAUSED,
     GAME_OVER
 };
 
-struct Slider {
-    // The slider's position and size on the screen
-    glm::vec4 rect; // x, y, width, height
-    std::string label;
-    
-    // A pointer to the actual game variable this slider controls (e.g., musicVolume)
-    float* value; 
-    
-    // State to track if the user is currently dragging this slider
-    bool isDragging;
-    void Update(){
-        double mouseX, mouseY;
-        glfwGetCursorPos(glfwGetCurrentContext(), &mouseX, &mouseY);
-        
-        bool isMousePressed = glfwGetMouseButton(glfwGetCurrentContext(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-
-        // Check if the mouse is over the slider's rectangle
-        bool isMouseOver = (mouseX >= rect.x && mouseX <= rect.x + rect.z &&
-                        mouseY >= rect.y && mouseY <= rect.y + rect.w);
-
-        if (isMousePressed && isMouseOver) {
-            isDragging = true;
-        }
-        
-        if (!isMousePressed) {
-            isDragging = false;
-        }
-
-        if (isDragging) {
-            // Update the slider's value based on mouse position
-            float newValue = (mouseX - rect.x) / rect.z;
-            // Clamp the value between 0.0 and 1.0
-            *value = glm::clamp(newValue, 0.0f, 1.0f);
-        }
-    }
-};
-struct VolumeSettings {
-    float musicVolume;
-    float sfxVolume;
-    
-    Slider musicSlider;
-    Slider sfxSlider;
-
-    // The constructor sets up the internal logic
-    VolumeSettings() {
-        musicVolume = 0.8f;
-        sfxVolume = 1.0f;
-        musicSlider.label = "Music Volume";
-        musicSlider.value = &musicVolume; 
-        musicSlider.isDragging = false;
-        sfxSlider.label = "SFX Volume";
-        sfxSlider.value = &sfxVolume; 
-        sfxSlider.isDragging = false;
-    }
-    
-    void UpdateLayout(unsigned int Width, unsigned int Height) {
-        float sliderX = Width * 0.75f; // Position in right quadrant
-        float sliderWidth = Width/4;
-        float sliderHeight = 10.0f;
-        // float startY = Height * 0.6f; // Adjust start Y position
-        float startY = Height * 0.1f; // Adjust start Y position
-        float sliderSpacing = 60.0f * (Height / 800.0f);
-
-        musicSlider.rect = {sliderX, startY, sliderWidth, sliderHeight};
-        sfxSlider.rect = {sliderX, startY + sliderSpacing, sliderWidth, sliderHeight};
-    }
-    // This function handles the mouse input
-    void UpdateControls() {
-        musicSlider.Update();
-        sfxSlider.Update();
-    }
-};
 // Held-key 4D turning. Each binding turns the camera in one of its own
 // planes (0 right, 1 up, 2 back, 3 slice normal), so the keys act on what the
 // player sees. Velocities ease in and out, and opposite keys undo each other.
@@ -157,7 +87,16 @@ public:
     int total_points=0;
     int high_score = 0;
     ViewState state;
-    VolumeSettings vset;
+    Menu menu;
+    enum class Page { None, Settings, Controls };
+    Page page = Page::None;           // settings or controls opened over the current screen
+    int menuBuiltFor = -1;
+    GLFWwindow* window = nullptr;
+    bool mouseWasDown = false;
+    float heldKeyTime = 0.0f;
+    float musicVolume = 0.8f, sfxVolume = 1.0f;
+    bool soundOn = true;
+    int scaleChoice = 0;              // index into kScaleChoices; 0 = adaptive
 
     bool ballPlaced=false;
     bool homing = false;              // easing back to the default slice
@@ -227,7 +166,8 @@ public:
         State = GAME_ACTIVE;
     }
 
-    void Init(GLFWwindow* window){
+    void Init(GLFWwindow* win){
+        window = win;
         if (!renderer.init()) std::cerr << "Raymarch renderer failed to initialise" << std::endl;
         text_shader = new Shader(FileSystem::getPath("resources/shaders/text_2d.vs").c_str(), FileSystem::getPath("resources/shaders/text_2d.fs").c_str());
         t_rend = new TextRenderer(text_shader);
@@ -239,7 +179,7 @@ public:
 
         fm.initializeFruits();
         nextFruit = fm.getRandomFruit();
-        state.Init(window);
+        state.Init(win);
 
 #ifndef __EMSCRIPTEN__
         if (audioReady && !audioMuted) {
@@ -311,29 +251,59 @@ public:
         if (State == GAME_ACTIVE) UpdateCamera(dt);
         else state.pendingYaw = state.pendingPitch = 0.0f;
 
-        if (State == GAME_MENU && keyPressedOnce(GLFW_KEY_ENTER)) State = GAME_ACTIVE;
-        if (State == GAME_OVER && keyPressedOnce(GLFW_KEY_ENTER)) Reset();
-
         if (keyPressedOnce(GLFW_KEY_G)) {
             renderer.setQuality(Quality((int(renderer.quality()) + 1) % 4));
+            ApplyRenderScale();
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
-            State = (State == GAME_ACTIVE || State == GAME_OVER) ? GAME_MENU : GAME_ACTIVE;
+            if (page != Page::None) ClosePage();
+            else if (State == GAME_ACTIVE) State = GAME_PAUSED;
+            else if (State == GAME_PAUSED) State = GAME_ACTIVE;
         }
+        if (State != GAME_ACTIVE) UpdateMenuInput(dt);
+    }
+
+    void UpdateMenuInput(float dt) {
+        EnsureMenu();
+        MenuInput in;
+        in.up = keyPressedOnce(GLFW_KEY_UP) || keyPressedOnce(GLFW_KEY_W);
+        in.down = keyPressedOnce(GLFW_KEY_DOWN) || keyPressedOnce(GLFW_KEY_S);
+        in.select = keyPressedOnce(GLFW_KEY_ENTER) || keyPressedOnce(GLFW_KEY_KP_ENTER) || keyPressedOnce(GLFW_KEY_SPACE);
+        bool left = keyDown(GLFW_KEY_LEFT) || keyDown(GLFW_KEY_A), right = keyDown(GLFW_KEY_RIGHT) || keyDown(GLFW_KEY_D);
+        in.horizontalHeld = int(right) - int(left);
+        if (keyPressedOnce(GLFW_KEY_LEFT) || keyPressedOnce(GLFW_KEY_A)) in.horizontal = -1;
+        if (keyPressedOnce(GLFW_KEY_RIGHT) || keyPressedOnce(GLFW_KEY_D)) in.horizontal = +1;
+        in.mouse = glm::vec2(state.m_xpos, state.m_ypos);
+        in.mouseDown = window && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        in.mousePressed = in.mouseDown && !mouseWasDown;
+        mouseWasDown = in.mouseDown;
+        menu.update(*t_rend, in, dt, float(Width), float(Height));
+        EnsureMenu();  // an item may have changed the screen
     }
 
     void ApplyVolumeSettings()
     {
 #ifndef __EMSCRIPTEN__
         if (!audioReady || audioMuted) return;
-        Mix_VolumeMusic(static_cast<int>(vset.musicVolume * MIX_MAX_VOLUME));
-        int sfx_volume_sdl = static_cast<int>(vset.sfxVolume * MIX_MAX_VOLUME);
+        float master = soundOn ? 1.0f : 0.0f;
+        Mix_VolumeMusic(static_cast<int>(master * musicVolume * MIX_MAX_VOLUME));
+        int sfx_volume_sdl = static_cast<int>(master * sfxVolume * MIX_MAX_VOLUME);
         if (mergeSound) Mix_VolumeChunk(mergeSound, sfx_volume_sdl);
         if (loseSound)  Mix_VolumeChunk(loseSound, sfx_volume_sdl);
         if (placeSound) Mix_VolumeChunk(placeSound, sfx_volume_sdl);
 #endif
+    }
+
+    // Render scale choices: 0 = adaptive, otherwise a fixed fraction of the window
+    // (still capped by the quality preset's pixel budget).
+    static constexpr float kScaleChoices[] = {0.0f, 1.0f, 0.75f, 0.5f, 0.33f};
+    static constexpr int kScaleCount = 5;
+    void ApplyRenderScale() {
+        float s = kScaleChoices[scaleChoice];
+        renderer.adaptive = s == 0.0f;
+        if (s > 0.0f) renderer.renderScale = s;
     }
 
     void Update(float dt)
@@ -353,16 +323,16 @@ public:
                 break;
             case GAME_OVER:
                 UpdateGameOver(dt);
+                ApplyVolumeSettings();
 #ifndef __EMSCRIPTEN__
                 if (audioReady && !audioMuted && State == GAME_OVER) Mix_PauseMusic();
 #endif
                 break;
             case GAME_MENU:
+            case GAME_PAUSED:
 #ifndef __EMSCRIPTEN__
                 if (audioReady && !audioMuted && Mix_PausedMusic() == 1) Mix_ResumeMusic();
 #endif
-                vset.UpdateLayout(Width, Height);
-                vset.UpdateControls();
                 ApplyVolumeSettings();
                 break;
         }
@@ -371,6 +341,7 @@ public:
 
     void UpdateGameActive(float dt)
     {
+        menuBuiltFor = -1;  // pause and game-over menus show fresh scores
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i]) continue;
             if (physics_solver->objects[i].position.y < -3) {
@@ -471,8 +442,9 @@ public:
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         switch (State) {
             case GAME_ACTIVE: RenderGame(); break;
-            case GAME_MENU:   RenderMenu(); break;
-            case GAME_OVER:   RenderEndScreen(); break;
+            case GAME_MENU:   RenderMenuScreen(Camera4D::showcase(time), 0.35f); break;
+            case GAME_PAUSED:
+            case GAME_OVER:   RenderMenuScreen(state.cam, 0.5f); break;
         }
     }
 
@@ -481,69 +453,133 @@ public:
         RenderGameUI();
     }
 
-    void RenderSlider(const Slider& slider)
-    {
-        float scale = 0.75f;
-        glm::vec3 color = glm::vec3(0.9f);
-        std::string bar = "[";
-        int barLength = 20;
-        for (int i = 0; i < barLength; ++i) {
-            bar += (i < (*slider.value) * barLength) ? "=" : "-";
-        }
-        bar += "]";
-        t_rend->RenderText(slider.label,  slider.rect.x, slider.rect.y - 25.0f, scale, color);
-        t_rend->RenderTextScale(bar,  slider.rect.x, slider.rect.y,slider.rect.z,slider.rect.w, color);
+    // ---------------------------------------------------------------- menus
+
+    static std::string percent(float v) { return std::to_string(int(v * 100.0f + 0.5f)) + "%"; }
+
+    static void CycleIndex(int& i, int dir, int count) { i = (i + dir + count) % count; }
+
+    // Rebuilds the menu when the screen it shows changes.
+    void EnsureMenu() {
+        int key = int(State) * 4 + int(page);
+        if (key == menuBuiltFor) return;
+        menuBuiltFor = key;
+        if (page == Page::Settings) BuildSettingsMenu();
+        else if (page == Page::Controls) BuildControlsMenu();
+        else if (State == GAME_MENU) BuildTitleMenu();
+        else if (State == GAME_PAUSED) BuildPauseMenu();
+        else BuildGameOverMenu();
     }
 
-    void RenderMenu() {
-        renderer.dim = 0.35f;
-        RenderScene(false, Camera4D::showcase(time));
+    Page returnPage = Page::None;     // where Back from a page goes
+    void Open(Page p) { returnPage = page; page = p; EnsureMenu(); }
+    void ClosePage() { page = returnPage; returnPage = Page::None; }
+
+    void BuildTitleMenu() {
+        MenuStyle st;
+        st.title = "SUIKA 4D";
+        st.subtitle = "Merge fruit in four dimensions";
+        st.hero = true;
+        st.width = 360.0f;
+        std::vector<MenuItem> items = {
+            MenuItem::button("Play", [this] { Reset(); }),
+            MenuItem::button("Settings", [this] { Open(Page::Settings); }),
+            MenuItem::button("Controls", [this] { Open(Page::Controls); }),
+        };
+#ifndef __EMSCRIPTEN__
+        items.push_back(MenuItem::button("Quit", [this] { if (window) glfwSetWindowShouldClose(window, GLFW_TRUE); }));
+#endif
+        st.hint = "Up / Down  choose     Enter  select";
+        menu.set(std::move(items), std::move(st));
+    }
+
+    void BuildPauseMenu() {
+        MenuStyle st;
+        st.title = "PAUSED";
+        st.subtitle = "Score " + std::to_string(total_points);
+        st.width = 380.0f;
+        st.hint = "Up / Down  choose     Enter  select     Esc  resume";
+        menu.set({
+            MenuItem::button("Resume", [this] { State = GAME_ACTIVE; }),
+            MenuItem::button("Restart", [this] { Reset(); }),
+            MenuItem::button("Settings", [this] { Open(Page::Settings); }),
+            MenuItem::button("Controls", [this] { Open(Page::Controls); }),
+            MenuItem::button("Main menu", [this] { State = GAME_MENU; }),
+        }, std::move(st));
+    }
+
+    void BuildGameOverMenu() {
+        MenuStyle st;
+        st.title = "GAME OVER";
+        st.titleColor = ui::kCoral;
+        st.subtitle = "Score " + std::to_string(total_points) + "     Best " + std::to_string(high_score);
+        st.width = 380.0f;
+        st.hint = "Up / Down  choose     Enter  select";
+        menu.set({
+            MenuItem::button("Play again", [this] { Reset(); }),
+            MenuItem::button("Settings", [this] { Open(Page::Settings); }),
+            MenuItem::button("Main menu", [this] { State = GAME_MENU; }),
+        }, std::move(st));
+    }
+
+    void BuildSettingsMenu() {
+        MenuStyle st;
+        st.title = "SETTINGS";
+        st.width = 580.0f;
+        st.note = [this] {
+            int w = std::max(1, int(FbWidth * std::min(renderer.renderScale, renderer.maxScale(FbWidth, FbHeight)) + 0.5f));
+            int h = std::max(1, int(FbHeight * std::min(renderer.renderScale, renderer.maxScale(FbWidth, FbHeight)) + 0.5f));
+            return "Scene rendered at " + std::to_string(w) + " x " + std::to_string(h);
+        };
+        std::vector<MenuItem> items;
+        items.push_back(MenuItem::choice("Quality", [this] { return std::string(qualityName(renderer.quality())); },
+            [this](int d) { renderer.setQuality(Quality((int(renderer.quality()) + d + 4) % 4)); ApplyRenderScale(); }));
+        items.push_back(MenuItem::choice("Render scale", [this] {
+                return scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
+            }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
+        items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
+#ifndef __EMSCRIPTEN__
+        items.push_back(MenuItem::choice("Sound", [this] { return std::string(soundOn ? "On" : "Muted"); },
+            [this](int) { soundOn = !soundOn; ApplyVolumeSettings(); }));
+        items.push_back(MenuItem::slider("Music", [this] { return musicVolume; }, [this](float v) { musicVolume = v; ApplyVolumeSettings(); }));
+        items.push_back(MenuItem::slider("Effects", [this] { return sfxVolume; }, [this](float v) { sfxVolume = v; ApplyVolumeSettings(); }));
+#endif
+        items.push_back(MenuItem::button("Controls", [this] { Open(Page::Controls); }));
+        items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
+        menu.set(std::move(items), std::move(st));
+    }
+
+    void BuildControlsMenu() {
+        MenuStyle st;
+        st.title = "CONTROLS";
+        st.width = 680.0f;
+        st.keyColumn = 230.0f;
+        st.hint = "Enter or Esc  back";
+        std::vector<MenuItem> items = {
+            MenuItem::info("Left click", "drop the fruit"),
+            MenuItem::info("Right drag / arrows", "turn the view"),
+            MenuItem::info("Mouse wheel", "zoom"),
+        };
+        for (const TurnBinding& b : kTurnBindings) {
+            std::string h = b.help;
+            size_t gap = h.find("  ");
+            items.push_back(MenuItem::info(h.substr(0, gap), h.substr(gap + 2)));
+        }
+        items.push_back(MenuItem::info("W / S", "move the slice along the 4th axis"));
+        items.push_back(MenuItem::info("H / Space", "back to the default slice"));
+        items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
+        items.push_back(MenuItem::info("Esc", "pause"));
+        items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
+        menu.set(std::move(items), std::move(st));
+        menu.focus = int(menu.itemCount()) - 1;
+    }
+
+    void RenderMenuScreen(const Camera4D& cam, float dim) {
+        EnsureMenu();
+        renderer.dim = dim;
+        RenderScene(false, cam);
         renderer.dim = 0.0f;
         BeginText();
-
-        float centerX = Width / 2.0f;
-        float centerY = Height / 2.0f;
-        std::string title = "Suika 4D";
-        t_rend->RenderText(title, centerX - t_rend->GetTextWidth(title, 2.0f) / 2.0f, centerY - 150.0f, 2.0f, glm::vec3(1.0f, 0.92f, 0.85f));
-        std::string subtitle = "Press ESC or ENTER to Play";
-        t_rend->RenderText(subtitle, centerX - t_rend->GetTextWidth(subtitle, 1.0f) / 2.0f, centerY - 90.0f, 1.0f, glm::vec3(0.9f));
-
-        float instructionScale = 0.7f;
-        glm::vec3 instructionColor = glm::vec3(0.88f);
-        float startY = centerY - 30.0f;
-        float lineSpacing = 22.0f;
-        std::vector<std::string> lines = {
-            "Left Click - Drop fruit",
-            "Right-Click + Drag / Arrows - Turn the view",
-            "Mouse Wheel - Zoom",
-        };
-        for (const TurnBinding& b : kTurnBindings) lines.push_back(b.help);
-        lines.push_back("W / S  move the slice along the 4th axis");
-        lines.push_back("H or Space - Back to the default slice");
-        lines.push_back(std::string("G - Graphics quality: ") + qualityName(renderer.quality()) + "   F3 - Performance");
-        lines.push_back("ESC - Pause / Menu");
-        for (size_t i = 0; i < lines.size(); i++) {
-            t_rend->RenderText(lines[i], centerX - t_rend->GetTextWidth(lines[i], instructionScale) / 2.0f, startY + lineSpacing * i, instructionScale, instructionColor);
-        }
-        RenderSlider(vset.musicSlider);
-        RenderSlider(vset.sfxSlider);
-    }
-
-    void RenderEndScreen() {
-        RenderScene(false);
-        BeginText();
-
-        std::string msg1 = "GAME OVER";
-        std::string msg2 = "Score: " + std::to_string(total_points);
-        std::string msg3 = "High Score: " + std::to_string(high_score);
-        std::string msg4 = "Press ENTER to Restart";
-
-        float scale1 = 1.5f;
-        float scale2 = 1.0f;
-        float centerX = Width / 2.0f;
-        t_rend->RenderText(msg1, centerX - t_rend->GetTextWidth(msg1, scale1) / 2.0f, 150.0f, scale1, glm::vec3(1.0f, 0.3f, 0.25f));
-        t_rend->RenderText(msg2, centerX - t_rend->GetTextWidth(msg2, scale2) / 2.0f, 250.0f, scale2, glm::vec3(1.0f));
-        t_rend->RenderText(msg3, centerX - t_rend->GetTextWidth(msg3, scale2) / 2.0f, 300.0f, scale2, glm::vec3(1.0f, 0.85f, 0.3f));
-        t_rend->RenderText(msg4, centerX - t_rend->GetTextWidth(msg4, scale2) / 2.0f, 400.0f, scale2, glm::vec3(0.9f));
+        menu.draw(*t_rend, float(Width), float(Height));
     }
 };

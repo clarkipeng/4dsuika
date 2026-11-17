@@ -1,4 +1,5 @@
 #include "text_renderer.h"
+#include <algorithm>
 
 #ifdef __EMSCRIPTEN__
 #include <array>
@@ -108,6 +109,8 @@ void uploadGlyph(std::map<char, Character>& characters, char code)
 }
 #endif
 
+static const int kMaxPolyVerts = 16;
+
 void TextRenderer::initRenderData()
 {
     glGenVertexArrays(1, &vao);
@@ -115,13 +118,52 @@ void TextRenderer::initRenderData()
 
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 6 * 4, NULL, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * kMaxPolyVerts * 3 * 4, NULL, GL_DYNAMIC_DRAW);
 
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
+
+    // 1x1 texture whose red channel is 1, so the text shader paints solid colour.
+    unsigned char white = 255;
+    glGenTextures(1, &whiteTex);
+    glBindTexture(GL_TEXTURE_2D, whiteTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, &white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+float TextRenderer::CapHeight(float scale)
+{
+    auto h = Characters.find('H');
+    return h == Characters.end() ? 18.0f * scale : h->second.Size.y * scale;
+}
+
+void TextRenderer::FillPoly(const std::vector<glm::vec2>& pts, glm::vec3 color, float alpha)
+{
+    int n = std::min<int>(int(pts.size()), kMaxPolyVerts);
+    if (n < 3) return;
+    std::vector<float> v;
+    for (int i = 1; i + 1 < n; ++i)
+        for (const glm::vec2& p : {pts[0], pts[i], pts[i + 1]}) {
+            v.insert(v.end(), {p.x, p.y, 0.0f, 0.0f});
+        }
+    shader->use();
+    shader->setVec3("textColor", color);
+    shader->setFloat("textAlpha", alpha);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, whiteTex);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, v.size() * sizeof(float), v.data());
+    glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 4));
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void TextRenderer::Load(std::string fontPath, unsigned int fontSize)
@@ -212,6 +254,7 @@ void TextRenderer::RenderText(const std::string& text, float x, float y, float s
     if (Characters.empty()) return;
     shader->use();
     shader->setVec3("textColor", color);
+    shader->setFloat("textAlpha", 1.0f);
 
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(vao);
@@ -272,6 +315,7 @@ void TextRenderer::RenderTextScale(const std::string& text, float x, float y, fl
 
     shader->use();
     shader->setVec3("textColor", color);
+    shader->setFloat("textAlpha", 1.0f);
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(vao);
 
