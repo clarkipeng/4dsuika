@@ -25,7 +25,9 @@ struct FruitInstance {
 
 class RaymarchRenderer {
 public:
-    static constexpr int kMaxFruit = 64; // uniform budget fits WebGL2's 224 vec4 minimum
+    static constexpr int kMaxFruit = 64; // with hints, fits WebGL2's 224-vec4 minimum
+    static constexpr int kMaxHints = 16;
+    static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
 
     float renderScale = 1.0f; // fraction of window resolution the scene is marched at
     float dim = 0.0f;         // darken the scene behind menus, 0..1
@@ -108,14 +110,19 @@ private:
 
     void uploadFruit(const glm::vec4& camPos, const glm::vec4& normal) {
         // Rays never leave the slice, so a fruit is visible only if its glome
-        // crosses the slice hyperplane. Nearest first if over budget.
-        std::vector<std::pair<float, const FruitInstance*>> visible;
+        // crosses the slice hyperplane; fruit within kHintRange beyond that
+        // become depth hints. Nearest (to the camera, then the slice) first.
+        using Entry = std::pair<float, const FruitInstance*>;
+        std::vector<Entry> visible, nearby; // (not "near": a Windows macro)
         for (const auto& f : fruit_) {
-            float off = glm::dot(f.center - camPos, normal);
-            if (std::abs(off) < f.radius) visible.push_back({glm::length(f.center - camPos), &f});
+            float gap = std::abs(glm::dot(f.center - camPos, normal)) - f.radius;
+            if (gap < 0.0f) visible.push_back({glm::length(f.center - camPos), &f});
+            else if (gap < kHintRange) nearby.push_back({gap, &f});
         }
-        std::sort(visible.begin(), visible.end(),
-                  [](auto& a, auto& b) { return a.first < b.first; });
+        auto byKey = [](const Entry& a, const Entry& b) { return a.first < b.first; };
+        std::sort(visible.begin(), visible.end(), byKey);
+        std::sort(nearby.begin(), nearby.end(), byKey);
+
         int n = std::min<int>(int(visible.size()), kMaxFruit);
         std::vector<glm::vec4> centers(n), data(n);
         for (int i = 0; i < n; ++i) {
@@ -127,6 +134,22 @@ private:
         if (n > 0) {
             glUniform4fv(loc(scene_, "uFruitCenters"), n, glm::value_ptr(centers[0]));
             glUniform4fv(loc(scene_, "uFruitData"), n, glm::value_ptr(data[0]));
+        }
+
+        int h = std::min<int>(int(nearby.size()), kMaxHints);
+        std::vector<glm::vec4> hc(h), hd(h);
+        for (int i = 0; i < h; ++i) {
+            const FruitInstance& f = *nearby[i].second;
+            float off = glm::dot(f.center - camPos, normal);
+            float gap = nearby[i].first;
+            hc[i] = f.center - off * normal; // projected into the slice
+            float strength = 1.0f - gap / kHintRange;
+            hd[i] = glm::vec4(f.radius, float(f.type), off, strength * strength);
+        }
+        glUniform1i(loc(scene_, "uHintCount"), h);
+        if (h > 0) {
+            glUniform4fv(loc(scene_, "uHintCenters"), h, glm::value_ptr(hc[0]));
+            glUniform4fv(loc(scene_, "uHintData"), h, glm::value_ptr(hd[0]));
         }
     }
 
@@ -161,6 +184,7 @@ private:
         std::string out = "#version 330 core\n";
 #endif
         out += "#define MAX_FRUIT " + std::to_string(kMaxFruit) + "\n";
+        out += "#define MAX_HINTS " + std::to_string(kMaxHints) + "\n";
         std::istringstream in(src);
         std::string line;
         while (std::getline(in, line)) {
