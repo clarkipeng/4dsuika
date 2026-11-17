@@ -202,6 +202,18 @@ float groundHeight(vec3 q) {
 }
 
 
+// Radius of the island in (x, z, w) at a relative depth below the grass: it stays
+// wide through the upper cliff, then rounds into the rocky tip like the cover.
+float islandProfile(float depth) {
+    return ISLAND_R * pow(max(1.0 - pow(depth, 2.4), 0.0), 0.62);
+}
+
+// The grass overhangs the cliff top: within ~1 below the grass the island is a
+// little wider, so the lip casts a band of shadow on the dirt below it.
+float grassLip(float y, float gh) {
+    return 0.55 * smoothstep(gh - 1.3, gh - 0.35, y);
+}
+
 vec2 islandSDF(vec4 p) {
     vec3 q = p.xzw;
     // Top surface (height field, Lipschitz-corrected). The ground never dips more
@@ -214,17 +226,17 @@ vec2 islandSDF(vec4 p) {
     }
     // Faceted side wall that narrows toward the tip of the underside.
     float depth = clamp((GROUND_Y - p.y) / (GROUND_Y - ISLAND_BASE), 0.0, 1.0);
-    float rBase = ISLAND_R * pow(max(1.0 - pow(depth, 1.7), 0.0), 0.75);
+    float rBase = islandProfile(depth);
     // islandRadial(q) <= |q| / 0.9 and the radius below is >= rBase - 1.6 depth, so
     // when even that bound is inside the top surface the wall can be skipped.
     // The wall's gradient reaches about 1/0.9 from the faces plus 0.7 from the facet
     // noise, so its distance is scaled by 0.55 to stay a safe underestimate.
-    float side = (length(q) / 0.9 - rBase + 1.6 * depth) * 0.55;
+    float side = (length(q) / 0.9 - rBase + 1.6 * depth - 0.55) * 0.55;
     if (side > top) {
         float yb = p.y * 0.6;
         float bf = floor(yb);
         float jag = mix(hash1(bf * 1.7), hash1(bf * 1.7 + 1.7), yb - bf);
-        float radius = rBase + 0.9 * jag * depth;
+        float radius = rBase + 0.9 * jag * depth + grassLip(p.y, gh);
         // small chunky facets: piecewise-linear noise over (x, z, w, y) keeps faces flat
         radius -= 1.6 * depth * facetNoise3(q * 0.42 + vec3(0.0, p.y * 0.55, p.y * 0.3));
         side = (islandRadial(q, yb) - radius) * 0.55;
@@ -418,7 +430,7 @@ float worldShadowSDF(vec4 p) {
     float d = bowlSDF(p);
     vec3 q = p.xzw;
     float depth = clamp((GROUND_Y - p.y) / (GROUND_Y - ISLAND_BASE), 0.0, 1.0);
-    float rBase = ISLAND_R * pow(max(1.0 - pow(depth, 1.7), 0.0), 0.75);
+    float rBase = islandProfile(depth);
     float side = (length(q) / 0.9 - rBase + 1.6 * depth) * 0.55;
     float top = p.y > GROUND_Y - 2.5 ? (p.y - groundHeight(q)) * 0.65 : -1e5;
     float island = max(max(top, side), BOWL_R + BOWL_HALF + 0.04 - length(p));
