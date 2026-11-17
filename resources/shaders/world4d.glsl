@@ -468,10 +468,29 @@ vec2 cloudsSDF(vec4 p, float best) {
 // ---- scene --------------------------------------------------------------------
 vec2 opU(vec2 a, vec2 b) { return (a.x < b.x) ? a : b; }
 
+// the main tree, and two that exist only far along w: rotate in xw or zw to find them
+vec2 treesSDF(vec4 p, vec2 r) {
+    vec4 t0 = vec4(5.6, GROUND_Y, -3.2, 0.0);
+    vec4 t1 = vec4(-4.5, GROUND_Y + 0.3, -5.0, 6.2);
+    vec4 t2 = vec4(4.0, GROUND_Y + 0.2, 4.5, 5.5);
+    if (length(p - t0 - vec4(0.0, 6.0, 0.0, 0.0) * 0.85) - 9.0 * 0.85 < r.x) r = opU(r, treeSDF(p, t0, 0.85, vec4(1.0), r.x));
+    if (length(p - t1 - vec4(0.0, 6.0, 0.0, 0.0) * 0.7) - 9.0 * 0.7 < r.x) r = opU(r, treeSDF(p, t1, 0.7, vec4(-1.0, 1.0, 1.0, 1.0), r.x));
+    if (length(p - t2 - vec4(0.0, 6.0, 0.0, 0.0) * 0.5) - 9.0 * 0.5 < r.x) r = opU(r, treeSDF(p, t2, 0.5, vec4(1.0, 1.0, -1.0, 1.0), r.x));
+    return r;
+}
+
 // Every part is skipped when a lower bound on its distance is already farther than the
 // best hit so far. Bounds never stand in for distances: soft shadows read distances
 // as near-misses, so a loose bound would draw false penumbrae.
-vec2 worldSDF(vec4 p) {
+//
+// The world is split for the renderer's slice cache (docs/4D.md): worldStaticSDF is
+// everything that never moves and must not read uTime; the renderer bakes it for the
+// current slice into a 3D texture. Every static part lies inside the glome
+// WORLD_STATIC_CENTER / WORLD_STATIC_RADIUS. worldDynamicSDF is what moves (the
+// clouds); it is evaluated live. worldSDF is their union.
+#define WORLD_STATIC_CENTER vec4(0.0, -3.0, 0.0, 0.0)
+#define WORLD_STATIC_RADIUS 17.0
+vec2 worldStaticSDF(vec4 p) {
     vec2 r = vec2(bowlSDF(p), MAT_BOWL);
     r = opU(r, pondSDF(p));
     if (length(p - vec4(0.0, -6.0, 0.0, 0.0)) - 13.5 < r.x) r = opU(r, islandSDF(p));
@@ -484,20 +503,42 @@ vec2 worldSDF(vec4 p) {
     vec2 sn = stonesSDF(p, r.x);
     if (sn.x < r.x) r = sn;
 #endif
-    // the main tree, and two that exist only far along w: rotate in xw or zw to find them
 #ifndef SKIP_TREES
-    vec4 t0 = vec4(5.6, GROUND_Y, -3.2, 0.0);
-    vec4 t1 = vec4(-4.5, GROUND_Y + 0.3, -5.0, 6.2);
-    vec4 t2 = vec4(4.0, GROUND_Y + 0.2, 4.5, 5.5);
-    if (length(p - t0 - vec4(0.0, 6.0, 0.0, 0.0) * 0.85) - 9.0 * 0.85 < r.x) r = opU(r, treeSDF(p, t0, 0.85, vec4(1.0), r.x));
-    if (length(p - t1 - vec4(0.0, 6.0, 0.0, 0.0) * 0.7) - 9.0 * 0.7 < r.x) r = opU(r, treeSDF(p, t1, 0.7, vec4(-1.0, 1.0, 1.0, 1.0), r.x));
-    if (length(p - t2 - vec4(0.0, 6.0, 0.0, 0.0) * 0.5) - 9.0 * 0.5 < r.x) r = opU(r, treeSDF(p, t2, 0.5, vec4(1.0, 1.0, -1.0, 1.0), r.x));
-#endif
-#ifndef SKIP_CLOUDS
-    vec2 cl = cloudsSDF(p, r.x);
-    if (cl.x < r.x) r = cl;
+    r = treesSDF(p, r);
 #endif
     return r;
+}
+
+// Only the parts that can carry material `mat`, for normals at a hit of that
+// material: much cheaper than the whole world, and the same surface near the hit.
+// `best` (> 0) bounds how far from p parts are looked for.
+vec2 worldStaticSDFFor(vec4 p, float mat) {
+    const float best = 1.0;
+    if (mat == MAT_BOWL) return vec2(bowlSDF(p), MAT_BOWL);
+    if (mat == MAT_GRASS || mat == MAT_DIRT) return islandSDF(p);
+    if (mat == MAT_WATER) return pondSDF(p);
+    if (mat == MAT_WOOD) return fenceSDF(p);
+    if (mat == MAT_STONE) {
+        vec2 r = rocksSDF(p, best);
+        vec2 sn = stonesSDF(p, r.x);
+        return sn.x < r.x ? sn : r;
+    }
+    if (mat == MAT_BARK || mat == MAT_LEAVES) return treesSDF(p, vec2(best, MAT_NONE));
+    return worldStaticSDF(p);
+}
+
+vec2 worldDynamicSDF(vec4 p, float best) {
+#ifndef SKIP_CLOUDS
+    return cloudsSDF(p, best);
+#else
+    return vec2(best, MAT_NONE);
+#endif
+}
+
+vec2 worldSDF(vec4 p) {
+    vec2 r = worldStaticSDF(p);
+    vec2 cl = worldDynamicSDF(p, r.x);
+    return cl.x < r.x ? cl : r;
 }
 
 // ---- coarse occluder for shadows and AO ----------------------------------------

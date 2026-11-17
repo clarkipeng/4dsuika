@@ -4,8 +4,14 @@
 // the output, then a present pass upscales it and draws the slice indicator.
 // Resolution adapts to the measured GPU time; a quality preset caps it and
 // sets the march budgets.
+//
+// Slice cache: the static world (worldStaticSDF) is baked for the current
+// slice into a 3D distance texture, rebaked only when the slice turns or
+// moves; the scene pass marches that and uses the analytic SDF only near
+// surfaces (docs/4D.md, "Slice cache").
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -52,9 +58,28 @@ public:
     float targetMs = 11.0f;   // scene pass budget inside a 16.7 ms frame
     float renderScale = 1.0f; // current scale (set directly when not adaptive)
     bool syncTiming = false;  // wait for each timing result (benchmarks)
+    bool useCache = true;     // slice cache on (falls back to analytic if unsupported)
+    std::string extraDefines; // added to the scene shader on the next setQuality
+
+    // GPU time of the last cache bake in ms, and how many bakes ran.
+    float bakeMs() const { return bakeMs_; }
+    int bakeCount() const { return bakeCount_; }
 
     bool init() {
         present_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/present4d.fs", "");
+        bake_ = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/bake4d.fs", "");
+        readStaticBound();
+        // The cache texture always exists (1 texel until the first bake) so
+        // the scene shader's sampler is valid even with the cache off.
+        glGenTextures(1, &cacheTex_);
+        glGenFramebuffers(1, &cacheFbo_);
+        glBindTexture(GL_TEXTURE_3D, cacheTex_);
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_R16F, 1, 1, 1, 0, GL_RED, GL_HALF_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+#ifndef __EMSCRIPTEN__
+        glGenQueries(1, &bakeQuery_);
+#endif
         glGenVertexArrays(1, &vao_);
 #ifndef __EMSCRIPTEN__
         glGenQueries(kQueries, queries_);
@@ -66,13 +91,20 @@ public:
     Quality quality() const { return quality_; }
     void setQuality(Quality q) {
         quality_ = q;
-        std::string defs = "#define QUALITY " + std::to_string(int(q)) + "\n";
+        std::string defs = "#define QUALITY " + std::to_string(int(q)) + "\n" + extraDefines;
         GLuint p = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs", defs);
         if (p) {
             if (scene_) glDeleteProgram(scene_);
             scene_ = p;
         }
         renderScale = 1.0f; // re-clamped against the new cap next frame
+        cacheValid_ = false;
+    }
+
+    // Texels per side of the slice cache for each preset.
+    int cacheResolution() const {
+        static const int res[] = {96, 128, 160, 192};
+        return res[int(quality_)];
     }
 
     // Largest scale the preset allows at this output size.
@@ -114,6 +146,7 @@ public:
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
         glBindVertexArray(vao_);
+        bool cached = useCache && updateCache(cam, time);
 
         // Scene pass.
         glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
@@ -132,6 +165,14 @@ public:
         uploadFruit(pos, basis[3]);
         glUniform4fv(loc(scene_, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
         glUniform4fv(loc(scene_, "uPreviewData"), 1, glm::value_ptr(previewData_));
+        glUniform1i(loc(scene_, "uCacheMode"), cached ? 1 : 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_3D, cacheTex_);
+        glUniform1i(loc(scene_, "uCache"), 1);
+        glUniform4fv(loc(scene_, "uCacheOrigin"), 1, glm::value_ptr(cacheOrigin_));
+        glUniformMatrix4fv(loc(scene_, "uCacheBasis"), 1, GL_FALSE, glm::value_ptr(cacheBasis_));
+        glUniform1f(loc(scene_, "uCacheSize"), cacheSize_);
+        glUniform1f(loc(scene_, "uCacheVoxel"), cacheVoxel_);
         beginTimer();
         glDrawArrays(GL_TRIANGLES, 0, 3);
         endTimer();
@@ -158,7 +199,20 @@ public:
 private:
     static constexpr int kQueries = 4;
     static constexpr float kMinScaleOfCap = 0.35f; // adaptive floor: keep frame rate over sharpness
-    GLuint scene_ = 0, present_ = 0, vao_ = 0;
+    GLuint scene_ = 0, present_ = 0, bake_ = 0, vao_ = 0;
+    // Slice cache.
+    GLuint cacheTex_ = 0, cacheFbo_ = 0, bakeQuery_ = 0;
+    int cacheRes_ = 0;
+    bool cacheValid_ = false, cacheUnsupported_ = false;
+    glm::vec4 staticCenter_{0.0f, -3.0f, 0.0f, 0.0f};
+    float staticRadius_ = 17.0f;
+    glm::vec4 bakedSliceOrigin_{0.0f};
+    glm::mat4 bakedSlice_{0.0f};
+    glm::vec4 cacheOrigin_{0.0f};
+    glm::mat4 cacheBasis_{1.0f};
+    float cacheSize_ = 0.0f, cacheVoxel_ = 1.0f;
+    float bakeMs_ = 0.0f;
+    int bakeCount_ = 0;
     GLuint fbo_ = 0, color_ = 0;
     int fboW_ = 0, fboH_ = 0;
     Quality quality_ = Quality::High;
@@ -212,6 +266,95 @@ private:
         float ratio = std::sqrt(targetMs / std::max(ms, 0.1f));
         float step = std::clamp(ratio, 0.97f, 1.01f);
         renderScale = std::clamp(renderScale * step, cap * kMinScaleOfCap, cap);
+    }
+
+    // The static world's bound glome, read from world4d.glsl so it has one source.
+    void readStaticBound() {
+        std::string w = readFile("resources/shaders/world4d.glsl");
+        auto c = w.find("#define WORLD_STATIC_CENTER vec4(");
+        auto r = w.find("#define WORLD_STATIC_RADIUS ");
+        if (c == std::string::npos || r == std::string::npos) {
+            std::cerr << "world4d.glsl has no WORLD_STATIC_CENTER/RADIUS; slice cache off\n";
+            cacheUnsupported_ = true;
+            return;
+        }
+        glm::vec4& v = staticCenter_;
+        std::sscanf(w.c_str() + c + 33, "%f , %f , %f , %f", &v.x, &v.y, &v.z, &v.w);
+        std::sscanf(w.c_str() + r + 28, "%f", &staticRadius_);
+    }
+
+    // Rebakes the cache if the slice moved; false when the cache cannot be used.
+    bool updateCache(const Camera4D& cam, float time) {
+        if (cacheUnsupported_ || !bake_) return false;
+        int res = cacheResolution();
+        if (res != cacheRes_) {
+            glBindTexture(GL_TEXTURE_3D, cacheTex_);
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_R16F, res, res, res, 0, GL_RED, GL_HALF_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            glBindFramebuffer(GL_FRAMEBUFFER, cacheFbo_);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, cacheTex_, 0, 0);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                std::cerr << "R16F 3D texture not renderable; slice cache off\n";
+                cacheUnsupported_ = true;
+                return false;
+            }
+            cacheRes_ = res;
+            cacheValid_ = false;
+        }
+
+        // The slice: through target + offset * normal, spanned by the slice's
+        // first three axes. The orbit turns only within it, so it never rebakes.
+        glm::mat4 M = cam.slice.matrix();
+        glm::vec4 o = cam.target + cam.offset * M[3];
+        if (cacheValid_ && o == bakedSliceOrigin_ && M == bakedSlice_) return true;
+        bakedSliceOrigin_ = o;
+        bakedSlice_ = M;
+        cacheValid_ = true;
+
+        // The static bound glome meets the slice in a ball; bake its bounding cube.
+        float off = glm::dot(staticCenter_ - o, M[3]);
+        float rho2 = staticRadius_ * staticRadius_ - off * off;
+        cacheBasis_ = M;
+        if (rho2 <= 0.0f) { cacheSize_ = 0.0f; return true; }
+        float rho = std::sqrt(rho2);
+        glm::vec3 centre = glm::vec3(glm::transpose(M) * (staticCenter_ - o));
+        glm::vec3 corner = centre - glm::vec3(rho);
+        cacheOrigin_ = o + M * glm::vec4(corner, 0.0f);
+        cacheSize_ = 2.0f * rho;
+        cacheVoxel_ = cacheSize_ / float(cacheRes_);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, cacheFbo_);
+        glViewport(0, 0, cacheRes_, cacheRes_);
+        glUseProgram(bake_);
+        glUniform1f(loc(bake_, "uTime"), time);
+        glUniform4fv(loc(bake_, "uSunDir"), 1, glm::value_ptr(sunDir));
+        glUniform4fv(loc(bake_, "uCacheOrigin"), 1, glm::value_ptr(cacheOrigin_));
+        glUniformMatrix4fv(loc(bake_, "uCacheBasis"), 1, GL_FALSE, glm::value_ptr(cacheBasis_));
+        glUniform1f(loc(bake_, "uCacheVoxel"), cacheVoxel_);
+        GLint layerLoc = loc(bake_, "uLayer");
+#ifndef __EMSCRIPTEN__
+        bool timed = syncTiming && bakeQuery_;
+        if (timed) glBeginQuery(GL_TIME_ELAPSED, bakeQuery_);
+#endif
+        for (int z = 0; z < cacheRes_; ++z) {
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, cacheTex_, 0, z);
+            glUniform1f(layerLoc, float(z));
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+#ifndef __EMSCRIPTEN__
+        if (timed) {
+            glEndQuery(GL_TIME_ELAPSED);
+            GLuint64 ns = 0;
+            glGetQueryObjectui64v(bakeQuery_, GL_QUERY_RESULT, &ns);
+            bakeMs_ = float(ns) * 1e-6f;
+        }
+#endif
+        ++bakeCount_;
+        return true;
     }
 
     static GLint loc(GLuint p, const char* name) { return glGetUniformLocation(p, name); }
@@ -289,7 +432,8 @@ private:
     // lines with files from resources/shaders/.
     static std::string preprocess(const std::string& src, const std::string& defines) {
 #ifdef __EMSCRIPTEN__
-        std::string out = "#version 300 es\nprecision highp float;\nprecision highp int;\n";
+        std::string out = "#version 300 es\nprecision highp float;\nprecision highp int;\n"
+                          "precision highp sampler3D;\n";
 #else
         std::string out = "#version 330 core\n";
 #endif
