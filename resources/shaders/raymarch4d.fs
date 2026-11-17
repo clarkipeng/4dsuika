@@ -565,6 +565,17 @@ vec2 lightHit(vec4 ro, vec4 rd, Hit h) {
     return vec2(sh, ambientOcclusion(p, h.ns));
 }
 
+// What shows where nothing is hit. The review turntable uses a fixed studio
+// backdrop instead of the sky, so only the subject changes as the slice turns.
+vec3 background(vec2 px, vec4 rd) {
+#ifdef TURNTABLE
+    float y = px.y / uResolution.y;
+    return mix(vec3(0.012, 0.012, 0.018), vec3(0.075, 0.05, 0.075), y);
+#else
+    return skyColor(rd);
+#endif
+}
+
 // Final colour of a pixel from its hit and light (shadow, AO).
 vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     vec3 col = vec3(0.0);
@@ -618,7 +629,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     // Sunset fog. The sky (noise clouds, not cheap) is evaluated once, and
     // only where it shows.
     float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
-    if (fog > 0.002) col = mix(col, skyColor(rd), fog);
+    if (fog > 0.002) col = mix(col, background(px, rd), fog);
 
     // The bowl glows softly, as in the cover art.
     // Not over fruit, which must stay readable.

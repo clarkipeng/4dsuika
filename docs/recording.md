@@ -48,3 +48,18 @@ t=9   yaw=80  pitch=-30 xw=90 yw=25 offset=1.5 ease=linear
 | `ease` | `smooth` (default, zero speed at each key) or `linear`, for the segment that ends at this key |
 
 A key that omits a field keeps the previous key's value; the first key starts from the game defaults. The included trailer path runs for 20 seconds. The slice is interpolated with slerp, so 4D turns take the shortest path. The camera holds before the first and after the last key.
+
+## 4D turntable
+
+A review video and contact sheet per subject: one fruit, or the bowl, alone and centred against a plain backdrop, while the slice turns 0 to 180° through xw, then yw, then zw.
+The planes are those of the default slice's axes (x, y, z each turned into w), and the slice pivots on the subject's 4D centre, so every slice cuts it through the middle.
+Each turn holds half a second at both ends; the title shows the subject, plane and angle, and the indicator bottom-left shows the slice.
+
+```bash
+make turntable                         # all 11 fruit and the bowl into recordings/turntable/
+make turntable SUBJECT=pear,bowl TURNTABLE_DIR=/tmp/tt
+```
+
+This writes `<subject>.mp4` (960×960, 30 fps, 15 s), `<subject>_sheet.png` (one row per plane, a column every 30°) and the frames in `<subject>/`.
+The binary alone takes `--turntable dir --subject all|fruit|bowl|<names> --sweep seconds` plus the usual `--size`, `--fps` and `--quality`; it writes the frames and sheets, `make turntable` adds the videos.
+The bowl turns about its glome's centre, the origin at its rim height: at yw 90° the slice is the rim's own hyperplane.
