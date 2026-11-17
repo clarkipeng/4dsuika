@@ -99,32 +99,64 @@ float sdLimb(vec4 p, vec4 a, vec4 b, float ra, float rb) {
     return length(pa - ba * h) - mix(ra, rb, h);
 }
 
-// Cheap fixed 4D rotation from a seed: three plane rotations whose cos/sin come from
-// the rational parametrisation ((1-t^2), 2t) / (1+t^2), so no trig per call.
-vec4 seedRotate(vec4 p, float seed) {
-    vec3 t = vec3(hash1(seed * 3.1), hash1(seed * 5.7 + 1.0), hash1(seed * 7.3 + 2.0)) * 2.0 - 1.0;
-    vec3 k = 1.0 / (1.0 + t * t);
-    vec3 c = (1.0 - t * t) * k, s = 2.0 * t * k;
-    p.xy = mat2(c.x, s.x, -s.x, c.x) * p.xy;
-    p.zw = mat2(c.y, s.y, -s.y, c.y) * p.zw;
-    p.xw = mat2(c.z, s.z, -s.z, c.z) * p.xw;
-    return p;
-}
-
 // A faceted glome: the polytope cut by the 24 hyperplanes of the 24-cell, (+-1, +-1, 0, 0)
 // and permutations, each pushed out by its own jitter. Every 3D slice of it is a faceted
 // low-poly blob. The four sign combinations of each axis pair are evaluated as a vec4.
-// `scale` stretches it per axis (rocks are squat, clouds are wide).
+// `scale` stretches it per axis (rocks are squat, canopies thin in w). Its vertices lie
+// within GEM_REACH * r of the centre (24-cell circumradius sqrt(2), jitter up to 1.08),
+// which is what callers bound it by.
+const float GEM_REACH = 1.53;
+
+// Each gem g has a fixed random 4D rotation GEM_ROT[g] and jitters GEM_JIT[3g .. 3g+2],
+// baked once (rational-parametrised plane rotations and golden-ratio jitter) so a gem
+// costs one matrix multiply and 24 planes. Gems 0-8 are the rocks; 9 + 2k and 10 + 2k
+// are the two halves of canopy k.
+// Always index these tables with constants (unrolled code, as below): indexing them
+// with a loop counter makes the GPU copy them per call, which cost ~10 ms a frame.
+const mat4 GEM_ROT[17] = mat4[17](
+    mat4(0.0510, 0.9022, 0.0000, 0.4282, -0.1067, 0.4313, 0.0000, -0.8959, 0.3680, 0.0000, 0.9288, -0.0438, -0.9223, 0.0000, 0.3706, 0.1098),
+    mat4(0.2229, -0.9468, 0.0000, 0.2321, 0.6559, 0.3218, 0.0000, 0.6828, 0.7184, 0.0000, 0.0884, -0.6900, -0.0638, 0.0000, 0.9961, 0.0613),
+    mat4(0.2801, -0.3023, 0.0000, 0.9111, 0.0888, 0.9532, 0.0000, 0.2890, -0.8754, 0.0000, 0.4015, 0.2691, -0.3838, 0.0000, -0.9159, 0.1180),
+    mat4(0.3647, -0.3780, 0.0000, 0.8510, 0.1489, 0.9258, 0.0000, 0.3475, -0.8806, 0.0000, 0.2866, 0.3774, -0.2634, 0.0000, -0.9580, 0.1129),
+    mat4(0.1258, 0.9539, 0.0000, 0.2726, -0.3998, 0.3002, 0.0000, -0.8660, -0.7768, 0.0000, 0.5177, 0.3586, -0.4700, 0.0000, -0.8556, 0.2170),
+    mat4(0.3828, -0.8467, 0.0000, -0.3696, 0.6091, 0.5321, 0.0000, -0.5881, -0.6835, 0.0000, 0.1782, -0.7079, 0.1237, 0.0000, 0.9840, 0.1282),
+    mat4(0.4765, 0.8792, 0.0000, 0.0047, -0.8791, 0.4765, 0.0000, -0.0086, -0.0072, 0.0000, 0.6767, 0.7362, -0.0066, 0.0000, -0.7362, 0.6767),
+    mat4(0.1762, -0.2086, 0.0000, -0.9620, 0.0376, 0.9780, 0.0000, -0.2052, -0.9027, 0.0000, 0.3973, -0.1653, 0.3908, 0.0000, 0.9177, 0.0716),
+    mat4(0.4300, -0.6270, 0.0000, -0.6497, 0.3460, 0.7790, 0.0000, -0.5228, -0.8321, 0.0000, 0.0660, -0.5507, 0.0550, 0.0000, 0.9978, 0.0364),
+    mat4(0.3413, -0.6114, 0.0000, 0.7140, 0.2637, 0.7913, 0.0000, 0.5516, -0.1767, 0.0000, 0.9806, 0.0845, -0.8848, 0.0000, -0.1958, 0.4229),
+    mat4(0.1223, -0.8201, 0.0000, 0.5590, 0.1753, 0.5722, 0.0000, 0.8011, -0.9172, 0.0000, 0.3442, 0.2007, -0.3362, 0.0000, -0.9389, 0.0736),
+    mat4(0.0131, 0.9990, 0.0000, -0.0417, -0.2996, 0.0438, 0.0000, 0.9531, -0.9032, 0.0000, 0.3218, -0.2839, 0.3070, 0.0000, 0.9468, 0.0965),
+    mat4(0.9024, -0.4209, 0.0000, 0.0919, 0.4187, 0.9071, 0.0000, 0.0426, -0.0701, 0.0000, 0.7221, 0.6883, -0.0731, 0.0000, -0.6918, 0.7184),
+    mat4(0.0510, 0.9022, 0.0000, 0.4282, -0.1067, 0.4313, 0.0000, -0.8959, 0.3680, 0.0000, 0.9288, -0.0438, -0.9223, 0.0000, 0.3706, 0.1098),
+    mat4(0.4343, -0.7733, 0.0000, -0.4619, 0.5297, 0.6340, 0.0000, -0.5634, 0.2445, 0.0000, 0.9420, 0.2298, 0.6863, 0.0000, -0.3355, 0.6453),
+    mat4(0.2229, -0.9468, 0.0000, 0.2321, 0.6559, 0.3218, 0.0000, 0.6828, 0.7184, 0.0000, 0.0884, -0.6900, -0.0638, 0.0000, 0.9961, 0.0613),
+    mat4(0.0045, -0.9999, 0.0000, -0.0154, 0.2797, 0.0160, 0.0000, -0.9600, 0.6810, 0.0000, 0.7049, 0.1984, 0.6768, 0.0000, -0.7093, 0.1972));
+const vec4 GEM_JIT[51] = vec4[51](
+    vec4(0.9468, 0.9215, 0.9225, 0.9365), vec4(1.0233, 1.0249, 1.0475, 1.0643), vec4(0.9251, 0.9588, 0.9838, 0.9226),
+    vec4(0.8929, 1.0469, 0.9940, 0.8967), vec4(1.0061, 0.9205, 0.9831, 0.9770), vec4(0.8776, 0.8627, 1.0736, 1.0053),
+    vec4(1.0590, 0.9522, 1.0654, 1.0769), vec4(1.0730, 1.0361, 1.0547, 1.0257), vec4(1.0500, 1.0778, 1.0345, 0.9968),
+    vec4(1.0050, 1.0776, 0.9168, 1.0371), vec4(1.0559, 1.0157, 0.9904, 0.9385), vec4(0.9114, 0.9817, 0.9043, 1.0795),
+    vec4(0.9511, 0.9830, 0.9883, 0.9973), vec4(0.9027, 0.9113, 0.9260, 1.0712), vec4(0.8638, 0.8857, 0.9941, 1.0710),
+    vec4(0.8972, 0.8883, 1.0597, 0.9575), vec4(0.9696, 1.0269, 0.8616, 0.9840), vec4(1.0363, 1.0097, 0.8640, 1.0626),
+    vec4(1.0633, 1.0137, 0.9111, 0.9178), vec4(0.9525, 1.0065, 1.0173, 1.0327), vec4(0.8977, 0.9136, 1.0449, 0.9252),
+    vec4(1.0093, 0.9190, 0.9826, 0.8780), vec4(1.0193, 0.9021, 0.9529, 0.9454), vec4(1.0701, 1.0376, 0.9147, 0.9167),
+    vec4(0.9554, 1.0444, 1.0540, 1.0582), vec4(1.0022, 1.0177, 1.0245, 1.0782), vec4(1.0226, 1.0326, 1.0045, 0.9994),
+    vec4(1.0547, 0.8908, 0.9996, 1.0160), vec4(0.9736, 0.9297, 0.9562, 1.0188), vec4(0.8913, 0.9308, 1.0241, 1.0685),
+    vec4(0.8961, 0.9371, 1.0261, 0.8627), vec4(1.0486, 0.9725, 0.9282, 0.9822), vec4(0.9551, 1.0007, 0.8614, 0.9604),
+    vec4(1.0007, 1.0161, 1.0711, 0.9762), vec4(0.9564, 1.0453, 0.8919, 0.9315), vec4(1.0637, 1.0548, 0.8940, 0.9311),
+    vec4(1.0622, 1.0625, 0.8775, 1.0429), vec4(1.0315, 0.9521, 0.9998, 1.0309), vec4(1.0365, 0.9958, 1.0423, 1.0431),
+    vec4(0.9468, 0.9215, 0.9225, 0.9365), vec4(1.0233, 1.0249, 1.0475, 1.0643), vec4(0.9251, 0.9588, 0.9838, 0.9226),
+    vec4(1.0083, 0.9679, 0.9489, 1.0031), vec4(0.8783, 1.0677, 0.9354, 0.9437), vec4(0.9889, 0.8997, 0.9121, 1.0346),
+    vec4(0.8929, 1.0469, 0.9940, 0.8967), vec4(1.0061, 0.9205, 0.9831, 0.9770), vec4(0.8776, 0.8627, 1.0736, 1.0053),
+    vec4(0.9543, 0.8732, 1.0204, 0.9634), vec4(0.9452, 0.9633, 0.8710, 1.0764), vec4(0.9414, 1.0237, 1.0019, 1.0262));
+
 float gemPair(float a, float b, float r, vec4 j) {
     vec4 d = vec4(a + b, a - b, b - a, -a - b) * 0.70710678 - r * j;
     return max(max(d.x, d.y), max(d.z, d.w));
 }
-float sdGem(vec4 p, float r, float seed, vec4 scale) {
-    vec4 q = seedRotate(p / scale, seed);
-    vec4 h = fract(seed * vec4(0.7548777, 0.5698403, 0.3247180, 0.8191725) + vec4(0.13, 0.57, 0.31, 0.89));
-    vec4 j0 = 0.86 + 0.22 * h;
-    vec4 j1 = 0.86 + 0.22 * fract(h.yzwx * 1.618 + 0.29);
-    vec4 j2 = 0.86 + 0.22 * fract(h.zwxy * 2.414 + 0.61);
+float sdGem(vec4 p, float r, int g, vec4 scale) {
+    vec4 q = GEM_ROT[g] * (p / scale);
+    vec4 j0 = GEM_JIT[3 * g], j1 = GEM_JIT[3 * g + 1], j2 = GEM_JIT[3 * g + 2];
     float d = gemPair(q.x, q.y, r, j0);
     d = max(d, gemPair(q.x, q.z, r, j1));
     d = max(d, gemPair(q.x, q.w, r, j2));
@@ -134,9 +166,9 @@ float sdGem(vec4 p, float r, float seed, vec4 scale) {
     return d * min(min(scale.x, scale.y), min(scale.z, scale.w));
 }
 
-// Rounder, finer-faceted gem: the intersection of two differently rotated gems.
-float sdGem2(vec4 p, float r, float seed, vec4 scale) {
-    return max(sdGem(p, r * 1.06, seed, scale), sdGem(p, r * 1.06, seed + 0.37, scale));
+// Rounder, finer-faceted gem: the intersection of gems g and g + 1.
+float sdGem2(vec4 p, float r, int g, vec4 scale) {
+    return max(sdGem(p, r * 1.06, g, scale), sdGem(p, r * 1.06, g + 1, scale));
 }
 
 // ---- island -------------------------------------------------------------------
@@ -187,9 +219,12 @@ float pondDist(vec3 q) {
 // the pond's water level sits a little below the grass around it
 const float WATER_Y = GROUND_Y - 0.55;
 
-float groundHeight(vec3 q) {
+// The ground's height in (x, z, w). `facets` adds the 0..0.35 low-poly bumps; without
+// them the ground is never above the real one (the shadow occluder uses that).
+float groundHeight(vec3 q, bool facets) {
     float r = length(q);
-    float h = GROUND_Y + 0.35 * facetNoise3(q * 0.42) + hillField(q);
+    float h = GROUND_Y + hillField(q);
+    if (facets) h += 0.35 * facetNoise3(q * 0.42);
     // a gentle crown so the edge falls away
     h -= 0.008 * r * r;
     // flatten under and around the bowl
@@ -221,7 +256,7 @@ vec2 islandSDF(vec4 p) {
     float gh = GROUND_Y - 1.2;
     float top = -1e5;
     if (p.y > GROUND_Y - 2.5) {
-        gh = groundHeight(q);
+        gh = groundHeight(q, true);
         top = (p.y - gh) * 0.65;   // 1 / sqrt(1 + steepest slope^2)
     }
     // Faceted side wall that narrows toward the tip of the underside.
@@ -264,24 +299,27 @@ float bowlSDF(vec4 p) {
 }
 
 // ---- rocks --------------------------------------------------------------------
-// (x, z, w) on the ground, size, seed. Some sit at w far from 0: rotate to find them.
+// Centres in 4D (sunk 0.15 size above the ground height there) and sizes. Some sit at
+// w far from 0: rotate to find them.
 const vec4 ROCKS[9] = vec4[9](
-        vec4( 7.4,  2.4,  0.0, 1.25), vec4( 5.4,  4.6,  0.4, 0.6),
-        vec4(-6.2,  1.6, -0.3, 0.55), vec4(-6.8,  3.8,  0.2, 0.45),
-        vec4( 2.0,  7.4, -0.5, 0.5),  vec4( 3.6, -3.0,  5.2, 1.4),
-        vec4(-4.0,  2.0, -5.8, 1.6),  vec4( 0.5, -7.0,  6.8, 1.1),
-        vec4(-7.5, -1.0,  4.5, 0.9));
+        vec4( 7.40, -2.474,  2.40,  0.00), vec4( 5.40, -2.561,  4.60,  0.40),
+        vec4(-6.20, -2.377,  1.60, -0.30), vec4(-6.80, -2.680,  3.80,  0.20),
+        vec4( 2.00, -2.731,  7.40, -0.50), vec4( 3.60, -1.424, -3.00,  5.20),
+        vec4(-4.00, -2.243,  2.00, -5.80), vec4( 0.50, -2.651, -7.00,  6.80),
+        vec4(-7.50, -2.632, -1.00,  4.50));
+const float ROCK_SIZE[9] = float[9](1.25, 0.6, 0.55, 0.45, 0.5, 1.4, 1.6, 1.1, 0.9);
+const vec4 ROCK_SCALE = vec4(1.15, 0.75, 1.0, 1.0);
+
+#define ROCK(i) { vec4 q = p - ROCKS[i]; \
+    if (length(q) - GEM_REACH * 1.15 * ROCK_SIZE[i] < d) d = min(d, sdGem(q, ROCK_SIZE[i], i, ROCK_SCALE)); }
 
 vec2 rocksSDF(vec4 p, float best) {
+    // the rock centres lie within 9.8 of the origin in (x, z, w) and 1 of y = -2.3,
+    // and no rock reaches farther than 2.9 from its centre
     float d = best;
-    for (int i = 0; i < 9; i++) {
-        vec4 r = ROCKS[i];
-        // bound first (the ground under a rock lies within 4 of GROUND_Y), then place it
-        vec4 q = p - vec4(r.x, GROUND_Y, r.y, r.z);
-        if (length(vec4(q.x, max(abs(q.y + 0.5) - 4.0, 0.0), q.zw)) - 1.8 * r.w > d) continue;
-        q.y -= groundHeight(vec3(r.x, r.y, r.z)) - GROUND_Y + 0.15 * r.w;
-        d = min(d, sdGem(q, r.w, float(i) + 3.0, vec4(1.15, 0.75, 1.0, 1.0)));
-    }
+    if (length(vec2(max(length(p.xzw) - 9.8, 0.0), max(abs(p.y + 2.3) - 1.0, 0.0))) - 2.9 > d)
+        return vec2(d, MAT_STONE);
+    ROCK(0) ROCK(1) ROCK(2) ROCK(3) ROCK(4) ROCK(5) ROCK(6) ROCK(7) ROCK(8)
     return vec2(d, MAT_STONE);
 }
 
@@ -305,7 +343,7 @@ vec2 stonesSDF(vec4 p, float best) {
     for (int i = 0; i < 4; i++) {
         vec4 s = STONES[i];
         vec4 q = p - vec4(s.x, GROUND_Y + 1.3, s.y, s.z);
-        if (length(q) - 2.6 > d) continue;
+        if (length(q) - 1.8 > d) continue;   // the stone reaches 1.75
         vec4 axis = normalize(vec4(0.12 * float(i - 1), 1.0, 0.08, s.w));
         // faceted: a spherinder cut by a few planes reads as hewn stone
         float st = sdSpherinder(q, axis, 0.55, 1.6);
@@ -317,32 +355,45 @@ vec2 stonesSDF(vec4 p, float best) {
 }
 
 // ---- trees --------------------------------------------------------------------
-// A tree: spherinder trunk and limbs, canopy of faceted glomes. Returns (d, mat).
-// Callers skip it when the bound glome (centre base + (0, 6s, 0, 0), radius 9s) is
-// farther than their best hit.
-vec2 treeSDF(vec4 p, vec4 base, float s, float seed) {
-    vec4 q = (p - base) / s;
-    // trunk: a leaning spherinder limb flared into roots, splitting into two boughs.
-    // Wood is evaluated with w squashed, so it is wider along w than the canopy and a
-    // turned slice shows the trunk thinning but never a canopy floating on nothing.
-    vec4 qq = q;
-    q.w *= 0.25;
-    float trunk = sdLimb(q, vec4(0.0, -0.6, 0.0, 0.0), vec4(-0.3, 5.4, 0.0, 0.1), 0.8, 0.45);
-    trunk = min(trunk, sdLimb(q, vec4(0.0, -0.4, 0.0, 0.0), vec4(1.2, -0.1, 0.4, 0.0), 0.55, 0.12));
-    trunk = min(trunk, sdLimb(q, vec4(0.0, -0.4, 0.0, 0.0), vec4(-1.0, -0.2, -0.6, 0.4), 0.5, 0.12));
-    trunk = min(trunk, sdLimb(q, vec4(0.0, -0.4, 0.0, 0.0), vec4(0.1, -0.2, 0.3, -1.1), 0.5, 0.12));
-    trunk = min(trunk, sdLimb(q, vec4(-0.3, 5.2, 0.0, 0.1), vec4(-3.0, 8.0, 0.4, -0.2), 0.4, 0.18));
-    trunk = min(trunk, sdLimb(q, vec4(-0.3, 4.8, 0.0, 0.1), vec4(2.6, 7.4, -0.2, 0.3), 0.38, 0.16));
-    trunk = min(trunk, sdLimb(q, vec4(-0.3, 5.3, 0.0, 0.1), vec4(-0.2, 9.4, -0.5, 1.0), 0.32, 0.14));
-    trunk = min(trunk, sdLimb(q, vec4(1.0, 6.0, -0.1, 0.4), vec4(1.6, 8.3, 0.4, -1.2), 0.18, 0.08));
-    q = qq;
+// A tree: spherinder trunk and limbs, canopy of faceted glomes. Returns (d, mat), or a
+// far miss when nothing of the tree is nearer than best. Each part (roots and trunk,
+// boughs, every canopy gem) is skipped when its bound glome is farther than best.
+// Wood is evaluated with w squashed, so it is wider along w than the canopy and a
+// turned slice shows the trunk thinning but never a canopy floating on nothing.
+// Canopy k uses gems 9 + 2k and 10 + 2k. The trees share them; each is mirrored
+// differently (`flip`, +-1 per axis) so no two look alike.
+const vec4 CANOPY[4] = vec4[4](vec4(-3.4, 9.0, 0.4, -0.3), vec4(2.9, 8.3, -0.2, 0.4),
+                               vec4(-0.3, 10.6, -0.6, 1.0), vec4(0.6, 9.2, 1.4, -0.8));
+const float CANOPY_R[4] = float[4](2.4, 2.45, 2.7, 1.9);
+const vec4 CANOPY_SCALE = vec4(1.0, 0.82, 1.0, 0.55);   // thinner in w than the wood
+
+#define CANOPY_GEM(k) { vec4 c = q - CANOPY[k]; \
+    if (length(c) - GEM_REACH * 1.06 * CANOPY_R[k] < can) can = min(can, sdGem2(c, CANOPY_R[k], 9 + 2 * k, CANOPY_SCALE)); }
+
+vec2 treeSDF(vec4 p, vec4 base, float s, vec4 flip, float best) {
+    vec4 q = (p - base) * flip / s;
+    float b = best / s;
+    vec4 w = vec4(q.xyz, q.w * 0.25);   // wood space
+    float wood = b;
+    // roots and trunk, bound by a glome around them
+    if (length(w - vec4(0.0, 2.4, 0.0, 0.0)) - 3.9 < wood) {
+        wood = min(wood, sdLimb(w, vec4(0.0, -0.6, 0.0, 0.0), vec4(-0.3, 5.4, 0.0, 0.1), 0.8, 0.45));
+        wood = min(wood, sdLimb(w, vec4(0.0, -0.4, 0.0, 0.0), vec4(1.2, -0.1, 0.4, 0.0), 0.55, 0.12));
+        wood = min(wood, sdLimb(w, vec4(0.0, -0.4, 0.0, 0.0), vec4(-1.0, -0.2, -0.6, 0.4), 0.5, 0.12));
+        wood = min(wood, sdLimb(w, vec4(0.0, -0.4, 0.0, 0.0), vec4(0.1, -0.2, 0.3, -1.1), 0.5, 0.12));
+    }
+    // the boughs
+    if (length(w - vec4(-0.2, 7.2, 0.0, 0.0)) - 3.5 < wood) {
+        wood = min(wood, sdLimb(w, vec4(-0.3, 5.2, 0.0, 0.1), vec4(-3.0, 8.0, 0.4, -0.2), 0.4, 0.18));
+        wood = min(wood, sdLimb(w, vec4(-0.3, 4.8, 0.0, 0.1), vec4(2.6, 7.4, -0.2, 0.3), 0.38, 0.16));
+        wood = min(wood, sdLimb(w, vec4(-0.3, 5.3, 0.0, 0.1), vec4(-0.2, 9.4, -0.5, 1.0), 0.32, 0.14));
+        wood = min(wood, sdLimb(w, vec4(1.0, 6.0, -0.1, 0.4), vec4(1.6, 8.3, 0.4, -1.2), 0.18, 0.08));
+    }
     // canopy: big faceted glomes at the bough ends, one reaching off into w
-    vec4 sq = vec4(1.0, 0.82, 1.0, 0.55);   // thinner in w than the wood
-    float can = sdGem2(q - vec4(-3.4, 9.0, 0.4, -0.3), 2.4, seed + 1.0, sq);
-    can = min(can, sdGem2(q - vec4(2.9, 8.3, -0.2, 0.4), 2.45, seed + 2.0, sq));
-    can = min(can, sdGem2(q - vec4(-0.3, 10.6, -0.6, 1.0), 2.7, seed + 3.0, sq));
-    can = min(can, sdGem2(q - vec4(0.6, 9.2, 1.4, -0.8), 1.9, seed + 4.0, sq));
-    return (trunk < can) ? vec2(trunk * s, MAT_BARK) : vec2(can * s, MAT_LEAVES);
+    float can = min(wood, b);
+    CANOPY_GEM(0) CANOPY_GEM(1) CANOPY_GEM(2) CANOPY_GEM(3)
+    if (can < wood) return vec2(can * s, MAT_LEAVES);
+    return wood < b ? vec2(wood * s, MAT_BARK) : vec2(1e5, MAT_NONE);
 }
 
 // ---- fence --------------------------------------------------------------------
@@ -366,27 +417,44 @@ float smin(float a, float b, float k) {
     return mix(b, a, h) - k * h * (1.0 - h);
 }
 
+// The banks circle the island together, so the drift is one rotation of p; each bank
+// is (x, y, z, w phase) at zero drift and leans along its own 4D direction.
+const vec4 CLOUD[10] = vec4[10](
+    vec4(34.00, -17.0, 0.00, 0.0), vec4(30.18, -15.7, 21.91, 1.7), vec4(13.56, -15.9, 41.65, 3.4),
+    vec4(-13.00, -16.2, 40.15, 5.1), vec4(-28.61, -15.0, 20.84, 6.8), vec4(-38.20, -13.5, 0.06, 8.5),
+    vec4(-30.79, -15.7, -22.28, 10.2), vec4(-13.29, -16.9, -40.58, 11.9), vec4(11.10, -15.4, -34.46, 13.6),
+    vec4(33.91, -15.7, -24.78, 15.3));
+const vec4 CLOUD_AXIS[10] = vec4[10](
+    vec4(1.000, 0.0, 0.000, 0.000), vec4(-0.552, 0.0, 0.618, 0.559), vec4(-0.105, 0.0, -0.935, 0.339),
+    vec4(0.735, 0.0, 0.521, -0.434), vec4(-0.829, 0.0, 0.190, -0.526), vec4(0.478, 0.0, -0.866, 0.149),
+    vec4(0.271, 0.0, 0.773, 0.573), vec4(-0.902, 0.0, -0.373, 0.218), vec4(0.779, 0.0, -0.376, -0.501),
+    vec4(-0.244, 0.0, 0.848, -0.471));
+
+// a flat-bottomed cumulus: soft union of glomes along a 4D direction
+#define CLOUD_BANK(i) { vec3 q3 = pr.xyz - CLOUD[i].xyz; \
+    if (length(q3) - 11.0 < d) { \
+        vec4 q = vec4(q3, pr.w - 14.0 * sin(CLOUD[i].w + t * 0.7)); \
+        if (length(q) - 11.0 < d) { \
+            vec4 along = CLOUD_AXIS[i]; \
+            float cl = length(q) - 4.2; \
+            cl = smin(cl, length(q - along * 4.6 - vec4(0.0, -0.6, 0.0, 0.0)) - 3.2, 1.5); \
+            cl = smin(cl, length(q + along * 4.4 - vec4(0.0, -0.8, 0.0, 0.0)) - 2.9, 1.5); \
+            cl = smin(cl, length(q - along * 1.8 - vec4(0.0, 2.4, 0.0, 0.0)) - 2.6, 1.5); \
+            cl = smin(cl, length(q + along * 7.6 - vec4(0.0, -1.6, 0.0, 0.0)) - 1.8, 1.2); \
+            d = min(d, max(cl, -2.2 - q.y)); } } }
+
 vec2 cloudsSDF(vec4 p, float best) {
     float t = uTime * 0.02;
     float d = best;
-    for (int i = 0; i < 10; i++) {
-        float fi = float(i);
-        float ang = fi * 0.628 + t;
-        float rad = 34.0 + 10.0 * hash1(fi * 3.1);
-        vec4 c = vec4(rad * cos(ang), -17.0 + 4.0 * hash1(fi * 5.3), rad * sin(ang),
-                      14.0 * sin(fi * 1.7 + t * 0.7));
-        vec4 q = p - c;
-        if (length(q) - 11.0 > d) continue;
-        // a flat-bottomed cumulus: soft union of glomes along a 4D direction
-        vec4 along = normalize(vec4(cos(fi * 2.3), 0.0, sin(fi * 2.3), 0.7 * sin(fi * 1.3)));
-        float cl = length(q) - 4.2;
-        cl = smin(cl, length(q - along * 4.6 - vec4(0.0, -0.6, 0.0, 0.0)) - 3.2, 1.5);
-        cl = smin(cl, length(q + along * 4.4 - vec4(0.0, -0.8, 0.0, 0.0)) - 2.9, 1.5);
-        cl = smin(cl, length(q - along * 1.8 - vec4(0.0, 2.4, 0.0, 0.0)) - 2.6, 1.5);
-        cl = smin(cl, length(q + along * 7.6 - vec4(0.0, -1.6, 0.0, 0.0)) - 1.8, 1.2);
-        cl = max(cl, -2.2 - q.y);
-        d = min(d, cl);
-    }
+    // every bank lies within 11 of its centre, and the centres lie in a ring of radius
+    // 34-44 at height -17 to -13
+    vec2 ring = vec2(length(p.xz) - 39.0, p.y + 15.0);
+    if (length(max(abs(ring) - vec2(5.0, 2.0), 0.0)) - 11.0 > d) return vec2(d, MAT_CLOUD);
+    // turn p back by the drift so the bank centres stay put
+    float ct = cos(t), st = sin(t);
+    vec4 pr = vec4(ct * p.x + st * p.z, p.y, -st * p.x + ct * p.z, p.w);
+    CLOUD_BANK(0) CLOUD_BANK(1) CLOUD_BANK(2) CLOUD_BANK(3) CLOUD_BANK(4)
+    CLOUD_BANK(5) CLOUD_BANK(6) CLOUD_BANK(7) CLOUD_BANK(8) CLOUD_BANK(9)
     return vec2(d, MAT_CLOUD);
 }
 
@@ -400,29 +468,35 @@ vec2 worldSDF(vec4 p) {
     vec2 r = vec2(bowlSDF(p), MAT_BOWL);
     r = opU(r, pondSDF(p));
     if (length(p - vec4(0.0, -6.0, 0.0, 0.0)) - 13.5 < r.x) r = opU(r, islandSDF(p));
-    if (length(p - vec4(-7.4, GROUND_Y + 1.0, -1.6, 0.0)) - 3.0 < r.x) r = opU(r, fenceSDF(p));
+#ifndef SKIP_FENCE
+    if (length(p - vec4(-7.4, GROUND_Y + 1.0, -1.6, 0.0)) - 2.0 < r.x) r = opU(r, fenceSDF(p));
+#endif
+#ifndef SKIP_ROCKS
     vec2 rk = rocksSDF(p, r.x);
     if (rk.x < r.x) r = rk;
     vec2 sn = stonesSDF(p, r.x);
     if (sn.x < r.x) r = sn;
+#endif
     // the main tree, and two that exist only far along w: rotate in xw or zw to find them
+#ifndef SKIP_TREES
     vec4 t0 = vec4(5.6, GROUND_Y, -3.2, 0.0);
     vec4 t1 = vec4(-4.5, GROUND_Y + 0.3, -5.0, 6.2);
     vec4 t2 = vec4(4.0, GROUND_Y + 0.2, 4.5, 5.5);
-    if (length(p - t0 - vec4(0.0, 6.0, 0.0, 0.0) * 0.85) - 9.0 * 0.85 < r.x) r = opU(r, treeSDF(p, t0, 0.85, 0.0));
-    if (length(p - t1 - vec4(0.0, 6.0, 0.0, 0.0) * 0.7) - 9.0 * 0.7 < r.x) r = opU(r, treeSDF(p, t1, 0.7, 10.0));
-    if (length(p - t2 - vec4(0.0, 6.0, 0.0, 0.0) * 0.5) - 9.0 * 0.5 < r.x) r = opU(r, treeSDF(p, t2, 0.5, 20.0));
-    if (p.y + 7.0 < r.x) {
-        vec2 cl = cloudsSDF(p, r.x);
-        if (cl.x < r.x) r = cl;
-    }
+    if (length(p - t0 - vec4(0.0, 6.0, 0.0, 0.0) * 0.85) - 9.0 * 0.85 < r.x) r = opU(r, treeSDF(p, t0, 0.85, vec4(1.0), r.x));
+    if (length(p - t1 - vec4(0.0, 6.0, 0.0, 0.0) * 0.7) - 9.0 * 0.7 < r.x) r = opU(r, treeSDF(p, t1, 0.7, vec4(-1.0, 1.0, 1.0, 1.0), r.x));
+    if (length(p - t2 - vec4(0.0, 6.0, 0.0, 0.0) * 0.5) - 9.0 * 0.5 < r.x) r = opU(r, treeSDF(p, t2, 0.5, vec4(1.0, 1.0, -1.0, 1.0), r.x));
+#endif
+#ifndef SKIP_CLOUDS
+    vec2 cl = cloudsSDF(p, r.x);
+    if (cl.x < r.x) r = cl;
+#endif
     return r;
 }
 
 // ---- coarse occluder for shadows and AO ----------------------------------------
 // The renderer's soft shadows and AO march this instead of worldSDF. It keeps the
 // big occluders (bowl, ground with its hills and pond, the cliff, fence, trees)
-// and drops the rocks, stones, clouds and canopy facets. The cliff uses its inner
+// and drops the rocks, stones, clouds, ground facets and canopy facets. The cliff uses its inner
 // bound, so this surface never sits outside the real one and AO can only come out
 // a little lighter.
 #define WORLD_SHADOW_SDF
@@ -432,7 +506,7 @@ float worldShadowSDF(vec4 p) {
     float depth = clamp((GROUND_Y - p.y) / (GROUND_Y - ISLAND_BASE), 0.0, 1.0);
     float rBase = islandProfile(depth);
     float side = (length(q) / 0.9 - rBase + 1.6 * depth) * 0.55;
-    float top = p.y > GROUND_Y - 2.5 ? (p.y - groundHeight(q)) * 0.65 : -1e5;
+    float top = p.y > GROUND_Y - 2.5 ? (p.y - groundHeight(q, false)) * 0.65 : -1e5;
     float island = max(max(top, side), BOWL_R + BOWL_HALF + 0.04 - length(p));
     d = min(d, island);
     if (length(p - vec4(-7.4, GROUND_Y + 1.0, -1.6, 0.0)) - 3.0 < d) d = min(d, fenceSDF(p).x);
