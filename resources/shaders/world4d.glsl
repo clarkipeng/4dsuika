@@ -407,6 +407,38 @@ vec2 worldSDF(vec4 p) {
     return r;
 }
 
+// ---- coarse occluder for shadows and AO ----------------------------------------
+// The renderer's soft shadows and AO march this instead of worldSDF. It keeps the
+// big occluders (bowl, ground with its hills and pond, the cliff, fence, trees)
+// and drops the rocks, stones, clouds and canopy facets. The cliff uses its inner
+// bound, so this surface never sits outside the real one and AO can only come out
+// a little lighter.
+#define WORLD_SHADOW_SDF
+float worldShadowSDF(vec4 p) {
+    float d = bowlSDF(p);
+    vec3 q = p.xzw;
+    float depth = clamp((GROUND_Y - p.y) / (GROUND_Y - ISLAND_BASE), 0.0, 1.0);
+    float rBase = ISLAND_R * pow(max(1.0 - pow(depth, 1.7), 0.0), 0.75);
+    float side = (length(q) / 0.9 - rBase + 1.6 * depth) * 0.55;
+    float top = p.y > GROUND_Y - 2.5 ? (p.y - groundHeight(q)) * 0.65 : -1e5;
+    float island = max(max(top, side), BOWL_R + BOWL_HALF + 0.04 - length(p));
+    d = min(d, island);
+    if (length(p - vec4(-7.4, GROUND_Y + 1.0, -1.6, 0.0)) - 3.0 < d) d = min(d, fenceSDF(p).x);
+    // trees: trunk capsule and canopy glomes, as in treeSDF (scale s, canopy w x 0.55)
+    vec4 t0 = vec4(5.6, GROUND_Y, -3.2, 0.0);
+    vec4 tq = (p - t0) / 0.85;
+    if (length(tq - vec4(0.0, 6.0, 0.0, 0.0)) - 9.0 < d / 0.85) {
+        vec4 tw = vec4(tq.xyz, tq.w * 0.25);
+        float tr = sdLimb(tw, vec4(0.0, -0.6, 0.0, 0.0), vec4(-0.3, 5.4, 0.0, 0.1), 0.8, 0.45);
+        vec4 cq = vec4(tq.xyz, tq.w / 0.55);
+        float can = length(cq - vec4(-3.4, 9.0, 0.4, -0.3 / 0.55)) - 2.3;
+        can = min(can, length(cq - vec4(2.9, 8.3, -0.2, 0.4 / 0.55)) - 2.35);
+        can = min(can, length(cq - vec4(-0.3, 10.6, -0.6, 1.0 / 0.55)) - 2.6);
+        d = min(d, min(tr, can * 0.55) * 0.85);
+    }
+    return d;
+}
+
 // ---- sky ----------------------------------------------------------------------
 // Sunset gradient over elevation; puffy clouds from 4D noise on the direction, so
 // turning in w changes the clouds too.
