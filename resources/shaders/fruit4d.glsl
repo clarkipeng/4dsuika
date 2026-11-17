@@ -6,7 +6,7 @@
 // collision glome is |q| = r and every body stays close to it.
 //
 // Contract (renderer side in raymarch4d.fs):
-//   q     point minus the fruit centre, world axes (y up; fruit do not rotate)
+//   q     point minus the fruit centre, rotated into that fruit's local frame
 //   r     current radius (grows on spawn and merge)
 //   type  0..10, the Fruit enum: cherry, strawberry, grape, dekopon, persimmon,
 //         apple, pear, peach, pineapple, melon, watermelon
@@ -15,7 +15,7 @@
 //
 //   FRUIT_BOUND          fruitSDF stays inside the glome |q| = FRUIT_BOUND * r
 //   float fruitSDF(vec4 q, float r, float type, float lod)
-//   vec3  fruitAlbedo(vec4 q, vec4 n, float r, float type, float seed, float lod)   linear RGB
+//   vec3  fruitAlbedo(vec4 q, vec4 n, float r, float type, float seed, float lod)   linear RGB; n is local
 //   vec3  fruitBaseColor(float type)   one colour per fruit, for hints and the drop preview
 //   float fruitGloss(float type)       specular strength 0..1 for the skin
 //

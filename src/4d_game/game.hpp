@@ -404,7 +404,7 @@ public:
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
             const PhysicsObject& obj = physics_solver->objects[i];
-            fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i});
+            fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
         }
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
         Hit4 hit;

@@ -33,6 +33,7 @@ struct FruitInstance {
     int type;
     float flash = 0.0f; // 0..1 highlight, e.g. just merged
     int id = 0;         // stable per fruit while it lives; varies its facets
+    glm::mat4 worldToLocal{1.0f}; // fruit orientation, world offset already removed
 };
 
 enum class Quality { Low = 0, Medium = 1, High = 2, Ultra = 3 };
@@ -44,7 +45,7 @@ inline const char* qualityName(Quality q) {
 
 class RaymarchRenderer {
 public:
-    static constexpr int kMaxFruit = 64; // with hints, fits WebGL2's 224-vec4 minimum
+    static constexpr int kMaxFruit = 64;
     static constexpr int kMaxHints = 16;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
 
@@ -441,15 +442,18 @@ private:
 
         int n = std::min<int>(int(visible.size()), kMaxFruit);
         std::vector<glm::vec4> centers(n), data(n);
+        std::vector<glm::mat4> world_to_local(n);
         for (int i = 0; i < n; ++i) {
             const FruitInstance& f = *visible[i].second;
             centers[i] = f.center;
             data[i] = glm::vec4(f.radius, float(f.type), f.flash, float(f.id + 1));
+            world_to_local[i] = f.worldToLocal;
         }
         glUniform1i(loc(prog, "uFruitCount"), n);
         if (n > 0) {
             glUniform4fv(loc(prog, "uFruitCenters"), n, glm::value_ptr(centers[0]));
             glUniform4fv(loc(prog, "uFruitData"), n, glm::value_ptr(data[0]));
+            glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n, GL_FALSE, glm::value_ptr(world_to_local[0]));
         }
 
         int h = std::min<int>(int(nearby.size()), kMaxHints);
