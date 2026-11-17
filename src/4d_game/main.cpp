@@ -53,6 +53,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --demo N               drop N fruit and let them settle first
 //   --frames N             frames simulated before the capture (default 90, more with --demo)
 //   --scale s              render scale (fraction of output resolution)
+//   --facet f              low-poly facet strength (0 = smooth)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 struct Options {
     std::string screenshot;
@@ -65,6 +66,7 @@ struct Options {
     int demo = 0;
     int frames = 90;
     float scale = 1.0f;
+    float facet = -1.0f;
     float cursorX = -1.0f, cursorY = -1.0f;
     bool headless() const { return !screenshot.empty() || bench > 0; }
 };
@@ -84,6 +86,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--demo") o.demo = std::atoi(next().c_str());
         else if (a == "--frames") o.frames = std::atoi(next().c_str());
         else if (a == "--scale") o.scale = std::atof(next().c_str());
+        else if (a == "--facet") o.facet = std::atof(next().c_str());
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
         else std::cerr << "Unknown option " << a << std::endl;
     }
@@ -128,6 +131,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.state.m_xpos = o.cursorX >= 0 ? o.cursorX : o.width * 0.5f;
     game.state.m_ypos = o.cursorY >= 0 ? o.cursorY : o.height * 0.55f;
     game.renderer.renderScale = o.scale;
+    if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.State = o.state == "menu" ? GAME_MENU : GAME_ACTIVE;
     applyCameraOptions(o, game.state.cam);
 

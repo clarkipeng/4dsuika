@@ -20,6 +20,7 @@ uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, unused
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
+uniform float uFacet;                // low-poly facet strength, 0 = smooth
 
 #include "world4d.glsl"
 
@@ -65,6 +66,34 @@ float fruitSDF(vec4 p) {
     return d;
 }
 
+// ---------------------------------------------------------------- facets
+//
+// Low-poly look by quantizing the 4D normal: scale it, snap it to the
+// nearest point of the D4 lattice (integer points with even sum, whose
+// Voronoi cells are 24-cells), and renormalize. Facets are fixed to world
+// orientation, so they hold still while the camera turns, cost no extra SDF
+// evaluations, and a 4D turn reveals new facets.
+
+vec4 d4Round(vec4 x) {
+    vec4 f = floor(x + 0.5);
+    if (mod(f.x + f.y + f.z + f.w, 2.0) != 0.0) {
+        // Odd sum: re-round the coordinate that was rounded the furthest.
+        vec4 e = x - f;
+        vec4 a = abs(e);
+        float m = max(max(a.x, a.y), max(a.z, a.w));
+        vec4 pick = step(m, a);
+        pick *= vec4(1.0, 1.0 - pick.x, 1.0 - max(pick.x, pick.y), 1.0 - max(max(pick.x, pick.y), pick.z));
+        f += pick * sign(e + 1e-6);
+    }
+    return f;
+}
+
+// density: facets across the surface; higher = smaller facets.
+vec4 facetNormal(vec4 n, float density) {
+    vec4 q = d4Round(n * density);
+    return dot(q, q) > 0.0 ? normalize(q) : n;
+}
+
 // ---------------------------------------------------------------- scene
 
 float sceneSDF(vec4 p) { return min(worldSDF(p).x, fruitSDF(p)); }
@@ -106,15 +135,30 @@ float ambientOcclusion(vec4 p, vec4 n) {
     return clamp(1.0 - 1.4 * occ, 0.0, 1.0);
 }
 
-vec3 shade(vec4 p, vec4 n, vec4 rd, vec3 albedo) {
+// Normal used for lighting: smooth normal ns bent towards its facet normal.
+vec4 facetBlend(vec4 ns, float density) {
+    return uFacet > 0.0 ? normalize(mix(ns, facetNormal(ns, density), uFacet)) : ns;
+}
+
+const vec3 SUN_COLOR = vec3(2.1, 1.25, 0.62);
+const vec3 SKY_AMBIENT = vec3(0.30, 0.21, 0.38);
+const vec3 GROUND_BOUNCE = vec3(0.40, 0.24, 0.12);
+
+// n: lighting (faceted) normal; ns: smooth normal for shadow/AO offsets.
+vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss) {
     float sunDot = max(dot(n, uSunDir), 0.0);
-    float sh = sunDot > 0.0 ? softShadow(p + n * 0.02, uSunDir) : 0.0;
-    float ao = ambientOcclusion(p, n);
-    vec3 sun = vec3(1.6, 1.0, 0.6) * sunDot * sh;
-    vec3 sky = vec3(0.45, 0.35, 0.55) * (0.5 + 0.5 * n.y) * (0.3 + 0.7 * ao);
-    vec3 bounce = vec3(0.35, 0.20, 0.12) * clamp(-n.y, 0.0, 1.0) * ao;
+    float sh = dot(ns, uSunDir) > -0.1 ? softShadow(p + ns * 0.02, uSunDir) : 0.0;
+    float ao = ambientOcclusion(p, ns);
+    vec3 sun = SUN_COLOR * sunDot * sh;
+    vec3 sky = SKY_AMBIENT * (0.55 + 0.45 * n.y) * (0.3 + 0.7 * ao);
+    vec3 bounce = GROUND_BOUNCE * clamp(-n.y, 0.0, 1.0) * ao;
+    // Warm wrap-around light from the low sun behind the scene.
+    float back = pow(clamp(dot(-rd, -uSunDir) * 0.5 + 0.5, 0.0, 1.0), 2.0);
     float rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
-    vec3 col = albedo * (sun + sky + bounce) + rim * 0.15 * vec3(1.0, 0.6, 0.4) * ao;
+    vec3 col = albedo * (sun + sky + bounce);
+    col += rim * back * 0.6 * SUN_COLOR * ao;
+    vec4 hv = normalize(uSunDir - rd);
+    col += gloss * pow(max(dot(n, hv), 0.0), 40.0) * SUN_COLOR * sh;
     return col;
 }
 
@@ -136,11 +180,14 @@ void main() {
         if (t > 0.0 && t < tHit) { tHit = t; fruit = i; }
     }
 
-    // World: sphere-traced SDF, stopped early at the nearest fruit.
+    // World: sphere-traced SDF, stopped early at the nearest fruit. The
+    // closest approach to the bowl feeds its glow.
     float t = 0.0;
     float mat = 0.0;
+    float bowlNear = 1e3;
     for (int i = 0; i < MAX_STEPS; ++i) {
         vec2 h = worldSDF(ro + rd * t);
+        if (h.y == 2.0) bowlNear = min(bowlNear, h.x);
         if (h.x < 0.001 * t) { mat = h.y; break; }
         t += h.x;
         if (t > tHit) break;
@@ -150,14 +197,17 @@ void main() {
     float dist;
     if (fruit >= 0 && tHit <= t) {
         vec4 p = ro + rd * tHit;
-        vec4 n = normalize(p - uFruitCenters[fruit]);
+        vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
-        col = shade(p, n, rd, fruitColor(d.y)) + d.z * vec3(1.0, 0.9, 0.7);
+        vec4 ns = normalize(p - c);
+        vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x));
+        col = shade(p, n, ns, rd, fruitColor(d.y), 0.5) + d.z * vec3(1.0, 0.9, 0.7);
         dist = tHit;
     } else if (mat > 0.0) {
         vec4 p = ro + rd * t;
-        vec4 n = worldNormal(p);
-        col = shade(p, n, rd, materialColor(mat, p, n));
+        vec4 ns = worldNormal(p);
+        vec4 n = facetBlend(ns, 6.0);
+        col = shade(p, n, ns, rd, materialColor(mat, p, n), mat == 2.0 ? 0.25 : 0.0);
         dist = t;
     } else {
         col = skyColor(rd);
@@ -167,6 +217,9 @@ void main() {
     // Sunset fog.
     float fog = 1.0 - exp(-max(dist - 16.0, 0.0) * 0.018);
     col = mix(col, skyColor(rd), fog);
+
+    // The bowl glows softly, as in the cover art.
+    col += vec3(1.0, 0.72, 0.42) * 0.22 * exp(-bowlNear * 5.0);
 
     // Ghost of the next drop, blended over the scene.
     if (uPreviewData.x > 0.0) {
@@ -178,8 +231,14 @@ void main() {
         }
     }
 
-    // Tone map and gamma.
-    col = col / (1.0 + col * 0.35);
+    // Grade: soft tone map, a little extra saturation, and the cover art's
+    // darker edges.
+    col *= 0.85;
+    col = col / (1.0 + col * 0.4);
     col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+    float luma = dot(col, vec3(0.299, 0.587, 0.114));
+    col = clamp(mix(vec3(luma), col, 1.18), 0.0, 1.0);
+    vec2 v = vUV - 0.5;
+    col *= 1.0 - 0.55 * dot(v, v);
     fragColor = vec4(col, 1.0);
 }
