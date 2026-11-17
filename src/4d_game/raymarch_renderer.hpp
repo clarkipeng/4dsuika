@@ -113,15 +113,15 @@ private:
         // crosses the slice hyperplane; fruit within kHintRange beyond that
         // become depth hints. Nearest (to the camera, then the slice) first.
         using Entry = std::pair<float, const FruitInstance*>;
-        std::vector<Entry> visible, near;
+        std::vector<Entry> visible, nearby; // (not "near": a Windows macro)
         for (const auto& f : fruit_) {
             float gap = std::abs(glm::dot(f.center - camPos, normal)) - f.radius;
             if (gap < 0.0f) visible.push_back({glm::length(f.center - camPos), &f});
-            else if (gap < kHintRange) near.push_back({gap, &f});
+            else if (gap < kHintRange) nearby.push_back({gap, &f});
         }
         auto byKey = [](const Entry& a, const Entry& b) { return a.first < b.first; };
         std::sort(visible.begin(), visible.end(), byKey);
-        std::sort(near.begin(), near.end(), byKey);
+        std::sort(nearby.begin(), nearby.end(), byKey);
 
         int n = std::min<int>(int(visible.size()), kMaxFruit);
         std::vector<glm::vec4> centers(n), data(n);
@@ -136,12 +136,12 @@ private:
             glUniform4fv(loc(scene_, "uFruitData"), n, glm::value_ptr(data[0]));
         }
 
-        int h = std::min<int>(int(near.size()), kMaxHints);
+        int h = std::min<int>(int(nearby.size()), kMaxHints);
         std::vector<glm::vec4> hc(h), hd(h);
         for (int i = 0; i < h; ++i) {
-            const FruitInstance& f = *near[i].second;
+            const FruitInstance& f = *nearby[i].second;
             float off = glm::dot(f.center - camPos, normal);
-            float gap = near[i].first;
+            float gap = nearby[i].first;
             hc[i] = f.center - off * normal; // projected into the slice
             float strength = 1.0f - gap / kHintRange;
             hd[i] = glm::vec4(f.radius, float(f.type), off, strength * strength);
