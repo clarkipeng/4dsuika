@@ -63,6 +63,9 @@ make run
 ### Recording a trailer
 `4d_game --headless --record dir --camera-path file` dumps deterministic fixed-timestep frames (F9 records a live game), and `make video` stitches them with ffmpeg. See [docs/recording.md](docs/recording.md).
 
+### Scripted playtest
+`4d_game --headless --mute --playtest-seconds 600` runs ten simulated minutes of deterministic drops while rotating through 4D and prints placement, merge, loss, and score stats.
+
 ## Platform-Specific Building (CI/CD)
 Automated builds for Windows and macOS are handled via GitHub Actions. The built artifacts are available in the GitHub Actions run results or as releases.
 

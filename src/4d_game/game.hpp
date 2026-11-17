@@ -384,13 +384,16 @@ public:
     }
 
     // Drop the next fruit above whatever the cursor points at.
-    void DropFruit() {
+    bool DropFruit() {
         Hit4 hit = getPlacementMouse(state, boundary, *physics_solver);
         if (hit.hit) {
             physics_solver->addObject(PhysicsObject(hit.point + glm::vec4(0, 3.0f, 0, 0), nextFruit, true, false));
             nextFruit = FruitManager::getRandomFruit();
+            ballPlaced = true;
+            return true;
         }
-        ballPlaced = true;
+        ballPlaced = false;
+        return false;
     }
 
     // ------------------------------------------------------------ rendering

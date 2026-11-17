@@ -60,6 +60,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --bench N              render N frames as fast as possible, print timings
 //   --mute                do not initialize, load, or play audio
 //   --scripted-playtest   headless demo sequence for screenshot/playtest jobs
+//   --playtest-seconds s   run deterministic drops/rotation for s simulated seconds
 //   --size WxH             offscreen size in pixels (default 1920x1080)
 //   --state game|menu|pause|settings|controls|over   (menu = start screen)
 //   --focus N              focused menu row (for screenshots of the focus state)
@@ -106,11 +107,12 @@ struct Options {
     std::string cameraPath;
     int fps = 60;
     float seconds = 0.0f;
+    float playtestSeconds = 0.0f;
     bool forceHeadless = false;
     bool mute = false;
     std::string fruitSheet;
     std::string sheetTurn = "yw:35";
-    bool headless() const { return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty(); }
+    bool headless() const { return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty() || playtestSeconds > 0.0f; }
     bool muted() const { return mute || headless(); }
 };
 
@@ -150,6 +152,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
         else if (a == "--seconds") o.seconds = std::atof(next().c_str());
         else if (a == "--camera-path") o.cameraPath = next();
+        else if (a == "--playtest-seconds") o.playtestSeconds = std::max(0.0f, float(std::atof(next().c_str())));
         else {
             // Fail loudly: a typo must never fall through to a visible, audible launch.
             std::cerr << "Unknown option " << a << std::endl;
@@ -221,6 +224,97 @@ static void advanceSim(float dt, float& acc) {
     }
 }
 
+static int activeObjectCount() {
+    int n = 0;
+    for (bool has : game.physics_solver->has_obj) {
+        if (has) ++n;
+    }
+    return n;
+}
+
+static float highestObjectY() {
+    float y = -1000.0f;
+    for (int i = 0; i < MAX_OBJECTS; ++i) {
+        if (game.physics_solver->has_obj[i]) y = std::max(y, game.physics_solver->objects[i].position.y);
+    }
+    return y;
+}
+
+static void setScriptedPlaytestPose(float t) {
+    Camera4D cam;
+    cam.yaw = 0.45f * std::sin(t * 0.19f) + t * 0.10f;
+    cam.pitch = Camera4D::kDefaultPitch + 0.18f * std::sin(t * 0.13f);
+    cam.distance = 12.0f + 2.0f * std::sin(t * 0.07f);
+    cam.offset = 1.4f * std::sin(t * 0.11f);
+    cam.turnLocal(AX_X, AX_W, 0.95f * std::sin(t * 0.17f));
+    cam.turnLocal(AX_Y, AX_W, 0.65f * std::sin(t * 0.09f + 0.7f));
+    cam.turnLocal(AX_Z, AX_W, 0.75f * std::sin(t * 0.12f + 1.3f));
+    game.state.cam = cam;
+}
+
+static void setScriptedPlaytestCursor(int dropIndex, int w, int h) {
+    // Aim from the visible bowl interior, then sweep locally. Fixed screen
+    // coordinates can point at sky once the 4D slice rotates.
+    float x = 0.50f, y = 0.55f;
+    glm::vec2 ndc;
+    float aspect = float(w) / float(std::max(h, 1));
+    if (game.state.cam.project(glm::vec4(0.0f, -2.4f, 0.0f, 0.0f), aspect, ndc)) {
+        x = ndc.x * 0.5f + 0.5f;
+        y = 0.5f - ndc.y * 0.5f;
+    }
+    x += 0.12f * std::sin(float(dropIndex) * 2.399f);
+    y += 0.08f * std::cos(float(dropIndex) * 1.731f);
+    game.state.m_xpos = glm::clamp(x, 0.12f, 0.88f) * float(w);
+    game.state.m_ypos = glm::clamp(y, 0.18f, 0.86f) * float(h);
+}
+
+static int runScriptedPlaytest(const Options& o) {
+    std::srand(20261117);
+    game.State = GAME_ACTIVE;
+    game.page = Game::Page::None;
+    game.menuBuiltFor = -1;
+    game.nextFruit = FruitManager::getRandomFruit();
+
+    const int totalFrames = std::max(1, int(std::ceil(o.playtestSeconds / FIXED_TIMESTEP)));
+    const int dropEvery = 45; // 0.75 s at 60 Hz: faster than a cautious player, slower than spam.
+    int attempts = 0, hit = 0, placed = 0, full = 0, losses = 0, merges = 0, maxObjects = 0;
+    float maxY = -1000.0f, maxTilt = 0.0f;
+
+    for (int frame = 0; frame < totalFrames; ++frame) {
+        float t = frame * FIXED_TIMESTEP;
+        setScriptedPlaytestPose(t);
+
+        if (frame % dropEvery == 0) {
+            setScriptedPlaytestCursor(attempts, o.width, o.height);
+            int before = activeObjectCount();
+            bool didHit = game.DropFruit();
+            int after = activeObjectCount();
+            ++attempts;
+            if (didHit) ++hit;
+            if (after > before) ++placed;
+            else if (didHit) ++full;
+        }
+
+        game.FixedUpdate(FIXED_TIMESTEP);
+        merges += game.physics_solver->just_merged.load();
+        game.Update(FIXED_TIMESTEP);
+
+        maxObjects = std::max(maxObjects, activeObjectCount());
+        maxY = std::max(maxY, highestObjectY());
+        maxTilt = std::max(maxTilt, game.state.cam.tilt());
+
+        if (game.State == GAME_OVER) {
+            ++losses;
+            game.Reset();
+        }
+    }
+
+    printf("scripted playtest %.1fs: frames %d, attempts %d, hit %d, placed %d, missed %d, full %d, merges %d, losses %d, max objects %d, score %d, high score %d, max y %.2f, max tilt %.1f deg\n",
+           o.playtestSeconds, totalFrames, attempts, hit, placed, attempts - hit, full, merges, losses,
+           maxObjects, game.total_points, game.high_score, maxY, glm::degrees(maxTilt));
+    return placed > 0 ? 0 : 1;
+}
+
 static int runHeadless(GLFWwindow* window, const Options& o) {
     GLuint fbo, color;
     glGenFramebuffers(1, &fbo);
@@ -256,6 +350,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     bool late = o.state == "over" || o.state == "pause";  // play first, then show the menu
     showMenuState(late ? "game" : o.state);
     applyCameraOptions(o, game.state.cam);
+    if (o.playtestSeconds > 0.0f) return runScriptedPlaytest(o);
 
     CameraPath path;
     bool hasPath = false;
