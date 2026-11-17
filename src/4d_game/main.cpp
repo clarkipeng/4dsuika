@@ -25,6 +25,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#include "camera_path.hpp"
+#include "recorder.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -74,6 +77,13 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
+//   --record dir           dump every frame as dir/frame_000000.png at a fixed
+//                          timestep (headless with --headless, else live; F9
+//                          toggles recording in a live game, see docs/recording.md)
+//   --fps n                recording frame rate (default 60)
+//   --seconds s            recording length when headless (default: the camera
+//                          path's duration, else --frames)
+//   --camera-path file     scripted camera keyframes (see camera_path.hpp)
 struct Options {
     std::string screenshot;
     int bench = 0;
@@ -92,6 +102,10 @@ struct Options {
     bool adaptive = false;
     bool perf = false;
     float cursorX = -1.0f, cursorY = -1.0f;
+    std::string record;
+    std::string cameraPath;
+    int fps = 60;
+    float seconds = 0.0f;
     bool forceHeadless = false;
     bool mute = false;
     std::string fruitSheet;
@@ -132,6 +146,10 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
         else if (a == "--fruit-sheet") o.fruitSheet = next();
         else if (a == "--sheet-turn") o.sheetTurn = next();
+        else if (a == "--record") o.record = next();
+        else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
+        else if (a == "--seconds") o.seconds = std::atof(next().c_str());
+        else if (a == "--camera-path") o.cameraPath = next();
         else {
             // Fail loudly: a typo must never fall through to a visible, audible launch.
             std::cerr << "Unknown option " << a << std::endl;
@@ -194,6 +212,15 @@ static void dropDemoFruit(int index) {
     game.physics_solver->addObject(PhysicsObject(p, Fruit(int(rnd() * 6.0f)), true, false));
 }
 
+// Run physics in 1/60 s steps for a frame of length dt (any frame rate).
+static void advanceSim(float dt, float& acc) {
+    acc += dt;
+    while (acc >= FIXED_TIMESTEP - 1e-6f) {
+        game.FixedUpdate(FIXED_TIMESTEP);
+        acc -= FIXED_TIMESTEP;
+    }
+}
+
 static int runHeadless(GLFWwindow* window, const Options& o) {
     GLuint fbo, color;
     glGenFramebuffers(1, &fbo);
@@ -230,14 +257,55 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     showMenuState(late ? "game" : o.state);
     applyCameraOptions(o, game.state.cam);
 
+    CameraPath path;
+    bool hasPath = false;
+    if (!o.cameraPath.empty()) {
+        std::string err;
+        if (!path.load(o.cameraPath, err)) { std::cerr << "camera path: " << err << std::endl; return 1; }
+        hasPath = true;
+    }
+    float pathTime = 0.0f;
+    float simAcc = 0.0f;
+
     auto frame = [&](float dt) {
         game.FixedUpdate(dt);
         game.Update(dt);
+        if (hasPath) path.apply(pathTime, game.state.cam);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, o.width, o.height);
         glClearColor(0, 0, 0, 1);
         game.Render();
     };
+    if (!o.record.empty()) {
+#ifdef __EMSCRIPTEN__
+        std::cerr << "--record is only available in the desktop build" << std::endl;
+        return 1;
+#else
+        // Fixed-timestep capture of every frame from the first one.
+        Recorder rec;
+        rec.fps = o.fps;
+        if (!rec.start(o.record)) return 1;
+        float seconds = o.seconds > 0 ? o.seconds : hasPath ? path.duration() : o.frames / float(o.fps);
+        int total = std::max(1, int(std::lround(seconds * o.fps)));
+        for (int i = 0; i < total; ++i) {
+            if (i % 12 == 0 && i / 12 < o.demo) dropDemoFruit(i / 12);
+            pathTime = i * rec.dt();
+            game.ProcessInput(rec.dt());
+            advanceSim(rec.dt(), simAcc);
+            game.Update(rec.dt());
+            if (hasPath) path.apply(pathTime, game.state.cam);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glViewport(0, 0, o.width, o.height);
+            glClearColor(0, 0, 0, 1);
+            game.Render();
+            rec.capture(o.width, o.height);
+            if (i % o.fps == 0) { printf("\rframe %d / %d", i, total); fflush(stdout); }
+        }
+        printf("\n");
+        rec.stop();
+        return 0;
+#endif
+    }
     const int dropEvery = 12;
     int frames = std::max(o.frames, o.demo * dropEvery + 60);
     for (int i = 0; i < frames; ++i) {
@@ -304,11 +372,56 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     return 0;
 }
 
+#ifndef __EMSCRIPTEN__
+// Live recording (F9 or --record dir): a fixed timestep per rendered frame, so
+// the capture is exact however slowly it renders.
+struct LiveRecording {
+    Recorder rec;
+    std::string dir;          // --record dir; empty means a timestamped folder
+    CameraPath path;
+    bool hasPath = false;
+    bool toggle = false;      // set by the F9 key callback
+    bool savedAdaptive = true;
+    int frames = 0;
+
+    void begin(GLFWwindow* window) {
+        std::string d = dir;
+        if (d.empty()) {
+            char buf[48];
+            time_t now = time(nullptr);
+            strftime(buf, sizeof buf, "recordings/%Y%m%d-%H%M%S", localtime(&now));
+            d = buf;
+        }
+        if (!rec.start(d)) return;
+        savedAdaptive = game.renderer.adaptive;
+        game.renderer.adaptive = false;   // a steady resolution, not a frame-time-driven one
+        frames = 0;
+        glfwSetWindowTitle(window, "Suika 4D  [REC]");
+    }
+    void end(GLFWwindow* window) {
+        rec.stop();
+        game.renderer.adaptive = savedAdaptive;
+        glfwSetWindowTitle(window, "Suika 4D");
+    }
+};
+static LiveRecording live;
+#endif
+
 static void runInteractiveFrame(GLFWwindow* window, float& fixedUpdateAccumulator, float& lastFrame, bool throttle) {
     float currentFrame = glfwGetTime();
     float deltaTime = currentFrame - lastFrame;
     if (deltaTime > 0.25f) deltaTime = 0.25f;
     lastFrame = currentFrame;
+#ifndef __EMSCRIPTEN__
+    if (live.toggle) {
+        live.toggle = false;
+        if (live.rec.active()) live.end(window); else live.begin(window);
+    }
+    const bool recording = live.rec.active();
+    if (recording) { deltaTime = live.rec.dt(); throttle = false; }
+#else
+    const bool recording = false;
+#endif
 
     glfwPollEvents();
     game.ProcessInput(deltaTime);
@@ -320,14 +433,25 @@ static void runInteractiveFrame(GLFWwindow* window, float& fixedUpdateAccumulato
         fixedUpdateAccumulator -= FIXED_TIMESTEP;
     }
     game.Update(deltaTime);
-    game.renderer.reportFrameTime(deltaTime * 1000.0f);
+    if (!recording) game.renderer.reportFrameTime(deltaTime * 1000.0f);
 
+#ifndef __EMSCRIPTEN__
+    if (recording && live.hasPath) live.path.apply(live.frames * live.rec.dt(), game.state.cam);
+#endif
     glfwGetFramebufferSize(window, &game.FbWidth, &game.FbHeight);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, game.FbWidth, game.FbHeight);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     game.Render();
 
+#ifndef __EMSCRIPTEN__
+    if (recording) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glReadBuffer(GL_BACK);
+        live.rec.capture(game.FbWidth, game.FbHeight);
+        ++live.frames;
+    }
+#endif
     glfwSwapBuffers(window);
 
 #ifndef __EMSCRIPTEN__
@@ -424,6 +548,16 @@ int main(int argc, char* argv[])
         game.SetAudioState(sdlReady, audioReady, opt.muted());
         game.Init(window);
 
+#ifndef __EMSCRIPTEN__
+        live.rec.fps = opt.fps;
+        live.dir = opt.record;
+        if (!opt.cameraPath.empty()) {
+            std::string err;
+            if (live.path.load(opt.cameraPath, err)) live.hasPath = true;
+            else std::cerr << "camera path: " << err << std::endl;
+        }
+        stbi_write_png_compression_level = 3;  // fast encodes; frames become video anyway
+#endif
         if (opt.headless()) {
             int rc = runHeadless(window, opt);
             glfwTerminate();
@@ -451,10 +585,12 @@ int main(int argc, char* argv[])
 #else
         float fixedUpdateAccumulator = 0.0f;
         float lastFrame = glfwGetTime();
+        if (!opt.record.empty()) live.toggle = true;  // --record starts at once
         while (!glfwWindowShouldClose(window))
         {
             runInteractiveFrame(window, fixedUpdateAccumulator, lastFrame, true);
         }
+        live.rec.stop();
 
         glfwTerminate();
         return 0;
@@ -481,6 +617,9 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
+#ifndef __EMSCRIPTEN__
+    if (key == GLFW_KEY_F9 && action == GLFW_PRESS) live.toggle = true;
+#endif
     if (key >= 0 && key < 1024)
     {
         if (action == GLFW_PRESS)

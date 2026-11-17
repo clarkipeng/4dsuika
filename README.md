@@ -60,6 +60,9 @@ make build
 make run
 ```
 
+### Recording a trailer
+`4d_game --headless --record dir --camera-path file` dumps deterministic fixed-timestep frames (F9 records a live game), and `make video` stitches them with ffmpeg. See [docs/recording.md](docs/recording.md).
+
 ## Platform-Specific Building (CI/CD)
 Automated builds for Windows and macOS are handled via GitHub Actions. The built artifacts are available in the GitHub Actions run results or as releases.
 

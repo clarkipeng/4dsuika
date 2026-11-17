@@ -5,7 +5,7 @@ CMAKE = cmake
 NICE = nice -n 10
 JOBS = 4
 
-.PHONY: all build run clean package
+.PHONY: all build run clean package video
 
 all: build
 
@@ -21,3 +21,13 @@ clean:
 
 package: build
 	cd $(BUILD_DIR) && cpack -C Release
+
+# Stitch recorded frames into an mp4: `make video` (see docs/recording.md).
+FRAMES ?= recordings/frames
+FPS ?= 60
+VIDEO ?= recordings/trailer.mp4
+FFMPEG ?= ffmpeg
+
+video:
+	$(FFMPEG) -y -framerate $(FPS) -i $(FRAMES)/frame_%06d.png \
+		-c:v libx264 -preset slow -crf 14 -pix_fmt yuv420p -movflags +faststart $(VIDEO)

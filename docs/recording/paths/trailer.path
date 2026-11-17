@@ -1,0 +1,9 @@
+# Trailer sweep: wide island shot, push in to the bowl, then turn through 4D.
+# Fields: t (s) yaw pitch distance offset ty xw yw zw xy (degrees); ease=linear optional.
+t=0   yaw=-40 pitch=-18 distance=34 ty=-1.5
+t=3   yaw=0   pitch=-23 distance=13 ty=0
+t=6   yaw=40  distance=12 xw=50
+t=9   yaw=80  pitch=-30 distance=14 xw=90 yw=25 offset=1.5
+t=12  yaw=120 pitch=-20 distance=20 xw=0 yw=0 offset=0 zw=40
+t=16  yaw=210 pitch=-28 distance=15 xw=-65 yw=45 zw=80 offset=-1.2
+t=20  yaw=300 pitch=-20 distance=26 ty=-0.5 xw=20 yw=-35 zw=0 offset=0
