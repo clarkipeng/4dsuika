@@ -49,6 +49,13 @@ t=9   yaw=80  pitch=-30 xw=90 yw=25 offset=1.5 ease=linear
 
 A key that omits a field keeps the previous key's value; the first key starts from the game defaults. The included trailer path runs for 20 seconds. The slice is interpolated with slerp, so 4D turns take the shortest path. The camera holds before the first and after the last key.
 
+## Gameplay
+
+`make gameplay` records 20 s of play for the store page into `recordings/gameplay.mp4` (1080p, 30 fps).
+A scripted player drops the next fruit every 0.9 s through the real cursor path, so the drop preview shows; it aims at a random spot just under the rim in the current slice.
+It plays 30 s off camera first (`--warmup`), so the bowl is busy when the video starts, while `docs/recording/paths/gameplay.path` keeps the camera on the bowl and turns the slice through xw, yw and zw.
+The binary takes `--play s` (seconds between drops) and `--warmup s` alongside `--record`; it prints how many drops and game overs there were.
+
 ## 4D turntable
 
 A review video and contact sheet per subject: one fruit, or the bowl, alone and centred against a plain backdrop, while the slice turns 0 to 180° through xw, then yw, then zw.

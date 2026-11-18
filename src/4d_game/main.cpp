@@ -103,6 +103,10 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --seconds s            recording length when headless (default: the camera
 //                          path's duration, else --frames)
 //   --camera-path file     scripted camera keyframes (see camera_path.hpp)
+//   --play s               with --record: a scripted player drops the next fruit into
+//                          the bowl every s seconds, through the cursor like a player
+//   --warmup s             with --play: play s seconds off camera first, so the bowl
+//                          is busy when the recording starts
 //   --turntable dir        4D review turntable: each subject alone and centred while
 //                          the slice turns 0 to 180 deg through xw, then yw, then zw;
 //                          frames in dir/<subject>/ and dir/<subject>_sheet.png
@@ -133,6 +137,7 @@ struct Options {
     std::string costMap;
     float cursorX = -1.0f, cursorY = -1.0f;
     std::string record;
+    float playEvery = 0.0f, warmup = 0.0f;
     std::string cameraPath;
     int fps = 60;
     float seconds = 0.0f;
@@ -193,6 +198,8 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--fruit-sheet") o.fruitSheet = next();
         else if (a == "--sheet-turn") o.sheetTurn = next();
         else if (a == "--record") o.record = next();
+        else if (a == "--play") o.playEvery = std::atof(next().c_str());
+        else if (a == "--warmup") o.warmup = std::atof(next().c_str());
         else if (a == "--turntable") o.turntable = next();
         else if (a == "--view-compare") o.viewCompare = next();
         else if (a == "--view") {
@@ -308,6 +315,22 @@ static void setScriptedPlaytestPose(float t) {
     cam.turnLocal(AX_Y, AX_W, 0.65f * std::sin(t * 0.09f + 0.7f));
     cam.turnLocal(AX_Z, AX_W, 0.75f * std::sin(t * 0.12f + 1.3f));
     game.state.cam = cam;
+}
+
+// Point the cursor at a spot inside the bowl, in the current slice, the way a
+// player aims: within 1.3 units of the bowl's axis, just below its rim.
+static void aimIntoBowl(int dropIndex, int w, int h) {
+    uint32_t seed = 11u + 7919u * uint32_t(dropIndex);
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / float(1 << 24); };
+    const Camera4D& cam = game.state.cam;
+    glm::mat4 R = cam.basis();
+    float a = rnd() * 6.2831853f, r = 1.3f * std::sqrt(rnd());
+    glm::vec4 p = cam.target + cam.offset * R[3] + r * (std::cos(a) * R[0] + std::sin(a) * R[2]);
+    p.y = -0.3f;   // just under the rim, so the near rim never hides the spot
+    glm::vec2 ndc(0.0f, -0.2f);
+    game.state.cam.project(p, float(w) / float(std::max(h, 1)), ndc);
+    game.state.m_xpos = glm::clamp(ndc.x * 0.5f + 0.5f, 0.05f, 0.95f) * float(w);
+    game.state.m_ypos = glm::clamp(0.5f - ndc.y * 0.5f, 0.05f, 0.95f) * float(h);
 }
 
 static void setScriptedPlaytestCursor(int dropIndex, int w, int h) {
@@ -771,9 +794,35 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
         if (!rec.start(o.record)) return 1;
         float seconds = o.seconds > 0 ? o.seconds : hasPath ? path.duration() : o.frames / float(o.fps);
         int total = std::max(1, int(std::lround(seconds * o.fps)));
+        // Gameplay: the scripted player drops through the real cursor path (so
+        // the drop preview shows), aiming into the bowl in the current slice.
+        int drops = 0, resets = 0;
+        auto play = [&](float t, float dt) {
+            if (o.playEvery <= 0.0f) return;
+            if (std::floor((t + dt) / o.playEvery) > std::floor(t / o.playEvery)) {
+                aimIntoBowl(drops++, o.width, o.height);
+                game.DropFruit();
+            } else if (drops > 0) {
+                aimIntoBowl(drops, o.width, o.height);   // the cursor moves to the next spot
+            }
+            if (game.State == GAME_OVER) { ++resets; game.Reset(); }
+        };
+        if (o.playEvery > 0.0f) {
+            std::srand(20261118);
+            game.nextFruit = FruitManager::getRandomFruit();
+            if (hasPath) path.apply(0.0f, game.state.cam);
+            for (float t = 0.0f; t < o.warmup; t += FIXED_TIMESTEP) {
+                play(t, FIXED_TIMESTEP);
+                game.FixedUpdate(FIXED_TIMESTEP);
+                game.Update(FIXED_TIMESTEP);
+            }
+            printf("warm-up: %d drops, %d fruit in play, %d game overs, state %d\n", drops, activeObjectCount(), resets, int(game.State));
+        }
         for (int i = 0; i < total; ++i) {
             if (i % 12 == 0 && i / 12 < o.demo) dropDemoFruit(i / 12);
             pathTime = i * rec.dt();
+            if (hasPath) path.apply(pathTime, game.state.cam);
+            play(o.warmup + pathTime, rec.dt());
             game.ProcessInput(rec.dt());
             advanceSim(rec.dt(), simAcc);
             game.Update(rec.dt());
@@ -786,6 +835,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
             if (i % o.fps == 0) { printf("\rframe %d / %d", i, total); fflush(stdout); }
         }
         printf("\n");
+        if (o.playEvery > 0.0f) printf("played: %d drops, %d fruit in play, %d game overs\n", drops, activeObjectCount(), resets);
         rec.stop();
         return 0;
 #endif

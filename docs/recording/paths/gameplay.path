@@ -1,0 +1,10 @@
+# Gameplay for the store page (20 s): framed on the bowl while a scripted player
+# drops fruit (`make gameplay`); the slice turns through xw, yw and zw in turn,
+# slowly enough that drops still land where the cursor aims. The orbit stays in
+# the clear side of the island (yaw -40 to 45), away from the trees.
+t=0   yaw=-20 pitch=-26 distance=11
+t=4   yaw=10  pitch=-24 distance=10.5 xw=35
+t=8   yaw=40  pitch=-28 distance=10   xw=60 yw=20
+t=12  yaw=20  pitch=-24 distance=11   xw=20 yw=40 offset=0.6
+t=16  yaw=-15 pitch=-27 distance=10.5 xw=0  yw=10 zw=45 offset=-0.4
+t=20  yaw=-40 pitch=-25 distance=12   zw=10 offset=0
