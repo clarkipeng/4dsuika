@@ -45,7 +45,7 @@ turntable:
 			-crf 16 -pix_fmt yuv420p -movflags +faststart $${d%/}.mp4 || exit 1; \
 	done
 
-# View modes side by side (docs/4D.md, "View modes"): compare.png and a clip per mode in COMPARE_DIR.
+# Every view and combination (docs/4D.md, "View modes"): view-<v>.png, view-<v>.mp4 and compare.png in COMPARE_DIR.
 COMPARE_DIR ?= recordings/view-compare
 
 view-compare:
