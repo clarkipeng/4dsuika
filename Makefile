@@ -5,7 +5,7 @@ CMAKE = cmake
 NICE = nice -n 10
 JOBS = 4
 
-.PHONY: all build run clean package video turntable view-compare
+.PHONY: all build run clean package video gameplay turntable view-compare
 
 all: build
 
@@ -31,6 +31,16 @@ FFMPEG ?= ffmpeg
 video:
 	$(FFMPEG) -y -framerate $(FPS) -i $(FRAMES)/frame_%06d.png \
 		-c:v libx264 -preset slow -crf 14 -pix_fmt yuv420p -movflags +faststart $(VIDEO)
+
+# Gameplay for the store page: a scripted player, 20 s at 1080p30 (see docs/recording.md).
+GAMEPLAY_DIR ?= recordings/gameplay
+
+gameplay:
+	SDL_AUDIODRIVER=dummy ./$(BUILD_DIR)/4d_game.app/Contents/MacOS/4d_game --headless --mute \
+		--record $(GAMEPLAY_DIR) --camera-path docs/recording/paths/gameplay.path --play 0.9 --warmup 30 \
+		--seconds 20 --fps 30 --size 1920x1080
+	$(FFMPEG) -nostdin -loglevel error -y -framerate 30 -i $(GAMEPLAY_DIR)/frame_%06d.png -c:v libx264 -preset slow \
+		-crf 16 -pix_fmt yuv420p -movflags +faststart $(GAMEPLAY_DIR).mp4
 
 # 4D review turntable: a video and a contact sheet per subject in TURNTABLE_DIR
 # (see docs/recording.md). SUBJECT is all, fruit, bowl or fruit names, comma separated.
