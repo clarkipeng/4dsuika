@@ -116,7 +116,8 @@ public:
     std::vector<FruitInstance> sheetFruit;
     std::string sheetTitle;
     float sheetTitleScale = 0.9f;
-    bool sheetNames = true;           // name under each fruit (off for the turntable)
+    bool sheetNames = true;
+    std::string caption;              // headless comparisons: centred at the top of the game view           // name under each fruit (off for the turntable)
 
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
         State = GAME_MENU;
@@ -269,6 +270,7 @@ public:
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
         if (keyPressedOnce(GLFW_KEY_V)) showAxisInset = !showAxisInset;
+        if (keyPressedOnce(GLFW_KEY_M)) CycleViewMode(+1);
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
             if (page != Page::None) ClosePage();
@@ -438,6 +440,14 @@ public:
         float size = std::max(28.0f, FbHeight * 0.045f) * float(Height) / float(std::max(FbHeight, 1));
         t_rend->RenderText(buf, size * 3.9f, Height - size * 1.9f - 8.0f, s, glm::vec3(0.95f, 0.9f, 0.85f));
         if (homing) t_rend->RenderText("returning to default slice", size * 3.9f, Height - size * 1.9f + 14.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
+        if (renderer.viewMode != ViewMode::Slice) {
+            std::string view = std::string("view: ") + viewModeName(renderer.viewMode);
+            if (renderer.viewMode == ViewMode::Thick) {
+                snprintf(buf, sizeof buf, "   band +-%.2f", renderer.band);
+                view += buf;
+            }
+            t_rend->RenderText(view + "   (M)", size * 3.9f, Height - size * 1.9f - 34.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
+        }
     }
 
     static glm::vec3 FruitUiColor(int type) {
@@ -563,6 +573,8 @@ public:
         t_rend->RenderText("Score " + std::to_string((int)physics_solver->total_points), 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
         RenderSliceLabel();
         RenderAxisInset();
+        if (!caption.empty())
+            t_rend->RenderText(caption, (Width - t_rend->GetTextWidth(caption, 0.9f)) * 0.5f, 25.0f, 0.9f, glm::vec3(1.0f, 0.92f, 0.75f));
         if (showPerf) {
             char buf[128];
             int rw = int(FbWidth * renderer.renderScale), rh = int(FbHeight * renderer.renderScale);
@@ -592,6 +604,13 @@ public:
     static std::string percent(float v) { return std::to_string(int(v * 100.0f + 0.5f)) + "%"; }
 
     static void CycleIndex(int& i, int dir, int count) { i = (i + dir + count) % count; }
+
+    // M or Settings > View: slice (the game), thick slice, 4D eye.
+    void CycleViewMode(int dir) {
+        int m = int(renderer.viewMode);
+        CycleIndex(m, dir, 3);
+        renderer.viewMode = ViewMode(m);
+    }
 
     // Rebuilds the menu when the screen it shows changes.
     void EnsureMenu() {
@@ -671,6 +690,11 @@ public:
         items.push_back(MenuItem::choice("Render scale", [this] {
                 return scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
             }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
+        items.push_back(MenuItem::choice("View", [this] { return std::string(viewModeName(renderer.viewMode)); },
+            [this](int d) { CycleViewMode(d); }));
+        items.push_back(MenuItem::slider("Band width", [this] {
+                return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
+            }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
         items.push_back(MenuItem::choice("W-depth inset", [this] { return std::string(showAxisInset ? "On" : "Off"); },
             [this](int) { showAxisInset = !showAxisInset; }));
@@ -705,6 +729,7 @@ public:
         items.push_back(MenuItem::info("H / Space", "back to the default slice"));
         items.push_back(MenuItem::info("V", "toggle the side / w inset"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
+        items.push_back(MenuItem::info("M", "view: slice, thick slice, 4D eye"));
         items.push_back(MenuItem::info("Esc", "pause"));
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
         menu.set(std::move(items), std::move(st));

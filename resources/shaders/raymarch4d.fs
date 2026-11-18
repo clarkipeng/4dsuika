@@ -11,6 +11,9 @@
 //   2  lighting at half resolution: shadow and AO of the G-buffer hits
 //   3  compose: materials, light, sky, fog, hints, grade; lighting is
 //      upsampled from pass 2 with depth-aware weights
+//   4  4D eye retina: four layers of the 3D retina per draw, each texel the
+//      colour and density seen along one 4D ray from the camera
+//   5  4D eye display: the retina as a semi-transparent volume
 
 #ifndef PASS
 #define PASS 0
@@ -19,6 +22,11 @@
 #if PASS == 1
 layout(location = 0) out vec4 gGeom;   // t, kind, fruit lod, bowl distance
 layout(location = 1) out vec4 gNormal; // smooth normal
+#elif PASS == 4
+layout(location = 0) out vec4 out0;
+layout(location = 1) out vec4 out1;
+layout(location = 2) out vec4 out2;
+layout(location = 3) out vec4 out3;
 #else
 out vec4 fragColor;
 #endif
@@ -38,6 +46,8 @@ uniform int   uFruitCount;
 uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, facet seed
 uniform mat4  uFruitWorldToLocal[MAX_FRUIT]; // rotates (p - centre) into the fruit frame
+uniform int   uGhostCount;           // thick slice: ghosts follow the fruit in the arrays above
+uniform vec4  uGhostFade[MAX_FRUIT / 4]; // per ghost, packed by 4: opacity, signed by its side of the slice
 uniform int   uHintCount;            // fruit just off the slice
 uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
 uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
@@ -56,6 +66,13 @@ uniform mat4      uCacheBasis;       // columns: slice axes x, y, z, slice norma
 uniform float     uCacheSize;        // cube side, 0 = no static world in this slice
 uniform float     uCacheVoxel;
 uniform vec3      uCacheUV;          // scale of the baked corner, min and max texture coordinate
+
+// 4D eye (docs/4D.md, "View modes").
+uniform sampler3D uRetina;           // pass 4 target, read by pass 5
+uniform vec3      uRetinaSize;       // texels: u, v, s
+uniform float     uLayer;            // pass 4: retina layer of out0; out1..3 follow
+uniform mat3      uEyeView;          // pass 5: display camera axes (columns), looking along -column 2
+uniform vec3      uEyeBox;           // pass 5: half extents of the retina box (u, v, s)
 
 #include "world4d.glsl"
 #include "fruit4d.glsl"
@@ -474,6 +491,38 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     return col;
 }
 
+// ---------------------------------------------------------------- thick slice
+//
+// Ghosts of the fruit within the band off the slice (the host moved each into
+// the slice from the offset where it is largest), see-through, drawn back to
+// front over the scene up to `limit`, tinted by their side like the hints.
+
+vec3 drawGhosts(vec3 col, vec4 ro, vec4 rd, float limit) {
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    for (int j = 0; j < MAX_FRUIT; ++j) {
+        if (j >= uGhostCount) break;
+        int i = uFruitCount + j;
+        vec4 d = uFruitData[i];
+        float t0, t1;
+        if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= limit) continue;
+        float lod = fruitLod(d.x, t0, pixel);
+        float t = fruitMarch(fruitLocalPoint(i, ro), fruitLocalVector(i, rd), d, t0, min(t1, limit), lod);
+        if (t <= 0.0) continue;
+        vec4 p = ro + rd * t;
+        vec4 q = fruitLocalPoint(i, p);
+        vec4 ns = lod > 0.0 ? fruitWorldNormal(i, q, d, lod) : normalize(p - uFruitCenters[i]);
+        vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
+        vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(i, ns)), d.x, d.y, d.w, lod);
+        vec3 g = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, vec2(1.0)) + albedo * 0.3;
+        float a = uGhostFade[j / 4][j % 4];
+        vec3 side = a > 0.0 ? vec3(0.45, 0.75, 1.0) : vec3(1.0, 0.55, 0.35);
+        g = mix(g, side * dot(g, vec3(0.333)) * 1.4, 0.25);
+        float rim = pow(1.0 - abs(dot(ns, rd)), 2.0);
+        col = mix(col, g, abs(a) * (0.55 + 0.45 * rim));
+    }
+    return col;
+}
+
 // ---------------------------------------------------------------- passes
 
 // What a pixel's ray hit. kind: 0 sky, > 0 world material id,
@@ -576,6 +625,15 @@ vec3 background(vec2 px, vec4 rd) {
 #endif
 }
 
+// Grade, linear in, display out: soft tone map, a little extra saturation.
+vec3 grade(vec3 col) {
+    col *= 0.85;
+    col = col / (1.0 + col * 0.4);
+    col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+    float luma = dot(col, vec3(0.299, 0.587, 0.114));
+    return clamp(mix(vec3(luma), col, 1.18), 0.0, 1.0);
+}
+
 // Final colour of a pixel from its hit and light (shadow, AO).
 vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     vec3 col = vec3(0.0);
@@ -635,6 +693,14 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     // Not over fruit, which must stay readable.
     col += vec3(1.0, 0.72, 0.42) * (h.kind < 0.0 ? 0.0 : 0.22) * exp(-h.bowlNear * 5.0);
 
+    // Ghosts see through the bowl (x-ray) up to its far wall.
+    if (uGhostCount > 0) {
+        float limit = dist;
+        float t0, t1;
+        if (h.kind == MAT_BOWL && glomeSpan(ro, rd, vec4(0.0), BOWL_R + BOWL_HALF, t0, t1)) limit = max(limit, t1);
+        col = drawGhosts(col, ro, rd, limit);
+    }
+
     col = drawHints(col, ro, rd, dist);
 
     // Ghost of the next drop, blended over the scene.
@@ -647,13 +713,8 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         }
     }
 
-    // Grade: soft tone map, a little extra saturation, and the cover art's
-    // darker edges.
-    col *= 0.85;
-    col = col / (1.0 + col * 0.4);
-    col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
-    float luma = dot(col, vec3(0.299, 0.587, 0.114));
-    col = clamp(mix(vec3(luma), col, 1.18), 0.0, 1.0);
+    // The cover art's darker edges.
+    col = grade(col);
     vec2 v = px / uResolution - 0.5;
     col *= 1.0 - 0.55 * dot(v, v);
     return col;
@@ -698,6 +759,122 @@ vec2 upsampleLight(ivec2 texel, float t) {
     return best > 0.02 ? nearest : sum / wsum;
 }
 
+// ---------------------------------------------------------------- 4D eye
+//
+// A 4D camera sees the scene on a 3D retina, as a 3D eye sees it on a 2D one.
+// Retina coordinates (u, v, s) in [-1, 1]^3 look along the camera's forward
+// axis tilted by u right, v up and s along the slice normal, so s = 0 is
+// exactly the slice view's image. Each texel is one 4D ray: whole fruit show
+// at once (their 4D outline, not a cross-section), at every s where a ray hits
+// them. Shading has no shadows; the world is the coarse occluder surface with
+// its materials, faint in the volume so the fruit read through it.
+
+const float EYE_WORLD = 0.008, EYE_BOWL = 0.02; // densities (fruit 1)
+
+vec4 eyeFruitColour(int i, vec4 ro, vec4 rd, float t, float lod) {
+    vec4 p = ro + rd * t;
+    vec4 d = uFruitData[i];
+    vec4 q = fruitLocalPoint(i, p);
+    vec4 ns = lod > 0.0 ? fruitWorldNormal(i, q, d, lod) : normalize(p - uFruitCenters[i]);
+    vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
+    vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(i, ns)), d.x, d.y, d.w, lod);
+    float fill = 0.35 * max(dot(n, -rd), 0.0);
+    return vec4(shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, vec2(1.0)) + albedo * (0.18 + fill) +
+                d.z * vec3(1.0, 0.9, 0.7), 1.0);
+}
+
+// Colour (display space) and density seen along a 4D ray.
+vec4 eyeRay(vec4 ro, vec4 rd) {
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    float tHit = FAR;
+    int fruit = -1;
+    float lodHit = 0.0;
+    for (int i = 0; i < MAX_FRUIT; ++i) {
+        if (i >= uFruitCount) break;
+        vec4 d = uFruitData[i];
+        float t0, t1;
+        if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= tHit) continue;
+        float lod = fruitLod(d.x, t0, pixel);
+        float t = fruitMarch(fruitLocalPoint(i, ro), fruitLocalVector(i, rd), d, t0, min(t1, tHit), lod);
+        if (t > 0.0 && t < tHit) { tHit = t; fruit = i; lodHit = lod; }
+    }
+    // The world's coarse surface, stopped at the fruit.
+    float t = 0.0, tw = -1.0;
+    for (int k = 0; k < 64; ++k) {
+        float h = occluderSDF(ro + rd * t);
+        if (h < 0.004 * t + 0.01) { tw = t; break; }
+        t += h;
+        if (t > min(tHit, 45.0)) break;
+    }
+    vec4 fc = fruit >= 0 ? eyeFruitColour(fruit, ro, rd, tHit, lodHit) : vec4(0.0);
+    if (tw < 0.0) return fruit >= 0 ? vec4(grade(fc.rgb), 1.0) : vec4(0.0);
+    vec4 p = ro + rd * tw;
+    float mat = worldSDF(p).y;
+    const float e = 0.02;
+    float f0 = occluderSDF(p);
+    vec4 n = normalize(vec4(occluderSDF(p + vec4(e, 0, 0, 0)), occluderSDF(p + vec4(0, e, 0, 0)),
+                            occluderSDF(p + vec4(0, 0, e, 0)), occluderSDF(p + vec4(0, 0, 0, e))) - f0);
+    vec3 wc = shade(p, n, n, rd, materialColor(mat, p, n), 0.0, wrapOf(mat), vec2(1.0));
+    // The bowl is glass for the fruit inside it, as in the slice view.
+    if (mat == MAT_BOWL && fruit >= 0) return vec4(grade(mix(fc.rgb, wc, 0.3)), 1.0);
+    return vec4(grade(wc), mat == MAT_BOWL ? EYE_BOWL : EYE_WORLD);
+}
+
+// Retina texel (texel coordinates) to its 4D ray direction.
+vec4 eyeDir(vec3 texel) {
+    vec3 r = texel / uRetinaSize * 2.0 - 1.0;
+    float aspect = uRetinaSize.x / uRetinaSize.y;
+    return uCameraBasis * normalize(vec4(r.x * aspect * uTanHalfFov, r.y * uTanHalfFov, -1.0, r.z * uTanHalfFov));
+}
+
+// The retina as a volume seen from a 3D display camera outside it: front to
+// back through the box, density from each texel, over a plain backdrop with
+// the box's edges drawn faintly.
+vec3 eyeDisplay(vec2 px) {
+    vec2 ndc = px / uResolution * 2.0 - 1.0;
+    float aspect = uResolution.x / uResolution.y;
+    const float tanDisplay = 0.36;
+    float dist = 1.4 * max(uEyeBox.y, uEyeBox.x / aspect) / tanDisplay + uEyeBox.z;
+    vec3 ro = uEyeView * vec3(0.0, 0.0, dist);
+    vec3 rd = normalize(uEyeView * vec3(ndc.x * aspect * tanDisplay, ndc.y * tanDisplay, -1.0));
+    vec3 col = mix(vec3(0.012, 0.012, 0.018), vec3(0.075, 0.05, 0.075), px.y / uResolution.y);
+    col = pow(col, vec3(1.0 / 2.2));
+    // Ray-box span.
+    vec3 inv = 1.0 / rd;
+    vec3 ta = (-uEyeBox - ro) * inv, tb = (uEyeBox - ro) * inv;
+    vec3 tmin = min(ta, tb), tmax = max(ta, tb);
+    float t0 = max(max(tmin.x, tmin.y), tmin.z), t1 = min(min(tmax.x, tmax.y), tmax.z);
+    if (t1 <= max(t0, 0.0)) return col;
+    // Edges: where the entry or exit point is near two faces at once.
+    float pixel = 2.0 * tanDisplay / uResolution.y;
+    vec3 a = abs(ro + rd * t0) / uEyeBox, b = abs(ro + rd * t1) / uEyeBox;
+    float w0 = 1.5 * pixel * t0 / min(uEyeBox.x, uEyeBox.y), w1 = 1.5 * pixel * t1 / min(uEyeBox.x, uEyeBox.y);
+    float e0 = step(1.0 - w0, a.x) + step(1.0 - w0, a.y) + step(1.0 - w0, a.z);
+    float e1 = step(1.0 - w1, b.x) + step(1.0 - w1, b.y) + step(1.0 - w1, b.z);
+    col += vec3(0.10, 0.09, 0.08) * step(2.0, e1);
+    const int STEPS = 160;
+    float dt = (t1 - t0) / float(STEPS);
+    // Density per unit length along s: a fruit's outline is opaque across its
+    // thickness in s, the world faint across the whole box.
+    float sigma = 40.0 / uEyeBox.z;
+    vec3 sum = vec3(0.0);
+    float alpha = 0.0;
+    // Per-pixel jitter (interleaved gradient noise) turns the layers' banding into fine grain.
+    float jitter = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
+    for (int k = 0; k < STEPS; ++k) {
+        vec3 x = ro + rd * (t0 + (float(k) + jitter) * dt);
+        vec4 c = texture(uRetina, x / uEyeBox * 0.5 + 0.5);
+        float a = 1.0 - exp(-c.a * sigma * dt);
+        sum += (1.0 - alpha) * a * c.rgb;
+        alpha += (1.0 - alpha) * a;
+        if (alpha > 0.98) break;
+    }
+    col = sum + (1.0 - alpha) * col;
+    col += vec3(0.16, 0.14, 0.12) * step(2.0, e0);
+    vec2 v = px / uResolution - 0.5;
+    return col * (1.0 - 0.55 * dot(v, v));
+}
+
 // ---------------------------------------------------------------- main
 
 void main() {
@@ -716,6 +893,13 @@ void main() {
     Hit h = readGeometry(texel);
     vec2 light = lightHit(ro, rayDir(vec2(texel) + 0.5), h);
     fragColor = vec4(light, h.t, 1.0);
+#elif PASS == 4
+    out0 = eyeRay(ro, eyeDir(vec3(px, uLayer + 0.5)));
+    out1 = eyeRay(ro, eyeDir(vec3(px, uLayer + 1.5)));
+    out2 = eyeRay(ro, eyeDir(vec3(px, uLayer + 2.5)));
+    out3 = eyeRay(ro, eyeDir(vec3(px, uLayer + 3.5)));
+#elif PASS == 5
+    fragColor = vec4(eyeDisplay(px), 1.0);
 #elif PASS == 3
     ivec2 texel = ivec2(px);
     Hit h = readGeometry(texel);
@@ -726,7 +910,7 @@ void main() {
     Hit h = traceScene(ro, rd);
     fragColor = vec4(compose(px, ro, rd, h, lightHit(ro, rd, h)), 1.0);
 #endif
-#if defined(COST_MAP) && PASS != 1
+#if defined(COST_MAP) && PASS != 1 && PASS != 4
     // Evaluations / 255 per channel: R static world, G moving world, B fruit.
     fragColor = vec4(vec3(gCost) / 255.0, 1.0);
 #endif

@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -84,6 +85,12 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --cost-map out.png     analytic SDF evaluations per pixel instead of colour (R static
 //                          world, G moving world, B fruit) with statistics; deterministic,
 //                          unlike timings on a shared GPU
+//   --view mode            slice (default), thick or eye (docs/4D.md, "View modes")
+//   --band b               thick slice: how far off the slice fruit still show (default 1)
+//   --view-compare dir     the same three scripted-playtest moments (early, mid, the
+//                          next merge) in every view mode as dir/compare.png, plus a 10 s
+//                          clip per mode turning in 4D (frames in dir/<mode>/; see
+//                          docs/4D.md; `make view-compare` adds the videos)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -134,12 +141,15 @@ struct Options {
     bool mute = false;
     std::string fruitSheet;
     std::string sheetTurn = "yw:35";
+    std::string view = "slice";
+    float band = 1.0f;
+    std::string viewCompare;
     std::string turntable;
     std::string subject = "all";
     float sweep = 4.0f;
     bool headless() const {
         return forceHeadless || !screenshot.empty() || bench > 0 || !fruitSheet.empty() || !costMap.empty() ||
-               playtestSeconds > 0.0f || !turntable.empty();
+               playtestSeconds > 0.0f || !turntable.empty() || !viewCompare.empty();
     }
     bool muted() const { return mute || headless(); }
 };
@@ -182,6 +192,15 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--sheet-turn") o.sheetTurn = next();
         else if (a == "--record") o.record = next();
         else if (a == "--turntable") o.turntable = next();
+        else if (a == "--view-compare") o.viewCompare = next();
+        else if (a == "--view") {
+            o.view = next();
+            if (o.view != "slice" && o.view != "thick" && o.view != "eye") {
+                std::cerr << "--view: slice, thick or eye" << std::endl;
+                std::exit(2);
+            }
+        }
+        else if (a == "--band") o.band = float(std::atof(next().c_str()));
         else if (a == "--subject") o.subject = next();
         else if (a == "--sweep") o.sweep = std::max(0.1f, float(std::atof(next().c_str())));
         else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
@@ -515,6 +534,131 @@ static int runTurntable(const Options& o, GLuint fbo) {
     }
     return 0;
 }
+
+// View-mode comparison (docs/4D.md, "View modes"): the scripted playtest's
+// drops up to three moments, each shown in every mode side by side, then a
+// 10 s clip per mode from the mid moment with physics frozen while the slice
+// turns through xw and yw.
+static int runViewCompare(const Options& o, GLuint fbo) {
+    struct View { const char* name; const char* dir; ViewMode mode; bool inset; };
+    const View views[] = {{"slice", "slice", ViewMode::Slice, false},
+                          {"slice + w inset (game)", "inset", ViewMode::Slice, true},
+                          {"thick slice, band +-1", "thick", ViewMode::Thick, false},
+                          {"4D eye", "eye", ViewMode::Eye, false}};
+    const int nViews = 4, down = 2;
+    const int tw = o.width / down, th = o.height / down;
+    std::error_code ec;
+    std::filesystem::create_directories(o.viewCompare, ec);
+
+    std::srand(20261117);
+    game.State = GAME_ACTIVE;
+    game.page = Game::Page::None;
+    game.menuBuiltFor = -1;
+    game.nextFruit = FruitManager::getRandomFruit();
+    game.renderer.band = 1.0f;
+
+    auto render = [&](const View& v, const std::string& caption) {
+        game.renderer.viewMode = v.mode;
+        game.showAxisInset = v.inset;
+        game.caption = caption;
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, o.width, o.height);
+        glClearColor(0, 0, 0, 1);
+        game.Render();
+    };
+    std::vector<unsigned char> sheet(size_t(tw) * nViews * th * 3 * 4), px(size_t(o.width) * o.height * 4);
+    auto tile = [&](int row, int col) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, o.width, o.height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        for (int y = 0; y < th; ++y)
+            for (int x = 0; x < tw; ++x) {
+                int sum[4] = {};
+                for (int dy = 0; dy < down; ++dy)
+                    for (int dx = 0; dx < down; ++dx)
+                        for (int ch = 0; ch < 4; ++ch)
+                            sum[ch] += px[(size_t(o.height - 1 - (y * down + dy)) * o.width + x * down + dx) * 4 + ch];
+                unsigned char* d = &sheet[(size_t(row * th + y) * tw * nViews + col * tw + x) * 4];
+                for (int ch = 0; ch < 4; ++ch) d[ch] = (unsigned char)(sum[ch] / (down * down));
+            }
+    };
+
+    // Moments: early (15 s), mid (90 s), and the first merge after that, a
+    // tenth of a second later, with the slice moved through the new fruit.
+    const char* momentNames[] = {"early", "mid", "merge"};
+    const int dropEvery = 45;
+    int attempts = 0, moment = 0, mergeFrame = -1;
+    Camera4D midCam;
+    for (int frame = 0; moment < 3 && frame < 60 * 600; ++frame) {
+        float t = frame * FIXED_TIMESTEP;
+        setScriptedPlaytestPose(t);
+        if (frame % dropEvery == 0) {
+            setScriptedPlaytestCursor(attempts++, o.width, o.height);
+            game.DropFruit();
+        }
+        game.FixedUpdate(FIXED_TIMESTEP);
+        if (moment == 2 && mergeFrame < 0 && game.physics_solver->just_merged.load() > 0) mergeFrame = frame;
+        game.Update(FIXED_TIMESTEP);
+        if (game.State == GAME_OVER) game.Reset();
+
+        bool shoot = (moment == 0 && frame == 15 * 60) || (moment == 1 && frame == 90 * 60) ||
+                     (moment == 2 && mergeFrame >= 0 && frame == mergeFrame + 6);
+        if (!shoot) continue;
+        if (moment == 2) { // the slice through the brightest (newest) merged fruit
+            int best = -1;
+            for (int i = 0; i < MAX_OBJECTS; ++i)
+                if (game.physics_solver->has_obj[i] &&
+                    (best < 0 || game.physics_solver->objects[i].flash > game.physics_solver->objects[best].flash))
+                    best = i;
+            Camera4D& cam = game.state.cam;
+            if (best >= 0)
+                cam.offset = glm::clamp(glm::dot(game.physics_solver->objects[best].position - cam.target, cam.normal()),
+                                        -Camera4D::kOffsetMax, Camera4D::kOffsetMax);
+        }
+        if (moment == 1) midCam = game.state.cam;
+        for (int v = 0; v < nViews; ++v) {
+            char cap[96];
+            snprintf(cap, sizeof cap, "%s   (%s, %.0f s)", views[v].name, momentNames[moment], t);
+            render(views[v], cap);
+            tile(moment, v);
+        }
+        printf("moment %s at %.2f s: %d fruit\n", momentNames[moment], t, activeObjectCount());
+        // Keep the mid state for the clips: they start from it, physics frozen.
+        if (moment == 1) {
+            ++moment;
+            // Clips below need the mid state; render them now, then go on to the merge.
+            for (int v = 0; v < nViews; ++v) {
+                Recorder rec;
+                rec.fps = o.fps;
+                if (!rec.start(o.viewCompare + "/" + views[v].dir)) return 1;
+                const int frames = 10 * o.fps;
+                for (int i = 0; i < frames; ++i) {
+                    float u = float(i) / float(frames);
+                    Camera4D& cam = game.state.cam;
+                    cam = midCam;
+                    cam.turnLocal(AX_X, AX_W, glm::radians(80.0f) * std::sin(6.2831853f * u));
+                    cam.turnLocal(AX_Y, AX_W, glm::radians(35.0f) * std::sin(6.2831853f * 2.0f * u));
+                    cam.yaw += 0.6f * std::sin(6.2831853f * u);
+                    render(views[v], views[v].name);
+                    rec.capture(o.width, o.height);
+                }
+                rec.stop();
+            }
+            game.state.cam = midCam;
+            continue;
+        }
+        ++moment;
+    }
+    game.caption.clear();
+    if (moment < 3) { std::cerr << "view compare: no merge after the mid moment" << std::endl; return 1; }
+    std::string path = o.viewCompare + "/compare.png";
+    if (!stbi_write_png(path.c_str(), tw * nViews, th * 3, 4, sheet.data(), tw * nViews * 4)) {
+        std::cerr << "Could not write " << path << std::endl;
+        return 1;
+    }
+    std::cout << "wrote " << path << std::endl;
+    return 0;
+}
 #endif
 
 static int runHeadless(GLFWwindow* window, const Options& o) {
@@ -544,6 +688,8 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.renderer.useCache = !o.noCache;
     game.renderer.useDeferred = !o.singlePass;
+    game.renderer.viewMode = o.view == "thick" ? ViewMode::Thick : o.view == "eye" ? ViewMode::Eye : ViewMode::Slice;
+    game.renderer.band = std::clamp(o.band, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
     auto showMenuState = [&](const std::string& st) {
         game.State = st == "menu" || st == "settings" || st == "controls" ? GAME_MENU
                    : st == "pause" ? GAME_PAUSED : st == "over" ? GAME_OVER : GAME_ACTIVE;
@@ -563,6 +709,14 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
         return 1;
 #else
         return runTurntable(o, fbo);
+#endif
+    }
+    if (!o.viewCompare.empty()) {
+#ifdef __EMSCRIPTEN__
+        std::cerr << "--view-compare is only available in the desktop build" << std::endl;
+        return 1;
+#else
+        return runViewCompare(o, fbo);
 #endif
     }
 

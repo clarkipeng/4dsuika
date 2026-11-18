@@ -22,6 +22,7 @@
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include "camera4d.hpp"
@@ -37,6 +38,14 @@ struct FruitInstance {
 };
 
 enum class Quality { Low = 0, Medium = 1, High = 2, Ultra = 3 };
+
+// How the 4D scene is shown (docs/4D.md, "View modes"). Slice is the game's
+// view; the others are for comparison and are off by default.
+enum class ViewMode { Slice = 0, Thick = 1, Eye = 2 };
+inline const char* viewModeName(ViewMode m) {
+    static const char* names[] = {"Slice", "Thick slice", "4D eye"};
+    return names[int(m)];
+}
 
 inline const char* qualityName(Quality q) {
     static const char* names[] = {"Low", "Medium", "High", "Ultra"};
@@ -63,6 +72,9 @@ public:
     bool syncTiming = false;  // wait for each timing result (benchmarks)
     bool useCache = true;     // slice cache on (falls back to analytic if unsupported)
     bool useDeferred = true;  // three scene passes with half-resolution lighting (if supported)
+    ViewMode viewMode = ViewMode::Slice;
+    float band = 1.0f;        // thick slice: how far off the slice (either side) fruit still show
+    static constexpr float kBandMin = 0.25f, kBandMax = 3.0f;
     std::string extraDefines; // added to the scene and bake shaders on the next setQuality
 
     // GPU time of the last cache bake in ms, and how many bakes ran.
@@ -109,6 +121,7 @@ public:
         }
         renderScale = 1.0f; // re-clamped against the new cap next frame
         cacheValid_ = false;
+        for (GLuint& e : eye_) { if (e) glDeleteProgram(e); e = 0; } // rebuilt when next shown
     }
 
     // Texels per side of the slice cache for each preset.
@@ -156,6 +169,10 @@ public:
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
         glBindVertexArray(vao_);
+        if (viewMode == ViewMode::Eye && drawEye(cam, rw, rh, time)) {
+            present(cam, target, width, height, rw, rh);
+            return;
+        }
         bool cached = useCache && updateCache(cam, time);
 
         // Scene: in three passes (geometry, half-resolution lighting,
@@ -187,9 +204,16 @@ public:
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
         endTimer();
+        present(cam, target, width, height, rw, rh);
+    }
 
-        // Present pass.
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
+private:
+    // Upscales the scene target (rw x rh) to the output and draws the indicator.
+    void present(const Camera4D& cam, GLint target, int width, int height, int rw, int rh) {
+        glm::mat4 basis = cam.basis();
+        // Both bindings back to the caller's target: readers (recorder,
+        // screenshots) see the presented frame, not the scene target.
+        glBindFramebuffer(GL_FRAMEBUFFER, target);
         glViewport(0, 0, width, height);
         glUseProgram(present_);
         glActiveTexture(GL_TEXTURE0);
@@ -207,11 +231,93 @@ public:
         glEnable(GL_BLEND);
     }
 
-private:
+    // 4D eye retina size per preset: v texels (u follows the aspect), s layers.
+    void retinaSize(int rw, int rh, int& nu, int& nv, int& ns) const {
+        static const int v[] = {64, 84, 108, 144}, s[] = {32, 48, 64, 96};
+        nv = v[int(quality_)];
+        ns = s[int(quality_)];
+        nu = std::max(4, int(std::lround(nv * float(rw) / float(std::max(rh, 1)))));
+    }
+
+    // 4D eye: trace the retina (one 4D ray per texel, four layers per draw),
+    // then show it as a volume into the scene target. False if unsupported.
+    bool drawEye(const Camera4D& cam, int rw, int rh, float time) {
+        if (eyeUnsupported_) return false;
+        if (!eye_[0]) {
+            for (int k = 0; k < 2; ++k)
+                eye_[k] = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs",
+                                       "#define QUALITY " + std::to_string(int(quality_)) + "\n" + extraDefines +
+                                           "#define PASS " + std::to_string(4 + k) + "\n");
+            if (!eye_[0] || !eye_[1]) { eyeUnsupported_ = true; return false; }
+        }
+        int nu, nv, ns;
+        retinaSize(rw, rh, nu, nv, ns);
+        if (!retinaFbo_) { glGenFramebuffers(1, &retinaFbo_); glGenTextures(1, &retinaTex_); }
+        glBindTexture(GL_TEXTURE_3D, retinaTex_);
+        if (nu != retina_.x || nv != retina_.y || ns != retina_.z) {
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, nu, nv, ns, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            retina_ = glm::ivec3(nu, nv, ns);
+        }
+        glm::mat4 basis = cam.basis();
+        glm::vec4 pos = cam.position();
+        beginTimer();
+        glBindFramebuffer(GL_FRAMEBUFFER, retinaFbo_);
+        glViewport(0, 0, nu, nv);
+        sceneUniforms(eye_[0], cam, basis, pos, nu, nv, time, false);
+        glUniform3f(loc(eye_[0], "uRetinaSize"), float(nu), float(nv), float(ns));
+        // A narrower lens than the slice view's: the retina's few texels go to
+        // the bowl, and +-s still spans most of the bowl's extent in w.
+        glUniform1f(loc(eye_[0], "uTanHalfFov"), kEyeZoom * std::tan(cam.fovY * 0.5f));
+        GLint layerLoc = loc(eye_[0], "uLayer");
+        const GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2,
+                                GL_COLOR_ATTACHMENT3};
+        glDrawBuffers(4, bufs);
+        for (int z = 0; z < ns; z += 4) {
+            for (int k = 0; k < 4; ++k)
+                glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + k, retinaTex_, 0, z + k);
+            if (z == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                std::cerr << "RGBA8 3D texture not renderable; no 4D eye\n";
+                eyeUnsupported_ = true;
+                endTimer();
+                return false;
+            }
+            glUniform1f(layerLoc, float(z));
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+
+        // Display: the retina box (u, v as on screen, s in depth) seen from
+        // a little right of and above its s axis, so its depth shows.
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+        glViewport(0, 0, rw, rh);
+        glUseProgram(eye_[1]);
+        uniform(eye_[1], "uResolution", glm::vec2(rw, rh));
+        float aspect = float(nu) / float(nv);
+        glUniform3f(loc(eye_[1], "uEyeBox"), aspect, 1.0f, 0.6f);
+        glm::mat3 view = glm::mat3(glm::rotate(glm::mat4(1.0f), glm::radians(24.0f), glm::vec3(0, 1, 0)) *
+                                   glm::rotate(glm::mat4(1.0f), glm::radians(-14.0f), glm::vec3(1, 0, 0)));
+        glUniformMatrix3fv(loc(eye_[1], "uEyeView"), 1, GL_FALSE, glm::value_ptr(view));
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_3D, retinaTex_);
+        glUniform1i(loc(eye_[1], "uRetina"), 5);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        endTimer();
+        return true;
+    }
+
     static constexpr int kQueries = 4;
     static constexpr float kMinScaleOfCap = 0.35f; // adaptive floor: keep frame rate over sharpness
     GLuint scene_[4] = {}; // by PASS: 0 single, 1 geometry, 2 lighting, 3 compose
     GLuint present_ = 0, bake_ = 0, vao_ = 0;
+    // 4D eye: programs (PASS 4 retina, 5 display), built when first shown.
+    GLuint eye_[2] = {}, retinaFbo_ = 0, retinaTex_ = 0;
+    glm::ivec3 retina_{0};
+    bool eyeUnsupported_ = false;
+    static constexpr float kEyeZoom = 0.55f;
     // Deferred targets: G-buffer (hit, normal) at the scene size, light at half.
     GLuint gbufFbo_ = 0, geomTex_ = 0, normalTex_ = 0, lightFbo_ = 0, lightTex_ = 0;
     bool gbufOk_ = false;
@@ -432,32 +538,59 @@ private:
         // Rays never leave the slice, so a fruit is visible only if its glome
         // crosses the slice hyperplane; fruit within kHintRange beyond that
         // become depth hints. Nearest (to the camera, then the slice) first.
+        // Thick slice: every fruit that reaches into the band |offset| <= band
+        // also shows as a ghost, its cross-section at the offset in the band
+        // nearest its centre (the largest it has there), moved into the slice
+        // and faded by that offset.
         using Entry = std::pair<float, const FruitInstance*>;
         std::vector<Entry> visible, nearby; // (not "near": a Windows macro)
+        struct Ghost { float dist, shift; const FruitInstance* f; };
+        std::vector<Ghost> ghosts;
+        const bool thick = viewMode == ViewMode::Thick;
         for (const auto& f : fruit_) {
-            float gap = std::abs(glm::dot(f.center - camPos, normal)) - f.radius;
-            if (gap < 0.0f) visible.push_back({glm::length(f.center - camPos), &f});
-            else if (gap < kHintRange) nearby.push_back({gap, &f});
+            float off = glm::dot(f.center - camPos, normal);
+            float gap = std::abs(off) - f.radius;
+            float shift = std::clamp(off, -band, band);
+            bool ghost = thick && std::abs(off - shift) < f.radius && std::abs(off) > 0.05f * f.radius;
+            if (ghost) ghosts.push_back({glm::length(f.center - camPos), shift, &f});
+            if (viewMode == ViewMode::Eye) visible.push_back({glm::length(f.center - camPos), &f}); // 4D rays see all
+            else if (gap < 0.0f) visible.push_back({glm::length(f.center - camPos), &f});
+            else if (gap < kHintRange && !ghost) nearby.push_back({gap, &f});
         }
         auto byKey = [](const Entry& a, const Entry& b) { return a.first < b.first; };
         std::sort(visible.begin(), visible.end(), byKey);
         std::sort(nearby.begin(), nearby.end(), byKey);
 
+        // Solid fruit first, then ghosts far to near (drawn back to front),
+        // sharing the arrays.
         int n = std::min<int>(int(visible.size()), kMaxFruit);
-        std::vector<glm::vec4> centers(n), data(n);
-        std::vector<glm::mat4> world_to_local(n);
-        for (int i = 0; i < n; ++i) {
-            const FruitInstance& f = *visible[i].second;
+        int g = std::min<int>(int(ghosts.size()), kMaxFruit - n);
+        std::sort(ghosts.begin(), ghosts.end(), [](const Ghost& a, const Ghost& b) { return a.dist < b.dist; });
+        ghosts.resize(g); // the nearest g, then far to near
+        std::reverse(ghosts.begin(), ghosts.end());
+        std::vector<glm::vec4> centers(n + g), data(n + g), fade((g + 3) / 4 + 1, glm::vec4(0.0f));
+        std::vector<glm::mat4> world_to_local(n + g);
+        for (int i = 0; i < n + g; ++i) {
+            const FruitInstance& f = i < n ? *visible[i].second : *ghosts[i - n].f;
             centers[i] = f.center;
             data[i] = glm::vec4(f.radius, float(f.type), f.flash, float(f.id + 1));
             world_to_local[i] = f.worldToLocal;
+            if (i >= n) {
+                float shift = ghosts[i - n].shift;
+                centers[i] -= shift * normal;
+                // Opacity, signed by the side of the slice.
+                float a = 0.8f * (1.0f - std::abs(shift) / band);
+                fade[(i - n) / 4][(i - n) % 4] = shift > 0.0f ? a : -a;
+            }
         }
         glUniform1i(loc(prog, "uFruitCount"), n);
-        if (n > 0) {
-            glUniform4fv(loc(prog, "uFruitCenters"), n, glm::value_ptr(centers[0]));
-            glUniform4fv(loc(prog, "uFruitData"), n, glm::value_ptr(data[0]));
-            glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n, GL_FALSE, glm::value_ptr(world_to_local[0]));
+        glUniform1i(loc(prog, "uGhostCount"), g);
+        if (n + g > 0) {
+            glUniform4fv(loc(prog, "uFruitCenters"), n + g, glm::value_ptr(centers[0]));
+            glUniform4fv(loc(prog, "uFruitData"), n + g, glm::value_ptr(data[0]));
+            glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n + g, GL_FALSE, glm::value_ptr(world_to_local[0]));
         }
+        if (g > 0) glUniform4fv(loc(prog, "uGhostFade"), int(fade.size()) - 1, glm::value_ptr(fade[0]));
 
         int h = std::min<int>(int(nearby.size()), kMaxHints);
         std::vector<glm::vec4> hc(h), hd(h);
