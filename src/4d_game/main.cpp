@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -87,10 +88,11 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //                          unlike timings on a shared GPU
 //   --view mode            slice (default), thick or eye (docs/4D.md, "View modes")
 //   --band b               thick slice: how far off the slice fruit still show (default 1)
-//   --view-compare dir     the same three scripted-playtest moments (early, mid, the
-//                          next merge) in every view mode as dir/compare.png, plus a 10 s
-//                          clip per mode turning in 4D (frames in dir/<mode>/; see
-//                          docs/4D.md; `make view-compare` adds the videos)
+//   --view-compare dir     every view and combination (slice, thick slice at bands 0.5,
+//                          1, 2, 3, 4D eye; each alone and with the w inset) on the same
+//                          scripted playtest: dir/view-<v>.png (early, mid, next merge),
+//                          all in dir/compare.png, and a 10 s clip of play turning in 4D
+//                          (frames in dir/view-<v>/; `make view-compare` adds the videos)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -535,17 +537,28 @@ static int runTurntable(const Options& o, GLuint fbo) {
     return 0;
 }
 
-// View-mode comparison (docs/4D.md, "View modes"): the scripted playtest's
-// drops up to three moments, each shown in every mode side by side, then a
-// 10 s clip per mode from the mid moment with physics frozen while the slice
-// turns through xw and yw.
+// View-mode comparison (docs/4D.md, "View modes"): every view and every useful
+// combination with game's w-depth inset, on the same scripted-playtest run.
+// One simulation drives all views at once, so each view sees exactly the same
+// game: a still per view of three moments (early, mid, the next merge), all of
+// them in compare.png, and a 10 s clip per view of real play around the mid
+// moment with the slice swinging through xw and yw on top of the scripted pose.
 static int runViewCompare(const Options& o, GLuint fbo) {
-    struct View { const char* name; const char* dir; ViewMode mode; bool inset; };
-    const View views[] = {{"slice", "slice", ViewMode::Slice, false},
-                          {"slice + w inset (game)", "inset", ViewMode::Slice, true},
-                          {"thick slice, band +-1", "thick", ViewMode::Thick, false},
-                          {"4D eye", "eye", ViewMode::Eye, false}};
-    const int nViews = 4, down = 2;
+    struct View { std::string file, name; ViewMode mode; float band; bool inset; };
+    std::vector<View> views;
+    for (bool inset : {false, true}) {
+        const char* plus = inset ? "+inset" : "";
+        const char* with = inset ? " + w inset" : "";
+        views.push_back({std::string("slice") + plus, std::string("slice") + with, ViewMode::Slice, 1.0f, inset});
+        for (float b : {0.5f, 1.0f, 2.0f, 3.0f}) {
+            char file[32], name[64];
+            snprintf(file, sizeof file, "thick-b%g%s", b, plus);
+            snprintf(name, sizeof name, "thick slice, band +-%g%s", b, with);
+            views.push_back({file, name, ViewMode::Thick, b, inset});
+        }
+        views.push_back({std::string("eye") + plus, std::string("4D eye") + with, ViewMode::Eye, 1.0f, inset});
+    }
+    const int nViews = int(views.size()), down = 2, nMoments = 3;
     const int tw = o.width / down, th = o.height / down;
     std::error_code ec;
     std::filesystem::create_directories(o.viewCompare, ec);
@@ -555,10 +568,10 @@ static int runViewCompare(const Options& o, GLuint fbo) {
     game.page = Game::Page::None;
     game.menuBuiltFor = -1;
     game.nextFruit = FruitManager::getRandomFruit();
-    game.renderer.band = 1.0f;
 
     auto render = [&](const View& v, const std::string& caption) {
         game.renderer.viewMode = v.mode;
+        game.renderer.band = v.band;
         game.showAxisInset = v.inset;
         game.caption = caption;
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -566,7 +579,8 @@ static int runViewCompare(const Options& o, GLuint fbo) {
         glClearColor(0, 0, 0, 1);
         game.Render();
     };
-    std::vector<unsigned char> sheet(size_t(tw) * nViews * th * 3 * 4), px(size_t(o.width) * o.height * 4);
+    // compare.png: a row per view, a column per moment; view-<file>.png: one row.
+    std::vector<unsigned char> sheet(size_t(tw) * nMoments * th * nViews * 4), px(size_t(o.width) * o.height * 4);
     auto tile = [&](int row, int col) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -578,18 +592,27 @@ static int runViewCompare(const Options& o, GLuint fbo) {
                     for (int dx = 0; dx < down; ++dx)
                         for (int ch = 0; ch < 4; ++ch)
                             sum[ch] += px[(size_t(o.height - 1 - (y * down + dy)) * o.width + x * down + dx) * 4 + ch];
-                unsigned char* d = &sheet[(size_t(row * th + y) * tw * nViews + col * tw + x) * 4];
+                unsigned char* d = &sheet[(size_t(row * th + y) * tw * nMoments + col * tw + x) * 4];
                 for (int ch = 0; ch < 4; ++ch) d[ch] = (unsigned char)(sum[ch] / (down * down));
             }
     };
 
+    std::vector<std::unique_ptr<Recorder>> recs;
+    for (const View& v : views) {
+        recs.push_back(std::make_unique<Recorder>());
+        recs.back()->fps = o.fps;
+        if (!recs.back()->start(o.viewCompare + "/view-" + v.file)) return 1;
+    }
+
     // Moments: early (15 s), mid (90 s), and the first merge after that, a
     // tenth of a second later, with the slice moved through the new fruit.
+    // The clips run from 88 s to 98 s, so they show the mid moment and,
+    // usually, the merge.
     const char* momentNames[] = {"early", "mid", "merge"};
-    const int dropEvery = 45;
+    const int dropEvery = 45, clipStart = 88 * 60, clipFrames = 10 * 60;
+    const int stepsPerFrame = std::max(1, 60 / std::max(o.fps, 1));
     int attempts = 0, moment = 0, mergeFrame = -1;
-    Camera4D midCam;
-    for (int frame = 0; moment < 3 && frame < 60 * 600; ++frame) {
+    for (int frame = 0; (moment < nMoments || frame < clipStart + clipFrames) && frame < 60 * 600; ++frame) {
         float t = frame * FIXED_TIMESTEP;
         setScriptedPlaytestPose(t);
         if (frame % dropEvery == 0) {
@@ -601,9 +624,25 @@ static int runViewCompare(const Options& o, GLuint fbo) {
         game.Update(FIXED_TIMESTEP);
         if (game.State == GAME_OVER) game.Reset();
 
+        int c = frame - clipStart;
+        if (c >= 0 && c < clipFrames && c % stepsPerFrame == 0) {
+            const Camera4D pose = game.state.cam;
+            float u = float(c) / float(clipFrames);
+            Camera4D& cam = game.state.cam;
+            cam.turnLocal(AX_X, AX_W, glm::radians(80.0f) * std::sin(6.2831853f * u));
+            cam.turnLocal(AX_Y, AX_W, glm::radians(35.0f) * std::sin(6.2831853f * 2.0f * u));
+            cam.yaw += 0.6f * std::sin(6.2831853f * u);
+            for (int v = 0; v < nViews; ++v) {
+                render(views[v], views[v].name);
+                recs[v]->capture(o.width, o.height);
+            }
+            game.state.cam = pose;
+        }
+
         bool shoot = (moment == 0 && frame == 15 * 60) || (moment == 1 && frame == 90 * 60) ||
                      (moment == 2 && mergeFrame >= 0 && frame == mergeFrame + 6);
         if (!shoot) continue;
+        const Camera4D pose = game.state.cam;
         if (moment == 2) { // the slice through the brightest (newest) merged fruit
             int best = -1;
             for (int i = 0; i < MAX_OBJECTS; ++i)
@@ -615,49 +654,31 @@ static int runViewCompare(const Options& o, GLuint fbo) {
                 cam.offset = glm::clamp(glm::dot(game.physics_solver->objects[best].position - cam.target, cam.normal()),
                                         -Camera4D::kOffsetMax, Camera4D::kOffsetMax);
         }
-        if (moment == 1) midCam = game.state.cam;
         for (int v = 0; v < nViews; ++v) {
-            char cap[96];
-            snprintf(cap, sizeof cap, "%s   (%s, %.0f s)", views[v].name, momentNames[moment], t);
+            char cap[128];
+            snprintf(cap, sizeof cap, "%s   (%s, %.1f s)", views[v].name.c_str(), momentNames[moment], t);
             render(views[v], cap);
-            tile(moment, v);
+            tile(v, moment);
         }
+        game.state.cam = pose;
         printf("moment %s at %.2f s: %d fruit\n", momentNames[moment], t, activeObjectCount());
-        // Keep the mid state for the clips: they start from it, physics frozen.
-        if (moment == 1) {
-            ++moment;
-            // Clips below need the mid state; render them now, then go on to the merge.
-            for (int v = 0; v < nViews; ++v) {
-                Recorder rec;
-                rec.fps = o.fps;
-                if (!rec.start(o.viewCompare + "/" + views[v].dir)) return 1;
-                const int frames = 10 * o.fps;
-                for (int i = 0; i < frames; ++i) {
-                    float u = float(i) / float(frames);
-                    Camera4D& cam = game.state.cam;
-                    cam = midCam;
-                    cam.turnLocal(AX_X, AX_W, glm::radians(80.0f) * std::sin(6.2831853f * u));
-                    cam.turnLocal(AX_Y, AX_W, glm::radians(35.0f) * std::sin(6.2831853f * 2.0f * u));
-                    cam.yaw += 0.6f * std::sin(6.2831853f * u);
-                    render(views[v], views[v].name);
-                    rec.capture(o.width, o.height);
-                }
-                rec.stop();
-            }
-            game.state.cam = midCam;
-            continue;
-        }
         ++moment;
     }
+    for (auto& r : recs) r->stop();
     game.caption.clear();
-    if (moment < 3) { std::cerr << "view compare: no merge after the mid moment" << std::endl; return 1; }
-    std::string path = o.viewCompare + "/compare.png";
-    if (!stbi_write_png(path.c_str(), tw * nViews, th * 3, 4, sheet.data(), tw * nViews * 4)) {
-        std::cerr << "Could not write " << path << std::endl;
-        return 1;
-    }
-    std::cout << "wrote " << path << std::endl;
-    return 0;
+    if (moment < nMoments) { std::cerr << "view compare: no merge after the mid moment" << std::endl; return 1; }
+    auto write = [&](const std::string& path, const unsigned char* data, int rows) {
+        if (!stbi_write_png(path.c_str(), tw * nMoments, th * rows, 4, data, tw * nMoments * 4)) {
+            std::cerr << "Could not write " << path << std::endl;
+            return false;
+        }
+        std::cout << "wrote " << path << std::endl;
+        return true;
+    };
+    for (int v = 0; v < nViews; ++v)
+        if (!write(o.viewCompare + "/view-" + views[v].file + ".png", &sheet[size_t(v) * th * tw * nMoments * 4], 1))
+            return 1;
+    return write(o.viewCompare + "/compare.png", sheet.data(), nViews) ? 0 : 1;
 }
 #endif
 
