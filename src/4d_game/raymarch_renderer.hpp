@@ -211,7 +211,9 @@ private:
     // Upscales the scene target (rw x rh) to the output and draws the indicator.
     void present(const Camera4D& cam, GLint target, int width, int height, int rw, int rh) {
         glm::mat4 basis = cam.basis();
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
+        // Both bindings back to the caller's target: readers (recorder,
+        // screenshots) see the presented frame, not the scene target.
+        glBindFramebuffer(GL_FRAMEBUFFER, target);
         glViewport(0, 0, width, height);
         glUseProgram(present_);
         glActiveTexture(GL_TEXTURE0);

@@ -116,7 +116,8 @@ public:
     std::vector<FruitInstance> sheetFruit;
     std::string sheetTitle;
     float sheetTitleScale = 0.9f;
-    bool sheetNames = true;           // name under each fruit (off for the turntable)
+    bool sheetNames = true;
+    std::string caption;              // headless comparisons: centred at the top of the game view           // name under each fruit (off for the turntable)
 
     Game(unsigned int width, unsigned int height) : boundary(glm::vec4(0.0f), 3, 90.0f, 0.1f) {
         State = GAME_MENU;
@@ -572,6 +573,8 @@ public:
         t_rend->RenderText("Score " + std::to_string((int)physics_solver->total_points), 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
         RenderSliceLabel();
         RenderAxisInset();
+        if (!caption.empty())
+            t_rend->RenderText(caption, (Width - t_rend->GetTextWidth(caption, 0.9f)) * 0.5f, 25.0f, 0.9f, glm::vec3(1.0f, 0.92f, 0.75f));
         if (showPerf) {
             char buf[128];
             int rw = int(FbWidth * renderer.renderScale), rh = int(FbHeight * renderer.renderScale);
