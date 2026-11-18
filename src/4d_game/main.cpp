@@ -84,6 +84,8 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --cost-map out.png     analytic SDF evaluations per pixel instead of colour (R static
 //                          world, G moving world, B fruit) with statistics; deterministic,
 //                          unlike timings on a shared GPU
+//   --view mode            slice (default), thick or eye (docs/4D.md, "View modes")
+//   --band b               thick slice: how far off the slice fruit still show (default 1)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -134,6 +136,8 @@ struct Options {
     bool mute = false;
     std::string fruitSheet;
     std::string sheetTurn = "yw:35";
+    std::string view = "slice";
+    float band = 1.0f;
     std::string turntable;
     std::string subject = "all";
     float sweep = 4.0f;
@@ -182,6 +186,14 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--sheet-turn") o.sheetTurn = next();
         else if (a == "--record") o.record = next();
         else if (a == "--turntable") o.turntable = next();
+        else if (a == "--view") {
+            o.view = next();
+            if (o.view != "slice" && o.view != "thick" && o.view != "eye") {
+                std::cerr << "--view: slice, thick or eye" << std::endl;
+                std::exit(2);
+            }
+        }
+        else if (a == "--band") o.band = float(std::atof(next().c_str()));
         else if (a == "--subject") o.subject = next();
         else if (a == "--sweep") o.sweep = std::max(0.1f, float(std::atof(next().c_str())));
         else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
@@ -544,6 +556,8 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.renderer.useCache = !o.noCache;
     game.renderer.useDeferred = !o.singlePass;
+    game.renderer.viewMode = o.view == "thick" ? ViewMode::Thick : o.view == "eye" ? ViewMode::Eye : ViewMode::Slice;
+    game.renderer.band = std::clamp(o.band, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
     auto showMenuState = [&](const std::string& st) {
         game.State = st == "menu" || st == "settings" || st == "controls" ? GAME_MENU
                    : st == "pause" ? GAME_PAUSED : st == "over" ? GAME_OVER : GAME_ACTIVE;

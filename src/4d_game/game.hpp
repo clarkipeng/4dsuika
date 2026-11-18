@@ -269,6 +269,7 @@ public:
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
         if (keyPressedOnce(GLFW_KEY_V)) showAxisInset = !showAxisInset;
+        if (keyPressedOnce(GLFW_KEY_M)) CycleViewMode(+1);
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
             if (page != Page::None) ClosePage();
@@ -438,6 +439,14 @@ public:
         float size = std::max(28.0f, FbHeight * 0.045f) * float(Height) / float(std::max(FbHeight, 1));
         t_rend->RenderText(buf, size * 3.9f, Height - size * 1.9f - 8.0f, s, glm::vec3(0.95f, 0.9f, 0.85f));
         if (homing) t_rend->RenderText("returning to default slice", size * 3.9f, Height - size * 1.9f + 14.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
+        if (renderer.viewMode != ViewMode::Slice) {
+            std::string view = std::string("view: ") + viewModeName(renderer.viewMode);
+            if (renderer.viewMode == ViewMode::Thick) {
+                snprintf(buf, sizeof buf, "   band +-%.2f", renderer.band);
+                view += buf;
+            }
+            t_rend->RenderText(view + "   (M)", size * 3.9f, Height - size * 1.9f - 34.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
+        }
     }
 
     static glm::vec3 FruitUiColor(int type) {
@@ -593,6 +602,13 @@ public:
 
     static void CycleIndex(int& i, int dir, int count) { i = (i + dir + count) % count; }
 
+    // M or Settings > View: slice (the game), thick slice, 4D eye.
+    void CycleViewMode(int dir) {
+        int m = int(renderer.viewMode);
+        CycleIndex(m, dir, 3);
+        renderer.viewMode = ViewMode(m);
+    }
+
     // Rebuilds the menu when the screen it shows changes.
     void EnsureMenu() {
         int key = int(State) * 4 + int(page);
@@ -671,6 +687,11 @@ public:
         items.push_back(MenuItem::choice("Render scale", [this] {
                 return scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
             }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
+        items.push_back(MenuItem::choice("View", [this] { return std::string(viewModeName(renderer.viewMode)); },
+            [this](int d) { CycleViewMode(d); }));
+        items.push_back(MenuItem::slider("Band width", [this] {
+                return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
+            }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
         items.push_back(MenuItem::choice("W-depth inset", [this] { return std::string(showAxisInset ? "On" : "Off"); },
             [this](int) { showAxisInset = !showAxisInset; }));
@@ -705,6 +726,7 @@ public:
         items.push_back(MenuItem::info("H / Space", "back to the default slice"));
         items.push_back(MenuItem::info("V", "toggle the side / w inset"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
+        items.push_back(MenuItem::info("M", "view: slice, thick slice, 4D eye"));
         items.push_back(MenuItem::info("Esc", "pause"));
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
         menu.set(std::move(items), std::move(st));
