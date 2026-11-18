@@ -109,6 +109,7 @@ public:
     glm::vec2 orbitVel{0.0f};         // mouse-orbit glide after release (rad/s)
     float time = 0.0f;
     bool showPerf = false;            // F3: GPU time and render scale
+    bool showAxisInset = true;        // V: side view of depth through the current slice
 
     // Fruit sheet (headless --fruit-sheet): fixed fruit instead of physics, labelled.
     bool sheetMode = false;
@@ -267,6 +268,7 @@ public:
             ApplyRenderScale();
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
+        if (keyPressedOnce(GLFW_KEY_V)) showAxisInset = !showAxisInset;
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
             if (page != Page::None) ClosePage();
@@ -438,6 +440,108 @@ public:
         if (homing) t_rend->RenderText("returning to default slice", size * 3.9f, Height - size * 1.9f + 14.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
     }
 
+    static glm::vec3 FruitUiColor(int type) {
+        static const glm::vec3 colors[] = {
+            {0.82f, 0.08f, 0.12f}, {0.95f, 0.15f, 0.20f}, {0.38f, 0.18f, 0.78f}, {0.95f, 0.48f, 0.05f},
+            {0.90f, 0.30f, 0.08f}, {0.86f, 0.18f, 0.08f}, {0.70f, 0.78f, 0.20f}, {0.95f, 0.42f, 0.42f},
+            {0.95f, 0.68f, 0.12f}, {0.50f, 0.70f, 0.28f}, {0.16f, 0.48f, 0.16f},
+        };
+        return colors[std::clamp(type, 0, int(sizeof(colors) / sizeof(colors[0])) - 1)];
+    }
+
+    void FillRect(float x, float y, float w, float h, glm::vec3 color, float alpha) {
+        t_rend->FillPoly({{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}, color, alpha);
+    }
+
+    void DrawLine(glm::vec2 a, glm::vec2 b, float thickness, glm::vec3 color, float alpha) {
+        glm::vec2 d = b - a;
+        float len = glm::length(d);
+        if (len < 1e-4f) return;
+        glm::vec2 n(-d.y / len, d.x / len);
+        t_rend->FillPoly({a + n * thickness, b + n * thickness, b - n * thickness, a - n * thickness}, color, alpha);
+    }
+
+    void FillCircle(glm::vec2 c, float r, glm::vec3 color, float alpha, int steps = 14) {
+        std::vector<glm::vec2> pts;
+        pts.reserve(steps);
+        for (int i = 0; i < steps; ++i) {
+            float a = glm::two_pi<float>() * float(i) / float(steps);
+            pts.push_back(c + glm::vec2(std::cos(a), std::sin(a)) * r);
+        }
+        t_rend->FillPoly(pts, color, alpha);
+    }
+
+    void DrawCircle(glm::vec2 c, float r, float thickness, glm::vec3 color, float alpha, int steps = 32) {
+        glm::vec2 prev = c + glm::vec2(r, 0.0f);
+        for (int i = 1; i <= steps; ++i) {
+            float a = glm::two_pi<float>() * float(i) / float(steps);
+            glm::vec2 next = c + glm::vec2(std::cos(a), std::sin(a)) * r;
+            DrawLine(prev, next, thickness, color, alpha);
+            prev = next;
+        }
+    }
+
+    void RenderAxisInset() {
+        if (!showAxisInset || sheetMode) return;
+        const glm::mat4 basis = state.cam.basis();
+        const glm::vec4 camPos = state.cam.position();
+        const glm::vec4 sideAxis = glm::normalize(basis[2]); // depth inside the slice
+        const glm::vec4 normalAxis = glm::normalize(basis[3]); // signed distance out of the slice
+        auto coord = [&](glm::vec4 p) {
+            return glm::vec2(glm::dot(p - boundary.center, sideAxis), glm::dot(p - camPos, normalAxis));
+        };
+
+        const float margin = std::max(14.0f, float(Height) * 0.022f);
+        const float w = std::clamp(float(Width) * 0.22f, 170.0f, 250.0f);
+        const float h = std::clamp(float(Height) * 0.20f, 125.0f, 180.0f);
+        const float x = float(Width) - w - margin;
+        const float y = margin;
+        const float pad = 15.0f;
+        const float sx = (w - 2.0f * pad) / 8.0f;  // +-4 slice-depth units
+        const float sy = (h - 2.0f * pad) / 6.4f;  // +-3.2 out-of-slice units
+        const float s = std::min(sx, sy);
+        const glm::vec2 mid(x + w * 0.5f, y + h * 0.52f);
+        auto screen = [&](glm::vec2 q) { return glm::vec2(mid.x + q.x * s, mid.y - q.y * s); };
+
+        FillRect(x, y, w, h, ui::kPanel, 0.70f);
+        DrawLine({x + 10.0f, y}, {x + w - 10.0f, y}, 1.0f, ui::kGold, 0.45f);
+        DrawLine({x + w, y + 10.0f}, {x + w, y + h - 10.0f}, 1.0f, ui::kGold, 0.35f);
+        DrawLine({x + w - 10.0f, y + h}, {x + 10.0f, y + h}, 1.0f, ui::kGold, 0.35f);
+        DrawLine({x, y + h - 10.0f}, {x, y + 10.0f}, 1.0f, ui::kGold, 0.35f);
+
+        DrawCircle(screen(coord(boundary.center)), boundary.radius * s, 1.0f, ui::kCream, 0.22f);
+        DrawLine({x + pad, mid.y}, {x + w - pad, mid.y}, 1.2f, ui::kGold, 0.9f);
+        DrawLine({mid.x, y + pad}, {mid.x, y + h - pad}, 0.75f, ui::kCream, 0.22f);
+
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
+            const PhysicsObject& obj = physics_solver->objects[i];
+            glm::vec2 c = screen(coord(obj.position));
+            float r = std::clamp(obj.radius * s, 3.0f, 16.0f);
+            if (c.x + r < x || c.x - r > x + w || c.y + r < y || c.y - r > y + h) continue;
+            float sliceFade = 0.45f + 0.45f * (1.0f - std::clamp(std::abs(coord(obj.position).y) / std::max(obj.radius * 2.0f, 0.2f), 0.0f, 1.0f));
+            FillCircle(c, r, FruitUiColor(int(obj.fruit)), sliceFade);
+            DrawCircle(c, r, 0.8f, ui::kCream, 0.35f, 18);
+        }
+
+        Hit4 hit = getPlacementMouse(state, boundary, *physics_solver);
+        if (hit.hit) {
+            glm::vec2 c = screen(coord(hit.point + glm::vec4(0.0f, 3.0f, 0.0f, 0.0f)));
+            float r = std::clamp(FruitManager::getFruitProperties(nextFruit).radius * s, 5.0f, 18.0f);
+            t_rend->FillPoly({{c.x, c.y - r}, {c.x + r, c.y}, {c.x, c.y + r}, {c.x - r, c.y}}, FruitUiColor(int(nextFruit)), 0.82f);
+            DrawLine(c + glm::vec2(-r * 1.5f, 0.0f), c + glm::vec2(r * 1.5f, 0.0f), 1.0f, ui::kCream, 0.85f);
+            DrawLine(c + glm::vec2(0.0f, -r * 1.5f), c + glm::vec2(0.0f, r * 1.5f), 1.0f, ui::kCream, 0.85f);
+        }
+
+        float label = fitLabelScale("side / w", w - 20.0f, 0.46f);
+        t_rend->RenderText("side / w", x + 10.0f, y + 8.0f, label, ui::kCream);
+    }
+
+    float fitLabelScale(const std::string& text, float width, float scale) {
+        float tw = t_rend->GetTextWidth(text, scale);
+        return tw > width && tw > 0.0f ? scale * width / tw : scale;
+    }
+
     void RenderSheetLabels() {
         BeginText();
         t_rend->RenderText(sheetTitle, 25.0f, 25.0f, sheetTitleScale, glm::vec3(1.0f));
@@ -458,6 +562,7 @@ public:
         BeginText();
         t_rend->RenderText("Score " + std::to_string((int)physics_solver->total_points), 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
         RenderSliceLabel();
+        RenderAxisInset();
         if (showPerf) {
             char buf[128];
             int rw = int(FbWidth * renderer.renderScale), rh = int(FbHeight * renderer.renderScale);
@@ -567,6 +672,8 @@ public:
                 return scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
             }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
+        items.push_back(MenuItem::choice("W-depth inset", [this] { return std::string(showAxisInset ? "On" : "Off"); },
+            [this](int) { showAxisInset = !showAxisInset; }));
 #ifndef __EMSCRIPTEN__
         items.push_back(MenuItem::choice("Sound", [this] { return std::string(soundOn ? "On" : "Muted"); },
             [this](int) { soundOn = !soundOn; ApplyVolumeSettings(); }));
@@ -596,6 +703,7 @@ public:
         }
         items.push_back(MenuItem::info("W / S", "move the slice along the 4th axis"));
         items.push_back(MenuItem::info("H / Space", "back to the default slice"));
+        items.push_back(MenuItem::info("V", "toggle the side / w inset"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
         items.push_back(MenuItem::info("Esc", "pause"));
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
