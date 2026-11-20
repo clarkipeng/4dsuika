@@ -440,15 +440,17 @@ public:
         snprintf(buf, sizeof buf, "slice tilt %2.0f deg   offset %+.2f", tiltDeg, state.cam.offset);
         float s = Width < 650 ? 0.36f : 0.50f;
         float size = std::max(28.0f, FbHeight * 0.045f) * float(Height) / float(std::max(FbHeight, 1));
-        t_rend->RenderText(buf, 12.0f, Height - size * 2.5f - 8.0f, s, glm::vec3(0.95f, 0.9f, 0.85f));
-        if (homing) t_rend->RenderText("returning to default slice", 12.0f, Height - size * 2.5f + 10.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
+        float clearance = showDepthStrip ? DepthStripHeight() + (homing ? 42.0f : 26.0f) : 0.0f;
+        float y = Height - std::max(size * 2.5f + 8.0f, clearance);
+        t_rend->RenderText(buf, 12.0f, y, s, glm::vec3(0.95f, 0.9f, 0.85f));
+        if (homing) t_rend->RenderText("returning to default slice", 12.0f, y + 15.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
         if (renderer.viewMode != ViewMode::Slice) {
             std::string view = std::string("view: ") + viewModeName(renderer.viewMode);
             if (renderer.viewMode == ViewMode::Thick) {
                 snprintf(buf, sizeof buf, "   band +-%.2f", renderer.band);
                 view += buf;
             }
-            t_rend->RenderText(view + "   (M)", 12.0f, Height - size * 2.5f - 26.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
+            t_rend->RenderText(view + "   (M)", 12.0f, y - 18.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
         }
     }
 
@@ -499,6 +501,8 @@ public:
         return glm::mix(ui::kGold, side, glm::smoothstep(0.0f, 1.5f, std::abs(offset)));
     }
 
+    float DepthStripHeight() const { return std::clamp(Height * 0.11f, 54.0f, 104.0f); }
+
     void RenderDepthStrip(const Hit4& hit) {
         if (!showDepthStrip) return;
         const glm::vec4 normal = state.cam.basis()[3];
@@ -511,11 +515,13 @@ public:
             span = std::max(span, std::abs(depth(obj.position)) + obj.radius);
         }
         if (hit.hit) span = std::max(span, std::abs(depth(DropCenter(hit))) + 0.25f);
-        const float w = Width * (Width < 650 ? 0.88f : 0.63f);
-        const float h = std::clamp(Height * 0.11f, 54.0f, 104.0f);
-        const float x = (Width - w) * 0.5f, y = Height - h - 12.0f;
+        const float gizmoSpace = std::max(112.0f, Height * 0.173f);
+        const float x = std::clamp(std::max(gizmoSpace, Width * 0.185f), 0.0f, Width * 0.42f);
+        const float w = std::min(Width * 0.63f, Width - x - 12.0f);
+        const float h = DepthStripHeight();
+        const float y = Height - h - 12.0f;
         const float pad = std::min(48.0f, w * 0.12f);
-        auto screenX = [&](float d) { return Width * 0.5f + d / span * (w * 0.5f - pad); };
+        auto screenX = [&](float d) { return x + w * 0.5f + d / span * (w * 0.5f - pad); };
 
         FillRect(x, y, w, h, ui::kPanel, 0.91f);
         const float rail = y + h - 12.0f;
@@ -532,7 +538,8 @@ public:
         const float marker = screenX(slice);
         DrawLine({marker, y + 4.0f}, {marker, y + h - 5.0f}, 1.8f, ui::kCream, 0.95f);
         t_rend->RenderText("-w", x + 7.0f, y + h * 0.40f, 0.55f, DepthUiColor(-span - slice));
-        t_rend->RenderText("+w", x + w - pad + 5.0f, y + h * 0.40f, 0.55f, DepthUiColor(span - slice));
+        t_rend->RenderText("+w", x + w - t_rend->GetTextWidth("+w", 0.55f) - 7.0f,
+                           y + h * 0.40f, 0.55f, DepthUiColor(span - slice));
 
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
@@ -589,14 +596,16 @@ public:
             screen = (ndc * glm::vec2(0.5f, -0.5f) + 0.5f) * glm::vec2(Width, Height);
             return true;
         };
-        glm::vec2 a, b, edge;
+        glm::vec2 a, b, spawnEdge, landEdge;
+        const glm::vec4 side = state.cam.basis()[0] * radius;
         if (!project(spawn, a) || !project(land, b) ||
-            !project(land + state.cam.basis()[0] * radius, edge)) return;
-        float r = glm::clamp(glm::length(edge - b), 3.0f, Height * 0.3f);
+            !project(spawn + side, spawnEdge) || !project(land + side, landEdge)) return;
+        float r = glm::clamp(glm::length(landEdge - b), 3.0f, Height * 0.3f);
         glm::vec2 heading = b - a;
         float len = glm::length(heading);
-        for (float d = 5.0f; d + r < len; d += 12.0f) {
-            DrawLine(a + heading * (d / len), a + heading * (std::min(d + 6.0f, len - r) / len),
+        float stride = std::max(12.0f, len / 64.0f);
+        for (float d = glm::length(spawnEdge - a); d + r < len; d += stride) {
+            DrawLine(a + heading * (d / len), a + heading * (std::min(d + stride * 0.55f, len - r) / len),
                      0.9f, ui::kCream, 0.85f);
         }
         FillCircle(b, r, FruitUiColor(int(nextFruit)), 0.25f, 28);

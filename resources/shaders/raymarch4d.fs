@@ -483,7 +483,8 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
         if (tc <= 0.0) continue;
         float miss = length(c - ro - rd * tc);
         float width = max(1.5 * pixel * tc, 0.02 * r);
-        float ring = exp(-pow((miss - r) / width, 2.0));
+        float rim = (miss - r) / width;
+        float ring = exp(-rim * rim);
         vec4 delta = ro + rd * tc - c;
         vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
         if (ring > 0.001) ring *= smoothstep(-0.15, 0.25, cos(12.0 * atan(plane.y, plane.x + 1e-6)));
@@ -576,8 +577,7 @@ Hit traceScene(vec4 ro, vec4 rd) {
     float enter, exit;
     bool cutaway = hw.y == MAT_BOWL &&
         glomeSpan(ro, rd, vec4(0.0), BOWL_IN, enter, exit) &&
-        hw.x < enter && tHit >= enter && tHit <= exit &&
-        (ro + rd * enter).y <= 0.0;
+        hw.x < enter && tHit >= enter && tHit <= exit;
     if (fruit >= 0 && (tHit <= hw.x || cutaway)) {
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
