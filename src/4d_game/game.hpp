@@ -962,7 +962,7 @@ public:
             float sc = (0.9f + 0.25f * std::min(combo, 6)) * (1.0f + 0.35f * comboPop);
             float fade = std::min(1.0f, comboTimer / 0.5f);
             glm::vec3 col = glm::mix(ui::kGold, glm::vec3(1.0f, 0.95f, 0.8f), comboPop) * fade;
-            t_rend->RenderText(text, (Width - t_rend->GetTextWidth(text, sc)) * 0.5f, Height * 0.15f, sc, col);
+            t_rend->RenderText(text, Width * 0.02f, Height * 0.15f, sc, col); // left, under the score: centre is where the drop preview hangs
         }
     }
 
