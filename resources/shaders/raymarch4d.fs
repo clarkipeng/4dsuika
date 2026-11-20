@@ -59,6 +59,8 @@ uniform float uCues;                // 0 hides depth rings, hints and glow (tuto
 uniform float uDanger;               // 0..1, the pile is near the rim
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
+uniform mat4  uPreviewWorldToLocal;  // the next fruit's real orientation
+uniform vec4  uLandCenter;           // where it lands (w < -1e5: none)
 uniform float uFogStart;             // distance where fog begins (just past the orbit target)
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
 uniform float uNearCut;              // world surfaces closer to the camera than this are cut away
@@ -562,16 +564,38 @@ vec3 drawGhosts(vec3 col, vec4 ro, vec4 rd, float limit) {
         vec4 p = ro + rd * t;
         vec4 q = fruitLocalPoint(i, p);
         vec4 ns = lod > 0.0 ? fruitWorldNormal(i, q, d, lod) : normalize(p - uFruitCenters[i]);
-        vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
-        vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(i, ns)), d.x, d.y, d.w, lod);
-        vec3 g = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, vec2(1.0)) + albedo * 0.3;
+        // A ghost says "this fruit reaches here in w", so it is a tinted outline
+        // with a faint fill, not a second shaded fruit (which read as bubbles
+        // around the real cross-section, and beads on a grape cluster).
         float a = uGhostFade[j / 4][j % 4];
         vec3 side = a > 0.0 ? vec3(0.45, 0.75, 1.0) : vec3(1.0, 0.55, 0.35);
-        g = mix(g, side * dot(g, vec3(0.333)) * 1.4, 0.25);
         float rim = pow(1.0 - abs(dot(ns, rd)), 2.0);
-        col = mix(col, g, abs(a) * (0.55 + 0.45 * rim));
+        vec3 albedo = fruitBaseColor(d.y);
+        vec3 g = mix(albedo * 0.8, side, 0.55) * (0.75 + 0.5 * rim);
+        col = mix(col, g, abs(a) * (0.07 + 0.80 * smoothstep(0.35, 0.95, rim)));
     }
     return col;
+}
+
+// A translucent copy of the next fruit (same model and SDF, same orientation)
+// at `center`: faint body, brighter rim.
+vec3 drawDropGhost(vec3 col, vec4 ro, vec4 rd, float dist, vec4 center, float alpha) {
+    vec4 d = vec4(uPreviewData.x, uPreviewData.y, 0.0, 0.0);
+    float t0, t1;
+    if (!glomeSpan(ro, rd, center, d.x * FRUIT_BOUND, t0, t1) || t0 >= dist) return col;
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    float lod = fruitLod(d.x, t0, pixel);
+    vec4 lro = uPreviewWorldToLocal * (ro - center);
+    vec4 lrd = uPreviewWorldToLocal * rd;
+    float t = fruitMarch(lro, lrd, d, t0, min(t1, dist), lod);
+    if (t <= 0.0) return col;
+    vec4 ns = lod > 0.0 ? normalize(transpose(uPreviewWorldToLocal) * fruitLocalNormal(lro + lrd * t, d, lod))
+                        : normalize(ro + rd * t - center);
+    float rim = pow(1.0 - abs(dot(ns, rd)), 2.0);
+    float shade = 0.75 + 0.25 * dot(ns.xyz, normalize(vec3(0.4, 0.8, 0.3)));
+    vec3 c = fruitBaseColor(uPreviewData.y) * 1.15 * shade;
+    c = mix(c, vec3(1.0, 0.97, 0.9), 0.55 * rim);
+    return mix(col, c, alpha * (0.55 + 0.45 * rim) + 0.35 * rim);
 }
 
 // ---------------------------------------------------------------- passes
@@ -753,14 +777,14 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     col = drawHints(col, ro, rd, dist);
     col = drawBursts(col, ro, rd, dist);
 
-    // Ghost of the next drop, blended over the scene.
+    // Ghosts of the next drop (in the air) and where it lands: the fruit's own
+    // SDF in its own orientation, translucent, so the outline is the real shape.
     if (uPreviewData.x > 0.0) {
-        float tp = glomeHit(ro, rd, uPreviewCenter, uPreviewData.x);
-        if (tp > 0.0 && tp < dist) {
-            vec4 n = normalize(ro + rd * tp - uPreviewCenter);
-            float f = 0.35 + 0.4 * pow(1.0 - abs(dot(n, rd)), 2.0);
-            col = mix(col, fruitBaseColor(uPreviewData.y) * 1.2, f);
-        }
+        float limit = dist;   // x-ray through the bowl's near wall, as thick-slice ghosts do
+        float t0, t1;
+        if (h.kind == MAT_BOWL && glomeSpan(ro, rd, vec4(0.0), BOWL_R + BOWL_HALF, t0, t1)) limit = max(limit, t1);
+        if (uLandCenter.w > -1e5) col = drawDropGhost(col, ro, rd, limit, uLandCenter, 0.45);
+        col = drawDropGhost(col, ro, rd, limit, uPreviewCenter, 0.55);
     }
 
     // The cover art's darker edges.

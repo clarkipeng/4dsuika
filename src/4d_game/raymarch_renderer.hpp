@@ -165,9 +165,15 @@ public:
         bursts_ = bursts;
         danger_ = danger;
     }
-    void setPreview(bool show, const glm::vec4& center, float radius, int type) {
+    // The next drop: the ghost in the air at `center`, in the fruit's own
+    // orientation (`worldToLocal`), and optionally the same ghost where it lands.
+    void setPreview(bool show, const glm::vec4& center, float radius, int type,
+                    const glm::mat4& worldToLocal = glm::mat4(1.0f), bool land = false,
+                    const glm::vec4& landCenter = glm::vec4(0.0f)) {
         previewCenter_ = center;
         previewData_ = show ? glm::vec4(radius, float(type), 0, 0) : glm::vec4(0.0f);
+        previewFrame_ = worldToLocal;
+        landCenter_ = show && land ? landCenter : glm::vec4(0.0f, 0.0f, 0.0f, -1e6f);
     }
 
     // Draws the frame into the currently bound draw framebuffer (window or a
@@ -359,7 +365,8 @@ private:
     int fboW_ = 0, fboH_ = 0;
     Quality quality_ = Quality::High;
     std::vector<FruitInstance> fruit_;
-    glm::vec4 previewCenter_{0.0f}, previewData_{0.0f};
+    glm::vec4 previewCenter_{0.0f}, previewData_{0.0f}, landCenter_{0.0f, 0.0f, 0.0f, -1e6f};
+    glm::mat4 previewFrame_{1.0f};
     std::vector<BurstInstance> bursts_;
     float danger_ = 0.0f;
     GLuint queries_[kQueries] = {};
@@ -529,6 +536,8 @@ private:
         uploadEffects(p);
         glUniform4fv(loc(p, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
         glUniform4fv(loc(p, "uPreviewData"), 1, glm::value_ptr(previewData_));
+        glUniformMatrix4fv(loc(p, "uPreviewWorldToLocal"), 1, GL_FALSE, glm::value_ptr(previewFrame_));
+        glUniform4fv(loc(p, "uLandCenter"), 1, glm::value_ptr(landCenter_));
         glUniform1i(loc(p, "uCacheMode"), cached ? 1 : 0);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_3D, cacheTex_);
