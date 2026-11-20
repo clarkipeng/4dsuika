@@ -95,6 +95,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //                          (frames in dir/view-<v>/; `make view-compare` adds the videos)
 //   --danger v             hold the danger level at v (0..1), for review stills
 //   --tutorial N           start the tutorial at step N (0 aim, 1 merge, 2 turn, 3 return), for stills
+//   --photo N              enter photo mode once N frames are recorded, replaying from the start (P in game)
 //   --no-fx                no merge bursts, combo or danger (Settings > Effects)
 //   --no-glow              no same-kind glow (Settings > Merge glow)
 //   --lane-snap            drops snap to whole w lanes (L in game)
@@ -139,6 +140,7 @@ struct Options {
     bool laneSnap = false;
     bool noGlow = false;
     bool noFx = false;
+    int photoAfter = -1;
     int tutorial = -1;
     float danger = -1.0f;
     bool noCache = false;
@@ -203,6 +205,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--lane-snap") o.laneSnap = true;
         else if (a == "--no-glow") o.noGlow = true;
         else if (a == "--no-fx") o.noFx = true;
+        else if (a == "--photo") o.photoAfter = std::atoi(next().c_str());
         else if (a == "--tutorial") o.tutorial = std::atoi(next().c_str());
         else if (a == "--danger") o.danger = float(std::atof(next().c_str()));
         else if (a == "--no-cache") o.noCache = true;
@@ -747,6 +750,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.renderer.sameKindGlow = !o.noGlow;
     game.effectsOn = !o.noFx;
     game.dangerOverride = o.danger;
+    game.photoAutoAfter = o.warmup > 0.0f ? -1 : o.photoAfter; // after a warm-up, from the first recorded frame
     if (o.tutorial >= 0) game.StartTutorial(o.tutorial);
     game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
@@ -836,6 +840,8 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
                 game.FixedUpdate(FIXED_TIMESTEP);
                 game.Update(FIXED_TIMESTEP);
             }
+            game.history.clear();
+            game.photoAutoAfter = o.photoAfter;
             printf("warm-up: %d drops, %d fruit in play, %d game overs, state %d\n", drops, activeObjectCount(), resets, int(game.State));
         }
         for (int i = 0; i < total; ++i) {
@@ -1125,6 +1131,7 @@ int main(int argc, char* argv[])
         game.SetAudioState(sdlReady, audioReady, opt.muted());
         game.Init(window);
         game.LoadTutorialState();
+        game.photoSaver = [](const std::string& path) { return savePng(path, game.FbWidth, game.FbHeight); };
 
 #ifndef __EMSCRIPTEN__
         live.rec.fps = opt.fps;
