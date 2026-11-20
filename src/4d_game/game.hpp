@@ -809,6 +809,8 @@ public:
                 return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
             }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
+        items.push_back(MenuItem::choice("Merge glow", [this] { return std::string(renderer.sameKindGlow ? "On" : "Off"); },
+            [this](int) { renderer.sameKindGlow = !renderer.sameKindGlow; }));
         items.push_back(MenuItem::choice("W-lane snap", [this] { return std::string(laneSnap ? "On" : "Off"); },
             [this](int) { laneSnap = !laneSnap; }));
         items.push_back(MenuItem::choice("W-depth strip", [this] { return std::string(showDepthStrip ? "On" : "Off"); },

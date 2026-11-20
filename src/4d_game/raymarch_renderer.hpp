@@ -57,6 +57,8 @@ public:
     static constexpr int kMaxFruit = 64;
     static constexpr int kMaxHints = 16;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
+    bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
+    static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
 
     float dim = 0.0f;         // darken the scene behind menus, 0..1
     float facet = 0.85f;      // low-poly facet strength, 0 = smooth
@@ -534,6 +536,18 @@ private:
     static GLint loc(GLuint p, const char* name) { return glGetUniformLocation(p, name); }
     static void uniform(GLuint p, const char* name, glm::vec2 v) { glUniform2f(loc(p, name), v.x, v.y); }
 
+    // Same-kind glow 0..1: how close (4D gap between the glomes, whatever the
+    // slice shows) the nearest fruit of the same kind is, within kGlowRange.
+    float glowOf(const FruitInstance& f) const {
+        if (!sameKindGlow) return 0.0f;
+        float gap = kGlowRange;
+        for (const auto& o : fruit_) {
+            if (&o == &f || o.type != f.type) continue;
+            gap = std::min(gap, glm::length(f.center - o.center) - f.radius - o.radius);
+        }
+        return 1.0f - std::max(gap, 0.0f) / kGlowRange;
+    }
+
     void uploadFruit(GLuint prog, const glm::vec4& camPos, const glm::vec4& normal) {
         // Rays never leave the slice, so a fruit is visible only if its glome
         // crosses the slice hyperplane; fruit within kHintRange beyond that
@@ -569,12 +583,14 @@ private:
         ghosts.resize(g); // the nearest g, then far to near
         std::reverse(ghosts.begin(), ghosts.end());
         std::vector<glm::vec4> centers(n + g), data(n + g), fade((g + 3) / 4 + 1, glm::vec4(0.0f));
+        std::vector<float> glow(n + g, 0.0f);
         std::vector<glm::mat4> world_to_local(n + g);
         for (int i = 0; i < n + g; ++i) {
             const FruitInstance& f = i < n ? *visible[i].second : *ghosts[i - n].f;
             centers[i] = f.center;
             data[i] = glm::vec4(f.radius, float(f.type), f.flash, float(f.id + 1));
             world_to_local[i] = f.worldToLocal;
+            if (i < n) glow[i] = glowOf(f);
             if (i >= n) {
                 float shift = ghosts[i - n].shift;
                 centers[i] -= shift * normal;
@@ -588,6 +604,7 @@ private:
         if (n + g > 0) {
             glUniform4fv(loc(prog, "uFruitCenters"), n + g, glm::value_ptr(centers[0]));
             glUniform4fv(loc(prog, "uFruitData"), n + g, glm::value_ptr(data[0]));
+            glUniform1fv(loc(prog, "uFruitGlow"), n + g, glow.data());
             glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n + g, GL_FALSE, glm::value_ptr(world_to_local[0]));
         }
         if (g > 0) glUniform4fv(loc(prog, "uGhostFade"), int(fade.size()) - 1, glm::value_ptr(fade[0]));
@@ -600,7 +617,7 @@ private:
             float gap = nearby[i].first;
             hc[i] = f.center - off * normal; // projected into the slice
             float strength = 1.0f - gap / kHintRange;
-            hd[i] = glm::vec4(f.radius, float(f.type), off, strength * strength);
+            hd[i] = glm::vec4(f.radius, float(f.type), off, std::max(strength * strength, 0.9f * glowOf(f)));
         }
         glUniform1i(loc(prog, "uHintCount"), h);
         if (h > 0) {
