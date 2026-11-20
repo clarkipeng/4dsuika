@@ -62,6 +62,14 @@ The binary takes `--play s` (seconds between drops) and `--warmup s` alongside `
 ./build/4d_game --headless --mute --record DIR --camera-path docs/recording/paths/features.path --play 1.3 --warmup 25 --seconds 26 --fps 30 --size 1920x1080 --lane-snap
 ```
 
+## Mouse reels
+
+`docs/recording/mouse/{slice,thick,eye}.mouse` are scripted-mouse reels (about 10 s each) for `docs/controls.md`: a visible cursor, filled while a button is held, and a caption naming the input. The script runs through the real handlers (`--mouse-script`); the scripted player only plays during the warm-up.
+
+```bash
+./build/4d_game --headless --mute --record DIR --mouse-script docs/recording/mouse/eye.mouse --play 1.0 --warmup 20 --seconds 10 --fps 30 --size 1920x1080
+```
+
 ## 4D turntable
 
 A review video and contact sheet per subject: one fruit, or the bowl, alone and centred against a plain backdrop, while the slice turns 0 to 180° through xw, then yw, then zw.

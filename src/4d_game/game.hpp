@@ -112,6 +112,17 @@ public:
     bool homing = false;              // easing back to the default slice
     float turnVel[kTurnCount] = {};   // radians per second, per binding
     float offsetVel = 0.0f;
+    // Mouse-first controls (docs/controls.md). The wheel is per view mode: it turns
+    // the slice (Slice, Thick), or sets the w of the drop (4D eye); Shift+wheel
+    // always zooms, Ctrl+wheel sets the band (Thick). Both targets glide.
+    float wheelTurn = 0.0f;           // wheel turn still to apply (rad, xw)
+    float dropW = 0.0f, dropWShown = 0.0f; // drop's w offset: target, eased value
+    static constexpr float kWheelStep = 0.09f;   // rad per notch (about 5 degrees)
+    static constexpr float kDropWStep = 0.5f, kDropWMax = 2.0f;
+    // Scripted mouse (reels): a visible cursor and a caption naming the input.
+    bool showCursor = false;
+    int heldButtons = 0;              // bit 0 left, 1 right, 2 middle
+    std::string inputCaption;
     glm::vec2 orbitVel{0.0f};         // mouse-orbit glide after release (rad/s)
     float time = 0.0f;
     bool showPerf = false;            // F3: GPU time and render scale
@@ -213,6 +224,7 @@ public:
         }
         physics_solver->reset();
         bursts.clear(); combo = 0; comboTimer = comboPop = danger = 0.0f;
+        wheelTurn = dropW = dropWShown = 0.0f;
         total_points = 0;
         physics_solver->total_points = 0;
         fm.initializeFruits();
@@ -277,6 +289,26 @@ public:
             turnVel[i] += (want - turnVel[i]) * ease;
             if (std::abs(turnVel[i]) > 1e-5f) state.cam.turnLocal(b.a, b.b, turnVel[i] * dt);
         }
+        // Mouse turning into 4D: arcball drag (applied at once) and the wheel (eased).
+        if (state.pendingTurnX != 0.0f || state.pendingTurnY != 0.0f) {
+            if (unlocked > 0.0f) {
+                state.cam.turnLocal(AX_X, AX_W, state.pendingTurnX);
+                state.cam.turnLocal(AX_Y, AX_W, state.pendingTurnY);
+                anyInput = true;
+            }
+            state.pendingTurnX = state.pendingTurnY = 0.0f;
+        }
+        if (wheelTurn != 0.0f) {
+            float step = wheelTurn * ease;
+            if (std::abs(wheelTurn) < 1e-4f) step = wheelTurn;
+            state.cam.turnLocal(AX_X, AX_W, step);
+            wheelTurn -= step;
+            anyInput = true;
+        }
+        {   // the drop's w follows its target smoothly, and rejoins the slice outside 4D eye
+            const float target = renderer.viewMode == ViewMode::Eye && unlocked > 0.0f ? dropW : 0.0f;
+            dropWShown += (target - dropWShown) * ease;
+        }
         float wantOffset = unlocked * 1.5f * (float(keyDown(GLFW_KEY_W)) - float(keyDown(GLFW_KEY_S)));
         anyInput |= wantOffset != 0.0f;
         offsetVel += (wantOffset - offsetVel) * ease;
@@ -304,9 +336,29 @@ public:
         if (homing && state.cam.easeHome(dt)) homing = false;
     }
 
+    // Wheel by view mode. Before 4D is unlocked (3D start of the tutorial) it just zooms.
+    void OnScroll(double dy, bool shift, bool ctrl) {
+        const float d = float(dy);
+        if (shift || !FourDUnlocked()) { state.cam.zoom(d); return; }
+        switch (renderer.viewMode) {
+            case ViewMode::Eye:
+                dropW = glm::clamp(dropW + d * kDropWStep, -kDropWMax, kDropWMax);
+                break;
+            case ViewMode::Thick:
+                if (ctrl) {
+                    renderer.band = glm::clamp(renderer.band + d * 0.1f, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
+                    break;
+                }
+                [[fallthrough]];
+            case ViewMode::Slice:
+                wheelTurn += d * kWheelStep;
+                break;
+        }
+    }
+
     void ProcessInput(float dt){
         if (State == GAME_ACTIVE) UpdateCamera(dt);
-        else state.pendingYaw = state.pendingPitch = 0.0f;
+        else { state.pendingYaw = state.pendingPitch = 0.0f; state.pendingTurnX = state.pendingTurnY = 0.0f; }
 
         if (keyPressedOnce(GLFW_KEY_G)) {
             renderer.setQuality(Quality((int(renderer.quality()) + 1) % 4));
@@ -607,7 +659,7 @@ public:
         static const char* lines[][2] = {
             {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
             {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
-            {"Everything here is a slice of a 4D world.", "Hold A or D to turn the slice into the fourth dimension."},
+            {"Everything here is a slice of a 4D world.", "Scroll the wheel, middle-drag, or hold A or D to turn the slice into 4D."},
             {"Fruit off the slice show as dashed rings; the bar below places every fruit in w.", "Press H or Space to come back to the default slice."},
         };
         const int s = std::min(tutorialStep, kTutorialSteps - 1);
@@ -672,8 +724,15 @@ public:
     // so a 4D aim is a choice of lane.
     glm::vec4 DropCenter(const Hit4& hit) const {
         glm::vec4 c = hit.point + glm::vec4(0.0f, 3.0f, 0.0f, 0.0f);
-        if (!laneSnap) return c;
         const float reach = (boundary.radius - boundary.margin) * std::sin(boundary.cutoffAngle) - 0.3f;
+        c.w += dropWShown;
+        if (!laneSnap) {   // keep a shifted drop over the bowl
+            if (dropWShown == 0.0f) return c;
+            const float rr = std::hypot(c.x - boundary.center.x, c.z - boundary.center.z);
+            const float room = std::sqrt(std::max(0.0f, reach * reach - rr * rr));
+            c.w = boundary.center.w + glm::clamp(c.w - boundary.center.w, -room, room);
+            return c;
+        }
         float w = c.w - boundary.center.w;
         float lane = std::round(w / kLaneSpacing);
         for (; ; lane -= (lane > 0.0f) - (lane < 0.0f)) {
@@ -1033,6 +1092,37 @@ public:
         if (!sheetMode) aim = getPlacementMouse(state, boundary, *physics_solver);
         RenderScene(aim, state.cam);
         RenderGameUI(aim);
+        RenderInputOverlay();
+    }
+
+    // Reels recorded with a scripted mouse: the cursor (filled while a button is
+    // held) and a caption naming the input. Off in normal play.
+    void RenderInputOverlay() {
+        BeginText();
+        if (showCursor) {
+            const glm::vec2 c(state.m_xpos, state.m_ypos);
+            const float u = std::clamp(Height / 540.0f, 1.0f, 2.2f);
+            auto tri = [&](glm::vec2 o, float k, glm::vec3 col) {
+                t_rend->FillPoly({o, o + glm::vec2(0.0f, 18.0f) * u * k, o + glm::vec2(12.5f, 12.5f) * u * k}, col, 1.0f);
+            };
+            DrawLine(c + glm::vec2(5.5f, 12.0f) * u, c + glm::vec2(10.5f, 19.5f) * u, 3.2f * u, glm::vec3(0.06f, 0.05f, 0.05f), 1.0f);
+            tri(c + glm::vec2(-1.5f, -2.0f) * u, 1.3f, glm::vec3(0.06f, 0.05f, 0.05f));
+            DrawLine(c + glm::vec2(5.5f, 12.0f) * u, c + glm::vec2(10.5f, 19.5f) * u, 1.6f * u, ui::kCream, 1.0f);
+            tri(c, 1.0f, ui::kCream);
+            if (heldButtons) {
+                static const glm::vec3 col[3] = {glm::vec3(1.0f, 0.85f, 0.35f), glm::vec3(0.55f, 0.85f, 1.0f), glm::vec3(0.75f, 1.0f, 0.6f)};
+                const int b = heldButtons & 1 ? 0 : heldButtons & 2 ? 1 : 2;
+                FillCircle(c, 15.0f * u, col[b], 0.35f, 24);
+            }
+        }
+        if (!inputCaption.empty()) {
+            const float sc = std::clamp(Height / 540.0f, 1.0f, 2.0f) * 0.85f;
+            const float w = t_rend->GetTextWidth(inputCaption, sc), h = 30.0f * sc + 14.0f;
+            const float x = (Width - w) * 0.5f, y = Height * 0.045f;
+            FillRect(x - 20.0f, y, w + 40.0f, h, ui::kPanel, 0.9f);
+            FillRect(x - 20.0f, y, 4.0f, h, ui::kGold, 0.95f);
+            t_rend->RenderText(inputCaption, x, y + 8.0f, sc, ui::kCream);
+        }
     }
 
     // ---------------------------------------------------------------- menus
@@ -1160,8 +1250,12 @@ public:
         st.hint = "Enter or Esc  back";
         std::vector<MenuItem> items = {
             MenuItem::info("Left click", "drop the fruit"),
-            MenuItem::info("Right drag / arrows", "turn the view"),
-            MenuItem::info("Mouse wheel", "zoom"),
+            MenuItem::info("Right drag / arrows", "orbit the camera"),
+            MenuItem::info("Middle drag", "turn into 4D (or Shift + right drag)"),
+            MenuItem::info("Wheel (slice, thick)", "turn the slice through w"),
+            MenuItem::info("Wheel (4D eye)", "set the w of the drop"),
+            MenuItem::info("Ctrl + wheel (thick)", "band width"),
+            MenuItem::info("Shift + wheel", "zoom"),
         };
         for (const TurnBinding& b : kTurnBindings) {
             std::string h = b.help;

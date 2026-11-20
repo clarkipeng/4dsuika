@@ -17,6 +17,10 @@ struct ViewState {
     bool rotating = false;
     double lastX = 0.0, lastY = 0.0;
     float pendingYaw = 0.0f, pendingPitch = 0.0f; // mouse turn since last frame
+    // 4D arcball: middle-drag, or Shift+right-drag for mice without a middle
+    // button. Horizontal drag turns xw, vertical yw.
+    bool turning4 = false;
+    float pendingTurnX = 0.0f, pendingTurnY = 0.0f;
 
     int windowWidth = 0, windowHeight = 0;
     float m_xpos = 0.0f, m_ypos = 0.0f;
@@ -32,12 +36,22 @@ struct ViewState {
     void reset() {
         cam = Camera4D{};
         rotating = false;
+        turning4 = false;
         mouseMoved = false;
     }
 
-    void onMouseButton(int button, int action, double xpos, double ypos) {
-        if (button != GLFW_MOUSE_BUTTON_RIGHT) return;
-        rotating = (action == GLFW_PRESS);
+    void onMouseButton(int button, int action, double xpos, double ypos, int mods = 0) {
+        const bool press = action == GLFW_PRESS;
+        if (button == GLFW_MOUSE_BUTTON_MIDDLE ||
+            (button == GLFW_MOUSE_BUTTON_RIGHT && press && (mods & GLFW_MOD_SHIFT))) {
+            turning4 = press;
+            if (press) rotating = false;
+        } else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+            turning4 = false;   // releasing ends a Shift+right drag whatever Shift is doing
+            rotating = press;
+        } else {
+            return;
+        }
         lastX = xpos;
         lastY = ypos;
     }
@@ -47,6 +61,14 @@ struct ViewState {
         m_xpos = float(xpos);
         m_ypos = float(ypos);
         mouseMoved = true;
+        if (turning4) {
+            const float k = 0.006f;
+            pendingTurnX += float(xpos - lastX) * k;
+            pendingTurnY += float(ypos - lastY) * k;
+            lastX = xpos;
+            lastY = ypos;
+            return;
+        }
         if (!rotating) return;
         const float sensitivity = 0.005f;
         pendingYaw -= float(xpos - lastX) * sensitivity;
@@ -55,7 +77,6 @@ struct ViewState {
         lastY = ypos;
     }
 
-    void onScroll(double yoffset) { cam.zoom(float(yoffset)); }
 
     // World-space ray under the mouse cursor.
     void mouseRay(glm::vec4& origin, glm::vec4& dir) const {

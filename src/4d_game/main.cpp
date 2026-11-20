@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <iostream>
 #include <sstream>
@@ -100,6 +101,12 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --no-glow              no same-kind glow (Settings > Merge glow)
 //   --lane-snap            drops snap to whole w lanes (L in game)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
+//   --mouse-script file    with --record: a scripted mouse (docs/controls.md), with a
+//                          visible cursor and a caption naming each input. Lines are
+//                          `t=SEC action args`: move X Y [over S] (0..1 of the window),
+//                          down|up left|right|middle, scroll N, mods shift|ctrl|none,
+//                          caption TEXT, view slice|thick|eye, home, dropw V.
+//                          The scripted player is off after the warm-up.
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
 //   --record dir           dump every frame as dir/frame_000000.png at a fixed
@@ -148,6 +155,7 @@ struct Options {
     float benchTurn = 0.0f;
     std::string costMap;
     float cursorX = -1.0f, cursorY = -1.0f;
+    std::string mouseScript;
     std::string record;
     float playEvery = 0.0f, warmup = 0.0f;
     std::string cameraPath;
@@ -212,6 +220,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--single-pass") o.singlePass = true;
         else if (a == "--bench-turn") o.benchTurn = std::atof(next().c_str());
         else if (a == "--cost-map") o.costMap = next();
+        else if (a == "--mouse-script") o.mouseScript = next();
         else if (a == "--cursor") sscanf(next().c_str(), "%f,%f", &o.cursorX, &o.cursorY);
         else if (a == "--fruit-sheet") o.fruitSheet = next();
         else if (a == "--sheet-turn") o.sheetTurn = next();
@@ -334,6 +343,87 @@ static void setScriptedPlaytestPose(float t) {
     cam.turnLocal(AX_Z, AX_W, 0.75f * std::sin(t * 0.12f + 1.3f));
     game.state.cam = cam;
 }
+
+// Scripted mouse for reels (--mouse-script). Drives the same entry points the
+// GLFW callbacks do, so what it records is what a player's mouse does.
+struct MouseScript {
+    struct Ev { float t; std::string act, arg; float a = 0, b = 0, c = 0; };
+    std::vector<Ev> evs;
+    size_t next = 0;
+    float fromX = 0.5f, fromY = 0.5f, toX = 0.5f, toY = 0.5f, t0 = 0.0f, dur = 0.0f;
+    int mods = 0;
+    float width = 1, height = 1;
+
+    bool load(const std::string& file, std::string& err) {
+        std::ifstream in(file);
+        if (!in) { err = "cannot open " + file; return false; }
+        std::string line;
+        while (std::getline(in, line)) {
+            size_t h = line.find('#');
+            if (h != std::string::npos) line.resize(h);
+            std::istringstream ss(line);
+            std::string tt;
+            if (!(ss >> tt)) continue;
+            Ev e;
+            if (tt.rfind("t=", 0) != 0) { err = "bad line: " + line; return false; }
+            e.t = std::atof(tt.c_str() + 2);
+            ss >> e.act;
+            if (e.act == "move") {
+                std::string over;
+                ss >> e.a >> e.b;
+                if (ss >> over && over == "over") ss >> e.c;
+            } else if (e.act == "scroll" || e.act == "dropw") {
+                ss >> e.a;
+            } else if (e.act == "caption") {
+                std::getline(ss, e.arg);
+                size_t f = e.arg.find_first_not_of(' ');
+                e.arg = f == std::string::npos ? "" : e.arg.substr(f);
+            } else {
+                ss >> e.arg;
+            }
+            evs.push_back(e);
+        }
+        std::stable_sort(evs.begin(), evs.end(), [](const Ev& a, const Ev& b) { return a.t < b.t; });
+        return true;
+    }
+
+    void setCursor(float nx, float ny) {
+        game.state.onCursorPos(nx * width, ny * height);
+    }
+
+    void step(float t) {
+        while (next < evs.size() && evs[next].t <= t) {
+            const Ev& e = evs[next++];
+            if (e.act == "move") {
+                fromX = game.state.m_xpos / width; fromY = game.state.m_ypos / height;
+                toX = e.a; toY = e.b; t0 = e.t; dur = e.c;
+            } else if (e.act == "down" || e.act == "up") {
+                const int button = e.arg == "right" ? GLFW_MOUSE_BUTTON_RIGHT : e.arg == "middle" ? GLFW_MOUSE_BUTTON_MIDDLE : GLFW_MOUSE_BUTTON_LEFT;
+                const int bit = button == GLFW_MOUSE_BUTTON_LEFT ? 1 : button == GLFW_MOUSE_BUTTON_RIGHT ? 2 : 4;
+                const bool press = e.act == "down";
+                game.heldButtons = press ? (game.heldButtons | bit) : (game.heldButtons & ~bit);
+                game.state.onMouseButton(button, press ? GLFW_PRESS : GLFW_RELEASE, game.state.m_xpos, game.state.m_ypos, mods);
+                if (press && button == GLFW_MOUSE_BUTTON_LEFT) game.DropFruit();
+            } else if (e.act == "scroll") {
+                game.OnScroll(e.a, mods & GLFW_MOD_SHIFT, mods & GLFW_MOD_CONTROL);
+            } else if (e.act == "mods") {
+                mods = e.arg == "shift" ? GLFW_MOD_SHIFT : e.arg == "ctrl" ? GLFW_MOD_CONTROL : 0;
+            } else if (e.act == "caption") {
+                game.inputCaption = e.arg;
+            } else if (e.act == "view") {
+                game.renderer.viewMode = e.arg == "thick" ? ViewMode::Thick : e.arg == "eye" ? ViewMode::Eye : ViewMode::Slice;
+            } else if (e.act == "home") {
+                game.homing = true;
+            } else if (e.act == "dropw") {
+                game.dropW = e.a;
+            }
+        }
+        // The cursor glides (smoothstep) toward its target, through the real cursor callback.
+        float k = dur > 0.0f ? std::clamp((t - t0) / dur, 0.0f, 1.0f) : 1.0f;
+        k = k * k * (3.0f - 2.0f * k);
+        setCursor(fromX + (toX - fromX) * k, fromY + (toY - fromY) * k);
+    }
+};
 
 // Point the cursor at a spot inside the bowl, in the current slice, the way a
 // player aims: within 1.3 units of the bowl's axis, just below its rim.
@@ -821,8 +911,16 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
         // Gameplay: the scripted player drops through the real cursor path (so
         // the drop preview shows), aiming into the bowl in the current slice.
         int drops = 0, resets = 0;
+        MouseScript mouse;
+        bool hasMouse = false;
+        if (!o.mouseScript.empty()) {
+            std::string err;
+            if (!mouse.load(o.mouseScript, err)) { std::cerr << "mouse script: " << err << std::endl; return 1; }
+            mouse.width = float(o.width); mouse.height = float(o.height);
+            hasMouse = true;
+        }
         auto play = [&](float t, float dt) {
-            if (o.playEvery <= 0.0f) return;
+            if (o.playEvery <= 0.0f || (hasMouse && t >= o.warmup)) return;
             if (std::floor((t + dt) / o.playEvery) > std::floor(t / o.playEvery)) {
                 aimIntoBowl(drops++, o.width, o.height);
                 game.DropFruit();
@@ -842,6 +940,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
             }
             game.history.clear();
             game.photoAutoAfter = o.photoAfter;
+            if (hasMouse) { game.showCursor = true; mouse.fromX = mouse.toX = 0.5f; mouse.fromY = mouse.toY = 0.62f; }
             printf("warm-up: %d drops, %d fruit in play, %d game overs, state %d\n", drops, activeObjectCount(), resets, int(game.State));
         }
         for (int i = 0; i < total; ++i) {
@@ -849,6 +948,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
             pathTime = i * rec.dt();
             if (hasPath) path.apply(pathTime, game.state.cam);
             play(o.warmup + pathTime, rec.dt());
+            if (hasMouse) { game.showCursor = true; mouse.step(pathTime); }
             game.ProcessInput(rec.dt());
             advanceSim(rec.dt(), simAcc);
             game.Update(rec.dt());
@@ -1218,7 +1318,11 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 }
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    game.state.onMouseButton(button, action, game.state.m_xpos, game.state.m_ypos);
+    game.state.onMouseButton(button, action, game.state.m_xpos, game.state.m_ypos, mods);
+    {
+        const int bit = button == GLFW_MOUSE_BUTTON_LEFT ? 1 : button == GLFW_MOUSE_BUTTON_RIGHT ? 2 : 4;
+        game.heldButtons = action == GLFW_PRESS ? (game.heldButtons | bit) : (game.heldButtons & ~bit);
+    }
     if (game.State == GAME_ACTIVE && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         game.DropFruit();
     }
@@ -1231,7 +1335,9 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     if (!game.state.initialized) game.state.Init(window);
-    if (game.State == GAME_ACTIVE) game.state.onScroll(yoffset);
+    if (game.State != GAME_ACTIVE) return;
+    auto down = [&](int a, int b) { return glfwGetKey(window, a) == GLFW_PRESS || glfwGetKey(window, b) == GLFW_PRESS; };
+    game.OnScroll(yoffset, down(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_RIGHT_SHIFT), down(GLFW_KEY_LEFT_CONTROL, GLFW_KEY_RIGHT_CONTROL));
 }
 
 void windowSizeCallback(GLFWwindow* window, int windowWidth, int windowHeight){
