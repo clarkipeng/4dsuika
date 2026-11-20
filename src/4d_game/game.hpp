@@ -112,6 +112,14 @@ public:
     bool showPerf = false;            // F3: GPU time and render scale
     bool laneSnap = false;             // L: drops snap to whole w lanes
     static constexpr float kLaneSpacing = 1.0f;
+    // Effects: merge bursts, the combo counter, the danger level (0..1).
+    bool effectsOn = true;             // Settings > Effects: bursts, combo, danger
+    std::vector<BurstInstance> bursts;
+    int combo = 0;                     // merges in a row, each within kComboWindow of the last
+    float comboTimer = 0.0f, comboPop = 0.0f;
+    float danger = 0.0f;
+    float dangerOverride = -1.0f;      // --danger v: hold the level for review stills
+    static constexpr float kComboWindow = 0.7f, kBurstSeconds = 1.0f, kRimY = 0.1f;
     bool showDepthStrip = true;        // V: bottom strip of depth along the slice normal
 
     // Fruit sheet (headless --fruit-sheet): fixed fruit instead of physics, labelled.
@@ -173,6 +181,7 @@ public:
             }
         }
         physics_solver->reset();
+        bursts.clear(); combo = 0; comboTimer = comboPop = danger = 0.0f;
         total_points = 0;
         physics_solver->total_points = 0;
         fm.initializeFruits();
@@ -387,7 +396,41 @@ public:
         if (State != GAME_ACTIVE) return;
         physics_solver->update(dt);
         total_points = physics_solver->total_points;
+        UpdateEffects(dt);
     }
+    // Merge events become bursts; merges in quick succession count as a combo
+    // (cosmetic: scoring is unchanged). Danger rises when settled fruit pile up
+    // to the rim.
+    void UpdateEffects(float dt) {
+        if (!effectsOn) { physics_solver->takeMerges(); bursts.clear(); combo = 0; danger = 0.0f; return; }
+        for (const auto& m : physics_solver->takeMerges()) {
+            combo = comboTimer > 0.0f ? combo + 1 : 1;
+            comboTimer = kComboWindow;
+            comboPop = 1.0f;
+            bursts.push_back({m.position, m.radius, m.fruit, 0.0f, std::min(1.0f + 0.4f * float(combo - 1), 2.6f)});
+            if (bursts.size() > RaymarchRenderer::kMaxBursts) bursts.erase(bursts.begin());
+        }
+        for (auto& b : bursts) b.progress += dt / kBurstSeconds;
+        bursts.erase(std::remove_if(bursts.begin(), bursts.end(), [](const BurstInstance& b) { return b.progress >= 1.0f; }),
+                     bursts.end());
+        comboTimer = std::max(0.0f, comboTimer - dt);
+        if (comboTimer == 0.0f) combo = 0;
+        comboPop = std::max(0.0f, comboPop - dt * 3.0f);
+
+        float target = 0.0f;
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
+            const auto& obj = physics_solver->objects[i];
+            if (obj.flash > 0.02f) continue; // a merge zeroes the velocity: wait for it to settle
+            if (glm::length(obj.getVelocity()) > 1.2f * dt) continue; // still falling or rolling (1.2 units/s)
+            float y = obj.position.y; // the centre: big fruit have their top near the rim anyway
+            if (y > kRimY + 0.2f) continue; // a fresh drop above the bowl, not the pile
+            target = std::max(target, glm::clamp((y - (kRimY - 1.3f)) / 0.9f, 0.0f, 1.0f));
+        }
+        danger += (target - danger) * std::min(1.0f, dt * (target > danger ? 1.2f : 1.5f));
+        if (dangerOverride >= 0.0f) danger = dangerOverride;
+    }
+
     int Sound(){
 #ifndef __EMSCRIPTEN__
         if (!audioReady || audioMuted) return 0;
@@ -438,6 +481,7 @@ public:
             fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
         }
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
+        renderer.setEffects(sheetMode ? std::vector<BurstInstance>{} : bursts, sheetMode ? 0.0f : danger);
         renderer.setPreview(aim.hit, DropCenter(aim),
                             FruitManager::getFruitProperties(nextFruit).radius, int(nextFruit));
         renderer.draw(cam, FbWidth, FbHeight, time);
@@ -660,6 +704,34 @@ public:
         }
     }
 
+    // Combo counter near the top, popping on each merge; a red edge pulse when
+    // the pile nears the rim (the rim itself pulses in the scene).
+    void RenderEffectsUI() {
+        if (danger > 0.02f) {
+            float pulse = 0.5f + 0.5f * std::sin(time * 7.0f);
+            float a = danger * (0.10f + 0.22f * pulse);
+            const glm::vec3 red(1.0f, 0.12f, 0.06f);
+            float e = std::max(10.0f, Height * 0.012f) * (1.0f + 2.0f * danger);
+            FillRect(0.0f, 0.0f, float(Width), e, red, a);
+            FillRect(0.0f, Height - e, float(Width), e, red, a);
+            FillRect(0.0f, e, e, Height - 2.0f * e, red, a);
+            FillRect(Width - e, e, e, Height - 2.0f * e, red, a);
+            if (danger > 0.5f) {
+                const std::string warn = "FULL BOWL";
+                float sc = 0.9f;
+                t_rend->RenderText(warn, (Width - t_rend->GetTextWidth(warn, sc)) * 0.5f, Height * 0.065f, sc,
+                                   glm::mix(glm::vec3(1.0f, 0.55f, 0.4f), glm::vec3(1.0f, 0.2f, 0.12f), pulse));
+            }
+        }
+        if (combo >= 2 && comboTimer > 0.0f) {
+            std::string text = "COMBO x" + std::to_string(combo);
+            float sc = (0.9f + 0.25f * std::min(combo, 6)) * (1.0f + 0.35f * comboPop);
+            float fade = std::min(1.0f, comboTimer / 0.5f);
+            glm::vec3 col = glm::mix(ui::kGold, glm::vec3(1.0f, 0.95f, 0.8f), comboPop) * fade;
+            t_rend->RenderText(text, (Width - t_rend->GetTextWidth(text, sc)) * 0.5f, Height * 0.15f, sc, col);
+        }
+    }
+
     void RenderGameUI(const Hit4& aim)
     {
         if (sheetMode) { RenderSheetLabels(); return; }
@@ -676,12 +748,27 @@ public:
         t_rend->RenderText(score, margin + 10.0f, margin + panelHeight * 0.34f,
                            fitLabelScale(score, panelWidth - 20.0f, panelHeight / 49.0f), ui::kCream);
         t_rend->RenderText("NEXT DROP", nextX + 10.0f, margin + 7.0f, 0.50f, ui::kGold);
-        std::string next = kFruitNames[int(nextFruit)];
-        float cy = margin + panelHeight * 0.65f;
-        FillCircle({nextX + 19.0f, cy}, 8.0f, FruitUiColor(int(nextFruit)), 1.0f);
-        t_rend->RenderText(next, nextX + 32.0f, cy - 10.0f,
-                           fitLabelScale(next, panelWidth - 40.0f, 0.75f), ui::kCream);
+        {   // The fruit at its true size against the whole ladder, so a merge is easy to plan.
+            std::string next = kFruitNames[int(nextFruit)];
+            const float rMin = FruitManager::getFruitProperties(CHERRY).radius;
+            const float rMax = FruitManager::getFruitProperties(WATERMELON).radius;
+            float t = (FruitManager::getFruitProperties(nextFruit).radius - rMin) / std::max(rMax - rMin, 1e-3f);
+            float r = glm::mix(6.0f, panelHeight * 0.25f, t);
+            float cy = margin + panelHeight * 0.50f;
+            FillCircle({nextX + 12.0f + panelHeight * 0.25f, cy}, r, FruitUiColor(int(nextFruit)), 1.0f, 24);
+            float tx = nextX + 22.0f + panelHeight * 0.5f;
+            t_rend->RenderText(next, tx, cy - 9.0f, fitLabelScale(next, nextX + panelWidth - tx - 8.0f, 0.75f), ui::kCream);
+            const float ly = margin + panelHeight - 10.0f;
+            const float step = (panelWidth - 28.0f) / 10.0f;
+            for (int k = 0; k <= int(WATERMELON); ++k) {
+                glm::vec2 c(nextX + 14.0f + step * k, ly);
+                bool now = k == int(nextFruit);
+                FillCircle(c, now ? 4.5f : 2.6f, FruitUiColor(k), now ? 1.0f : 0.55f, 12);
+                if (now) DrawCircle(c, 6.5f, 1.0f, ui::kCream, 0.9f, 16);
+            }
+        }
         if (laneSnap) t_rend->RenderText("W-LANE SNAP  (L)", nextX + 10.0f, margin + panelHeight + 8.0f, 0.5f, ui::kGold);
+        RenderEffectsUI();
         RenderSliceLabel();
         RenderDepthStrip(aim);
         if (!caption.empty())
@@ -809,6 +896,8 @@ public:
                 return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
             }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
+        items.push_back(MenuItem::choice("Effects", [this] { return std::string(effectsOn ? "On" : "Off"); },
+            [this](int) { effectsOn = !effectsOn; }));
         items.push_back(MenuItem::choice("Merge glow", [this] { return std::string(renderer.sameKindGlow ? "On" : "Off"); },
             [this](int) { renderer.sameKindGlow = !renderer.sameKindGlow; }));
         items.push_back(MenuItem::choice("W-lane snap", [this] { return std::string(laneSnap ? "On" : "Off"); },

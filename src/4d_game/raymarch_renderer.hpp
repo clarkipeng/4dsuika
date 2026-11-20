@@ -28,6 +28,16 @@
 #include "camera4d.hpp"
 #include "filesystem.h"
 
+// A merge burst: a 4D shell growing from the merge point; the slice sees the
+// ring where it cuts the shell.
+struct BurstInstance {
+    glm::vec4 center;
+    float radius;   // of the merged fruit
+    int type;
+    float progress; // 0 (just merged) .. 1 (gone)
+    float power;    // 1, more in a combo
+};
+
 struct FruitInstance {
     glm::vec4 center;
     float radius;
@@ -56,6 +66,7 @@ class RaymarchRenderer {
 public:
     static constexpr int kMaxFruit = 64;
     static constexpr int kMaxHints = 16;
+    static constexpr int kMaxBursts = 8;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
@@ -148,6 +159,10 @@ public:
     // Fruit for this frame, in world space. Only fruit that cross the
     // camera's slice are visible; they are the ones uploaded.
     void setFruit(const std::vector<FruitInstance>& fruit) { fruit_ = fruit; }
+    void setEffects(const std::vector<BurstInstance>& bursts, float danger) {
+        bursts_ = bursts;
+        danger_ = danger;
+    }
     void setPreview(bool show, const glm::vec4& center, float radius, int type) {
         previewCenter_ = center;
         previewData_ = show ? glm::vec4(radius, float(type), 0, 0) : glm::vec4(0.0f);
@@ -342,6 +357,8 @@ private:
     Quality quality_ = Quality::High;
     std::vector<FruitInstance> fruit_;
     glm::vec4 previewCenter_{0.0f}, previewData_{0.0f};
+    std::vector<BurstInstance> bursts_;
+    float danger_ = 0.0f;
     GLuint queries_[kQueries] = {};
     bool queryPending_[kQueries] = {};
     int queryNext_ = 0;
@@ -506,6 +523,7 @@ private:
         glUniform1f(loc(p, "uFogStart"), cam.distance + 12.0f);
         glUniform1f(loc(p, "uNearCut"), std::clamp(cam.distance - 7.0f, 0.0f, 5.0f));
         uploadFruit(p, pos, basis[3]);
+        uploadEffects(p);
         glUniform4fv(loc(p, "uPreviewCenter"), 1, glm::value_ptr(previewCenter_));
         glUniform4fv(loc(p, "uPreviewData"), 1, glm::value_ptr(previewData_));
         glUniform1i(loc(p, "uCacheMode"), cached ? 1 : 0);
@@ -546,6 +564,21 @@ private:
             gap = std::min(gap, glm::length(f.center - o.center) - f.radius - o.radius);
         }
         return 1.0f - std::max(gap, 0.0f) / kGlowRange;
+    }
+
+    void uploadEffects(GLuint prog) {
+        int n = std::min<int>(int(bursts_.size()), kMaxBursts);
+        std::vector<glm::vec4> centers(n), data(n);
+        for (int i = 0; i < n; ++i) {
+            centers[i] = bursts_[i].center;
+            data[i] = glm::vec4(bursts_[i].radius, float(bursts_[i].type), bursts_[i].progress, bursts_[i].power);
+        }
+        glUniform1i(loc(prog, "uBurstCount"), n);
+        if (n > 0) {
+            glUniform4fv(loc(prog, "uBurstCenters"), n, glm::value_ptr(centers[0]));
+            glUniform4fv(loc(prog, "uBurstData"), n, glm::value_ptr(data[0]));
+        }
+        glUniform1f(loc(prog, "uDanger"), danger_);
     }
 
     void uploadFruit(GLuint prog, const glm::vec4& camPos, const glm::vec4& normal) {
@@ -688,6 +721,7 @@ private:
 #endif
         out += "#define MAX_FRUIT " + std::to_string(kMaxFruit) + "\n";
         out += "#define MAX_HINTS " + std::to_string(kMaxHints) + "\n";
+        out += "#define MAX_BURSTS " + std::to_string(kMaxBursts) + "\n";
         out += defines;
         std::istringstream in(src);
         std::string line;
