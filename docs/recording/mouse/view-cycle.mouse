@@ -1,4 +1,4 @@
-# The M key through every view (--mouse-script), and a drop landing on its ghost.
+# The M key between the views (--mouse-script), and a drop landing on its ghost.
 t=0 move 0.5 0.6
 t=0 caption The ghost is the real fruit, where it will land
 t=0.3 move 0.46 0.6 over 1.0
@@ -7,11 +7,5 @@ t=2.75 up left
 t=3.0 caption Slice (default)
 t=6.0 caption M: 4D eye
 t=6.0 cycle
-t=8.5 caption M: thick slice +-0.5
-t=8.5 cycle
-t=11.0 caption M: thick slice +-1
-t=11.0 cycle
-t=13.5 caption M: thick slice +-2
-t=13.5 cycle
-t=16.0 caption M: back to slice
-t=16.0 cycle
+t=9.0 caption M: back to slice
+t=9.0 cycle

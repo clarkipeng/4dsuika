@@ -113,8 +113,8 @@ public:
     float turnVel[kTurnCount] = {};   // radians per second, per binding
     float offsetVel = 0.0f;
     // Mouse-first controls (docs/controls.md). The wheel is per view mode: it turns
-    // the slice (Slice, Thick), or sets the w of the drop (4D eye); Shift+wheel
-    // always zooms, Ctrl+wheel sets the band (Thick). Both targets glide.
+    // the slice (Slice), or sets the w of the drop (4D eye); Shift+wheel
+    // always zooms. Both targets glide.
     Rot4 nextOrient;                   // orientation the next drop will have (the ghost shows it)
     bool nextOrientValid = false;
     Fruit nextOrientFor = CHERRY;
@@ -347,12 +347,6 @@ public:
             case ViewMode::Eye:
                 dropW = glm::clamp(dropW + d * kDropWStep, -kDropWMax, kDropWMax);
                 break;
-            case ViewMode::Thick:
-                if (ctrl) {
-                    renderer.band = glm::clamp(renderer.band + d * 0.1f, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
-                    break;
-                }
-                [[fallthrough]];
             case ViewMode::Slice:
                 wheelTurn += d * kWheelStep;
                 break;
@@ -1152,33 +1146,13 @@ public:
 
     static void CycleIndex(int& i, int dir, int count) { i = (i + dir + count) % count; }
 
-    // M or Settings > View cycles Slice (the game, the default), 4D eye, then the
-    // thick slice at three bands. The choice is saved for the next run.
-    struct ViewChoice { ViewMode mode; float band; };
-    static constexpr int kViewCount = 5;
-    static ViewChoice ViewAt(int i) {
-        static const ViewChoice v[kViewCount] = {{ViewMode::Slice, 1.0f}, {ViewMode::Eye, 1.0f},
-                                                 {ViewMode::Thick, 0.5f}, {ViewMode::Thick, 1.0f}, {ViewMode::Thick, 2.0f}};
-        return v[i];
-    }
-    int ViewIndex() const {
-        if (renderer.viewMode == ViewMode::Slice) return 0;
-        if (renderer.viewMode == ViewMode::Eye) return 1;
-        int best = 2;
-        for (int i = 2; i < kViewCount; ++i)
-            if (std::abs(ViewAt(i).band - renderer.band) < std::abs(ViewAt(best).band - renderer.band)) best = i;
-        return best;
-    }
-    std::string ViewLabel() const {
-        if (renderer.viewMode != ViewMode::Thick) return viewModeName(renderer.viewMode);
-        char buf[48];
-        snprintf(buf, sizeof buf, "Thick slice +-%.2f", renderer.band);
-        return buf;
-    }
-    void SetView(ViewMode m, float band) {
-        renderer.viewMode = m;
-        renderer.band = glm::clamp(band, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
-    }
+    // M or Settings > View switches between Slice (the game, the default) and
+    // 4D eye. The choice is saved for the next run.
+    static constexpr int kViewCount = 2;
+    static ViewMode ViewAt(int i) { return i == 1 ? ViewMode::Eye : ViewMode::Slice; }
+    int ViewIndex() const { return renderer.viewMode == ViewMode::Eye ? 1 : 0; }
+    std::string ViewLabel() const { return viewModeName(renderer.viewMode); }
+    void SetView(ViewMode m) { renderer.viewMode = m; }
     static std::string ViewFile() {
 #ifdef __EMSCRIPTEN__
         return "";
@@ -1191,21 +1165,18 @@ public:
     void SaveView() const {
         std::string f = ViewFile();
         if (f.empty()) return;
-        const ViewChoice c = ViewAt(ViewIndex());
-        std::ofstream(f) << (c.mode == ViewMode::Slice ? "slice" : c.mode == ViewMode::Eye ? "eye" : "thick") << " " << renderer.band << "\n";
+        std::ofstream(f) << (renderer.viewMode == ViewMode::Eye ? "eye" : "slice") << "\n";
     }
-    // Interactive runs only: Slice unless the player chose another view last time.
+    // Interactive runs only: Slice unless the player chose 4D eye last time
+    // (an old "thick" choice falls back to Slice).
     void LoadView() {
         std::ifstream in(ViewFile());
         std::string name;
-        float band = 1.0f;
         if (!(in >> name)) return;
-        in >> band;
-        SetView(name == "eye" ? ViewMode::Eye : name == "thick" ? ViewMode::Thick : ViewMode::Slice, band);
+        SetView(name == "eye" ? ViewMode::Eye : ViewMode::Slice);
     }
     void CycleViewMode(int dir) {
-        const ViewChoice c = ViewAt((ViewIndex() + dir + kViewCount) % kViewCount);
-        SetView(c.mode, c.band);
+        SetView(ViewAt((ViewIndex() + dir + kViewCount) % kViewCount));
         SaveView();
     }
 
@@ -1290,9 +1261,6 @@ public:
             }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
         items.push_back(MenuItem::choice("View", [this] { return ViewLabel(); },
             [this](int d) { CycleViewMode(d); }));
-        items.push_back(MenuItem::slider("Band width", [this] {
-                return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
-            }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
         items.push_back(MenuItem::choice("Effects", [this] { return std::string(effectsOn ? "On" : "Off"); },
             [this](int) { effectsOn = !effectsOn; }));
@@ -1323,9 +1291,8 @@ public:
             MenuItem::info("Left click", "drop the fruit"),
             MenuItem::info("Right drag / arrows", "orbit the camera"),
             MenuItem::info("Middle drag", "turn into 4D (or Shift + right drag)"),
-            MenuItem::info("Wheel (slice, thick)", "turn the slice through w"),
+            MenuItem::info("Wheel (slice)", "turn the slice through w"),
             MenuItem::info("Wheel (4D eye)", "set the w of the drop"),
-            MenuItem::info("Ctrl + wheel (thick)", "band width"),
             MenuItem::info("Shift + wheel", "zoom"),
         };
         for (const TurnBinding& b : kTurnBindings) {
@@ -1339,7 +1306,7 @@ public:
         items.push_back(MenuItem::info("L", "snap drops to whole w lanes"));
         items.push_back(MenuItem::info("P", "photo mode: replay the last 10 s, slice and 4D eye side by side"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
-        items.push_back(MenuItem::info("M", "change view: slice, 4D eye, thick slice"));
+        items.push_back(MenuItem::info("M", "change view: slice, 4D eye"));
         items.push_back(MenuItem::info("Esc", "pause"));
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
         menu.set(std::move(items), std::move(st));

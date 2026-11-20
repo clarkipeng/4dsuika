@@ -87,10 +87,8 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --cost-map out.png     analytic SDF evaluations per pixel instead of colour (R static
 //                          world, G moving world, B fruit) with statistics; deterministic,
 //                          unlike timings on a shared GPU
-//   --view mode            slice (default), thick or eye (docs/4D.md, "View modes")
-//   --band b               thick slice: how far off the slice fruit still show (default 1)
-//   --view-compare dir     every view and combination (slice, thick slice at bands 0.5,
-//                          1, 2, 3, 4D eye; each alone and with the w inset) on the same
+//   --view mode            slice (default) or eye (docs/4D.md, "View modes")
+//   --view-compare dir     every view and combination (slice, 4D eye; each alone and with the w inset) on the same
 //                          scripted playtest: dir/view-<v>.png (early, mid, next merge),
 //                          all in dir/compare.png, and a 10 s clip of play turning in 4D
 //                          (frames in dir/view-<v>/; `make view-compare` adds the videos)
@@ -105,7 +103,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //                          visible cursor and a caption naming each input. Lines are
 //                          `t=SEC action args`: move X Y [over S] (0..1 of the window),
 //                          down|up left|right|middle, scroll N, mods shift|ctrl|none,
-//                          caption TEXT, view slice|thick|eye, cycle (M), home, dropw V.
+//                          caption TEXT, view slice|eye, cycle (M), home, dropw V.
 //                          The scripted player is off after the warm-up.
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -169,7 +167,6 @@ struct Options {
     std::string fruitSheet;
     std::string sheetTurn = "yw:35";
     std::string view = "slice";
-    float band = 1.0f;
     std::string viewCompare;
     std::string turntable;
     std::string subject = "all";
@@ -231,12 +228,11 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--view-compare") o.viewCompare = next();
         else if (a == "--view") {
             o.view = next();
-            if (o.view != "slice" && o.view != "thick" && o.view != "eye") {
-                std::cerr << "--view: slice, thick or eye" << std::endl;
+            if (o.view != "slice" && o.view != "eye") {
+                std::cerr << "--view: slice or eye" << std::endl;
                 std::exit(2);
             }
         }
-        else if (a == "--band") o.band = float(std::atof(next().c_str()));
         else if (a == "--subject") o.subject = next();
         else if (a == "--sweep") o.sweep = std::max(0.1f, float(std::atof(next().c_str())));
         else if (a == "--fps") o.fps = std::max(1, std::atoi(next().c_str()));
@@ -411,10 +407,9 @@ struct MouseScript {
             } else if (e.act == "caption") {
                 game.inputCaption = e.arg;
             } else if (e.act == "view") {
-                game.renderer.viewMode = e.arg == "thick" ? ViewMode::Thick : e.arg == "eye" ? ViewMode::Eye : ViewMode::Slice;
+                game.renderer.viewMode = e.arg == "eye" ? ViewMode::Eye : ViewMode::Slice;
             } else if (e.act == "cycle") {   // M, without saving the choice
-                const Game::ViewChoice c = Game::ViewAt((game.ViewIndex() + 1) % Game::kViewCount);
-                game.SetView(c.mode, c.band);
+                game.SetView(Game::ViewAt((game.ViewIndex() + 1) % Game::kViewCount));
             } else if (e.act == "home") {
                 game.homing = true;
             } else if (e.act == "dropw") {
@@ -678,19 +673,13 @@ static int runTurntable(const Options& o, GLuint fbo) {
 // them in compare.png, and a 10 s clip per view of real play around the mid
 // moment with the slice swinging through xw and yw on top of the scripted pose.
 static int runViewCompare(const Options& o, GLuint fbo) {
-    struct View { std::string file, name; ViewMode mode; float band; bool inset; };
+    struct View { std::string file, name; ViewMode mode; bool inset; };
     std::vector<View> views;
     for (bool inset : {false, true}) {
         const char* plus = inset ? "+inset" : "";
         const char* with = inset ? " + w inset" : "";
-        views.push_back({std::string("slice") + plus, std::string("slice") + with, ViewMode::Slice, 1.0f, inset});
-        for (float b : {0.5f, 1.0f, 2.0f, 3.0f}) {
-            char file[32], name[64];
-            snprintf(file, sizeof file, "thick-b%g%s", b, plus);
-            snprintf(name, sizeof name, "thick slice, band +-%g%s", b, with);
-            views.push_back({file, name, ViewMode::Thick, b, inset});
-        }
-        views.push_back({std::string("eye") + plus, std::string("4D eye") + with, ViewMode::Eye, 1.0f, inset});
+        views.push_back({std::string("slice") + plus, std::string("slice") + with, ViewMode::Slice, inset});
+        views.push_back({std::string("eye") + plus, std::string("4D eye") + with, ViewMode::Eye, inset});
     }
     const int nViews = int(views.size()), down = 2, nMoments = 3;
     const int tw = o.width / down, th = o.height / down;
@@ -705,7 +694,6 @@ static int runViewCompare(const Options& o, GLuint fbo) {
 
     auto render = [&](const View& v, const std::string& caption) {
         game.renderer.viewMode = v.mode;
-        game.renderer.band = v.band;
         game.showDepthStrip = v.inset;
         game.caption = caption;
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -849,8 +837,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.renderer.useCache = !o.noCache;
     game.renderer.useDeferred = !o.singlePass;
-    game.renderer.viewMode = o.view == "thick" ? ViewMode::Thick : o.view == "eye" ? ViewMode::Eye : ViewMode::Slice;
-    game.renderer.band = std::clamp(o.band, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
+    game.renderer.viewMode = o.view == "eye" ? ViewMode::Eye : ViewMode::Slice;
     auto showMenuState = [&](const std::string& st) {
         game.State = st == "menu" || st == "settings" || st == "controls" ? GAME_MENU
                    : st == "pause" ? GAME_PAUSED : st == "over" ? GAME_OVER : GAME_ACTIVE;

@@ -64,7 +64,7 @@ The binary takes `--play s` (seconds between drops) and `--warmup s` alongside `
 
 ## Mouse reels
 
-`docs/recording/mouse/{slice,thick,eye}.mouse` are scripted-mouse reels (about 10 s each) for `docs/controls.md`: a visible cursor, filled while a button is held, and a caption naming the input. The script runs through the real handlers (`--mouse-script`); the scripted player only plays during the warm-up.
+`docs/recording/mouse/{slice,eye}.mouse` are scripted-mouse reels (about 10 s each) for `docs/controls.md`: a visible cursor, filled while a button is held, and a caption naming the input. The script runs through the real handlers (`--mouse-script`); the scripted player only plays during the warm-up.
 
 ```bash
 ./build/4d_game --headless --mute --record DIR --mouse-script docs/recording/mouse/eye.mouse --play 1.0 --warmup 20 --seconds 10 --fps 30 --size 1920x1080
