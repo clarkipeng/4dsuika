@@ -467,10 +467,11 @@ vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wra
 // side, fading with distance from the slice. Rings and a thin fill read as
 // hints, never as solid fruit; behind scene geometry they are fainter.
 
-vec3 depthColor(float offset) {
+vec3 depthColor(float offset, float span) {
     vec3 side = offset < 0.0 ? vec3(1.0, 0.31, 0.18) : vec3(0.20, 0.68, 1.0);
-    return mix(vec3(1.0, 0.76, 0.32), side, smoothstep(0.0, 1.5, abs(offset)));
+    return mix(vec3(1.0, 0.76, 0.32), side, smoothstep(0.0, span, abs(offset)));
 }
+vec3 depthColor(float offset) { return depthColor(offset, 1.5); }
 
 vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
@@ -658,8 +659,16 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
 #ifndef TURNTABLE
         float offset = dot(c - ro, uCameraBasis[3]);
         vec4 sectionNormal = normalize(p - c + offset * uCameraBasis[3]);
-        float ring = 1.0 - smoothstep(0.10, 0.29, abs(dot(sectionNormal, rd)));
-        col = mix(col, depthColor(offset), 0.75 * ring);
+        // A ring of constant screen width (about 6 px) round the fruit's
+        // cross-section, coloured by its depth: near the edge, cos^2 of the
+        // angle to the view ray is about 2 * edge distance / section radius.
+        float section = sqrt(max(d.x * d.x - offset * offset, 1e-4));
+        float edge = 2.0 * (2.0 * uTanHalfFov / uResolution.y) * h.t / section;
+        float cos2 = dot(sectionNormal, rd);
+        cos2 *= cos2;
+        float ring = 1.0 - smoothstep(6.0 * edge * 0.75, 6.0 * edge, cos2);
+        float inner = smoothstep(6.0 * edge, 10.0 * edge, cos2) * (1.0 - smoothstep(10.0 * edge, 14.0 * edge, cos2));
+        col = mix(col * (1.0 - 0.3 * inner), depthColor(offset, 0.7) * 1.15, 0.95 * ring);
 #endif
     } else if (h.kind > 0.0) {
         vec4 p = ro + rd * h.t;
