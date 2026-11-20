@@ -55,6 +55,7 @@ uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, s
 uniform int   uBurstCount;           // merge bursts
 uniform vec4  uBurstCenters[MAX_BURSTS]; // world centre of the merge
 uniform vec4  uBurstData[MAX_BURSTS]; // fruit radius, type, progress 0..1, power
+uniform float uCues;                // 0 hides depth rings, hints and glow (tutorial, 3D phase)
 uniform float uDanger;               // 0..1, the pile is near the rim
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
@@ -496,7 +497,7 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
         if (ring > 0.001) ring *= smoothstep(-0.15, 0.25, cos(12.0 * atan(plane.y, plane.x + 1e-6)));
         float fill = 0.08 * (1.0 - smoothstep(r - width, r, miss));
         float occluded = tc - r > sceneDist ? 0.35 : 1.0;
-        float a = d.w * occluded * (0.95 * ring + fill);
+        float a = d.w * occluded * (0.95 * ring + fill) * uCues;
         col = mix(col, depthColor(d.z), clamp(a, 0.0, 0.85));
     }
     return col;
@@ -702,7 +703,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
         // Same-kind glow: a pulsing light rim on the fruit itself (so it follows
         // the real silhouette), faster the closer its partner is in 4D.
-        float glow = uFruitGlow[fruit];
+        float glow = uFruitGlow[fruit] * uCues;
         if (glow > 0.0) {
             float rimG = pow(1.0 - abs(dot(n, rd)), 1.5);
             float pulse = 0.8 + 0.2 * sin(uTime * (3.0 + 6.0 * glow));
@@ -720,7 +721,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         cos2 *= cos2;
         float ring = 1.0 - smoothstep(6.0 * edge * 0.75, 6.0 * edge, cos2);
         float inner = smoothstep(6.0 * edge, 10.0 * edge, cos2) * (1.0 - smoothstep(10.0 * edge, 14.0 * edge, cos2));
-        col = mix(col * (1.0 - 0.3 * inner), depthColor(offset, 0.7) * 1.15, 0.95 * ring);
+        col = mix(col * (1.0 - 0.3 * inner * uCues), depthColor(offset, 0.7) * 1.15, 0.95 * ring * uCues);
 #endif
     } else if (h.kind > 0.0) {
         vec4 p = ro + rd * h.t;

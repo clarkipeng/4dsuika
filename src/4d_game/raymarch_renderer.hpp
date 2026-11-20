@@ -68,6 +68,7 @@ public:
     static constexpr int kMaxHints = 16;
     static constexpr int kMaxBursts = 8;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
+    bool cues4D = true;                       // false: no depth rings, hints, glow or slice indicator (the 3D start of the tutorial)
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
 
@@ -242,6 +243,7 @@ private:
         glm::vec4 gizmo(size * 1.9f, size * 1.9f, size, cam.offset / Camera4D::kOffsetMax);
         glUniform4fv(loc(present_, "uGizmo"), 1, glm::value_ptr(gizmo));
         glUniform1f(loc(present_, "uDim"), dim);
+        glUniform1f(loc(present_, "uShowGizmo"), cues4D ? 1.0f : 0.0f);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
         glBindVertexArray(0);
@@ -579,6 +581,7 @@ private:
             glUniform4fv(loc(prog, "uBurstData"), n, glm::value_ptr(data[0]));
         }
         glUniform1f(loc(prog, "uDanger"), danger_);
+        glUniform1f(loc(prog, "uCues"), cues4D ? 1.0f : 0.0f);
     }
 
     void uploadFruit(GLuint prog, const glm::vec4& camPos, const glm::vec4& normal) {

@@ -1,5 +1,7 @@
 #pragma once
 #include <limits>
+#include <fstream>
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -113,6 +115,17 @@ public:
     bool laneSnap = false;             // L: drops snap to whole w lanes
     static constexpr float kLaneSpacing = 1.0f;
     // Effects: merge bursts, the combo counter, the danger level (0..1).
+    // Tutorial: starts in 3D (no w strip, rings or slice indicator; 4D keys locked),
+    // then reveals 4D. Steps: 0 aim and drop, 1 merge, 2 turn the slice, 3 come back.
+    static constexpr int kTutorialSteps = 4;
+    bool tutorialActive = false;
+    int tutorialStep = 0;
+    bool tutorialSeen = true;          // interactive runs load this from disk
+    float tutorialTime = 0.0f;         // seconds in this step
+    int tutorialDrops = 0;             // drops in this step
+    int tutorialPoints = 0;
+    bool tutorialTurned = false;
+    bool FourDUnlocked() const { return !tutorialActive || tutorialStep >= 2; }
     bool effectsOn = true;             // Settings > Effects: bursts, combo, danger
     std::vector<BurstInstance> bursts;
     int combo = 0;                     // merges in a row, each within kComboWindow of the last
@@ -238,14 +251,15 @@ public:
         const float turnSpeed = 1.1f;  // rad/s at full tilt
         const float ease = 1.0f - std::exp(-dt * 10.0f);
         bool anyInput = false;
+        const float unlocked = FourDUnlocked() ? 1.0f : 0.0f; // the 3D start of the tutorial: no turns into w
         for (int i = 0; i < kTurnCount; ++i) {
             const TurnBinding& b = kTurnBindings[i];
-            float want = turnSpeed * (float(keyDown(b.keyPlus)) - float(keyDown(b.keyMinus)));
+            float want = unlocked * turnSpeed * (float(keyDown(b.keyPlus)) - float(keyDown(b.keyMinus)));
             anyInput |= want != 0.0f;
             turnVel[i] += (want - turnVel[i]) * ease;
             if (std::abs(turnVel[i]) > 1e-5f) state.cam.turnLocal(b.a, b.b, turnVel[i] * dt);
         }
-        float wantOffset = 1.5f * (float(keyDown(GLFW_KEY_W)) - float(keyDown(GLFW_KEY_S)));
+        float wantOffset = unlocked * 1.5f * (float(keyDown(GLFW_KEY_W)) - float(keyDown(GLFW_KEY_S)));
         anyInput |= wantOffset != 0.0f;
         offsetVel += (wantOffset - offsetVel) * ease;
         state.cam.moveAlongNormal(offsetVel * dt);
@@ -282,7 +296,8 @@ public:
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
         if (keyPressedOnce(GLFW_KEY_V)) showDepthStrip = !showDepthStrip;
-        if (keyPressedOnce(GLFW_KEY_L)) laneSnap = !laneSnap;
+        if (keyPressedOnce(GLFW_KEY_L) && FourDUnlocked()) laneSnap = !laneSnap;
+        if (keyPressedOnce(GLFW_KEY_F1) && tutorialActive) EndTutorial();
         if (keyPressedOnce(GLFW_KEY_M)) CycleViewMode(+1);
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
@@ -397,7 +412,91 @@ public:
         physics_solver->update(dt);
         total_points = physics_solver->total_points;
         UpdateEffects(dt);
+        UpdateTutorial(dt);
     }
+    // ---------------------------------------------------------------- tutorial
+
+    static std::string TutorialFile() {
+#ifdef __EMSCRIPTEN__
+        return "";
+#else
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        return home ? std::string(home) + "/.4dsuika-tutorial-done" : "";
+#endif
+    }
+
+    // Interactive runs only: the tutorial opens the first time the player presses Play.
+    void LoadTutorialState() {
+        std::string f = TutorialFile();
+        std::ifstream in(f);
+        tutorialSeen = f.empty() ? false : in.good();
+    }
+
+    void StartTutorial(int step) {
+        tutorialActive = true;
+        tutorialStep = step;
+        tutorialTime = 0.0f;
+        tutorialDrops = 0;
+        tutorialPoints = total_points;
+        tutorialTurned = false;
+        if (step >= 2) { showDepthStrip = true; }
+    }
+
+    void EndTutorial() {
+        tutorialActive = false;
+        tutorialSeen = true;
+        std::string f = TutorialFile();
+        if (!f.empty()) std::ofstream(f) << "1\n";
+    }
+
+    void NextTutorialStep() {
+        ++tutorialStep;
+        tutorialTime = 0.0f;
+        tutorialDrops = 0;
+        tutorialPoints = total_points;
+        tutorialTurned = false;
+        if (tutorialStep >= kTutorialSteps) EndTutorial();
+    }
+
+    void UpdateTutorial(float dt) {
+        if (!tutorialActive) return;
+        tutorialTime += dt;
+        float tilt = glm::degrees(state.cam.tilt());
+        switch (tutorialStep) {
+            case 0: if (tutorialDrops >= 1) NextTutorialStep(); break;
+            case 1: if (total_points > tutorialPoints || tutorialDrops >= 6) NextTutorialStep(); break;
+            case 2: if (tilt > 20.0f) NextTutorialStep(); break;
+            case 3:
+                if (tilt > 20.0f) tutorialTurned = true;
+                if ((tutorialTurned && tilt < 5.0f) || tutorialTime > 20.0f) NextTutorialStep();
+                break;
+        }
+    }
+
+    void RenderTutorial() {
+        if (!tutorialActive || sheetMode) return;
+        static const char* titles[] = {"AIM AND DROP", "MERGE", "THE BOWL IS 4D", "FRUIT HIDE IN W"};
+        static const char* lines[][2] = {
+            {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
+            {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
+            {"Everything here is a slice of a 4D world.", "Hold A or D to turn the slice into the fourth dimension."},
+            {"Fruit off the slice show as dashed rings; the bar below places every fruit in w.", "Press H or Space to come back to the default slice."},
+        };
+        const int s = std::min(tutorialStep, kTutorialSteps - 1);
+        const float w = std::clamp(Width * 0.5f, 340.0f, 780.0f), h = 92.0f;
+        const float bottom = (showDepthStrip && FourDUnlocked()) ? Height - DepthStripHeight() - 28.0f : Height - 24.0f;
+        const float x = (Width - w) * 0.5f, y = bottom - h;
+        FillRect(x, y, w, h, ui::kPanel, 0.92f);
+        FillRect(x, y, 4.0f, h, ui::kGold, 0.95f);
+        t_rend->RenderText(titles[s], x + 18.0f, y + 9.0f, 0.62f, ui::kGold);
+        for (int i = 0; i < 2; ++i)
+            t_rend->RenderText(lines[s][i], x + 18.0f, y + 33.0f + 20.0f * i, fitLabelScale(lines[s][i], w - 36.0f, 0.55f), ui::kCream);
+        for (int i = 0; i < kTutorialSteps; ++i)
+            FillCircle({x + w - 18.0f - 14.0f * (kTutorialSteps - 1 - i), y + 16.0f}, i == s ? 4.5f : 3.0f, ui::kGold, i <= s ? 0.95f : 0.3f, 12);
+        t_rend->RenderText("F1 skip", x + w - 58.0f, y + h - 18.0f, 0.4f, glm::vec3(0.7f, 0.65f, 0.6f));
+    }
+
     // Merge events become bursts; merges in quick succession count as a combo
     // (cosmetic: scoring is unchanged). Danger rises when settled fruit pile up
     // to the rim.
@@ -464,6 +563,7 @@ public:
         if (hit.hit) {
             physics_solver->addObject(PhysicsObject(DropCenter(hit), nextFruit, true, false));
             nextFruit = FruitManager::getRandomFruit();
+            ++tutorialDrops;
             ballPlaced = true;
             return true;
         }
@@ -481,6 +581,7 @@ public:
             fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
         }
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
+        renderer.cues4D = FourDUnlocked();
         renderer.setEffects(sheetMode ? std::vector<BurstInstance>{} : bursts, sheetMode ? 0.0f : danger);
         renderer.setPreview(aim.hit, DropCenter(aim),
                             FruitManager::getFruitProperties(nextFruit).radius, int(nextFruit));
@@ -565,7 +666,7 @@ public:
     float DepthStripHeight() const { return std::clamp(Height * 0.11f, 54.0f, 104.0f); }
 
     void RenderDepthStrip(const Hit4& hit) {
-        if (!showDepthStrip) return;
+        if (!showDepthStrip || !FourDUnlocked()) return;
         const glm::vec4 normal = state.cam.basis()[3];
         auto depth = [&](glm::vec4 p) { return glm::dot(p - boundary.center, normal); };
         const float slice = depth(state.cam.position());
@@ -769,8 +870,9 @@ public:
         }
         if (laneSnap) t_rend->RenderText("W-LANE SNAP  (L)", nextX + 10.0f, margin + panelHeight + 8.0f, 0.5f, ui::kGold);
         RenderEffectsUI();
-        RenderSliceLabel();
+        if (FourDUnlocked()) RenderSliceLabel();
         RenderDepthStrip(aim);
+        RenderTutorial();
         if (!caption.empty())
             t_rend->RenderText(caption, (Width - t_rend->GetTextWidth(caption, 0.9f)) * 0.5f, 25.0f, 0.9f, glm::vec3(1.0f, 0.92f, 0.75f));
         if (showPerf) {
@@ -835,7 +937,8 @@ public:
         st.hero = true;
         st.width = 360.0f;
         std::vector<MenuItem> items = {
-            MenuItem::button("Play", [this] { Reset(); }),
+            MenuItem::button("Play", [this] { Reset(); if (!tutorialSeen) StartTutorial(0); }),
+            MenuItem::button("Tutorial", [this] { Reset(); StartTutorial(0); }),
             MenuItem::button("Settings", [this] { Open(Page::Settings); }),
             MenuItem::button("Controls", [this] { Open(Page::Controls); }),
         };
