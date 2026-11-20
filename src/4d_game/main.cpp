@@ -95,6 +95,11 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --danger v             hold the danger level at v (0..1), for review stills
 //   --tutorial N           start the tutorial at step N (0 aim, 1 merge, 2 turn, 3 return), for stills
 //   --photo N              enter photo mode once N frames are recorded, replaying from the start (P in game)
+//   --no-ui                scene only: no HUD, depth strip, labels or caption (site clips)
+//   --log-events           print merges and danger as EV lines on stderr (to pick moments)
+//   --no-capture           with --record: write no frames (scout a play run for moments with --log-events)
+//   --capture-from s       with --record: simulate from the start but write frames only from s (recording time)
+//   --capture-ranges a-b,c-d  with --record: write frames only inside these recording-time ranges (consecutive numbering)
 //   --no-fx                no merge bursts, combo or danger (Settings > Effects)
 //   --no-glow              no same-kind glow (Settings > Merge glow)
 //   --lane-snap            drops snap to whole w lanes (L in game)
@@ -144,6 +149,9 @@ struct Options {
     bool perf = false;
     bool laneSnap = false;
     bool noGlow = false;
+    bool noUi = false, logEvents = false, noCapture = false;
+    float captureFrom = 0.0f;
+    std::vector<std::pair<float, float>> captureRanges;   // --capture-ranges a-b,c-d
     bool noFx = false;
     int photoAfter = -1;
     int tutorial = -1;
@@ -210,6 +218,18 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--lane-snap") o.laneSnap = true;
         else if (a == "--no-glow") o.noGlow = true;
         else if (a == "--no-fx") o.noFx = true;
+        else if (a == "--no-ui") o.noUi = true;
+        else if (a == "--log-events") o.logEvents = true;
+        else if (a == "--capture-ranges") {
+            std::stringstream ss(next());
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                size_t dash = item.find('-');
+                if (dash != std::string::npos) o.captureRanges.push_back({float(std::atof(item.substr(0, dash).c_str())), float(std::atof(item.substr(dash + 1).c_str()))});
+            }
+        }
+        else if (a == "--capture-from") o.captureFrom = float(std::atof(next().c_str()));
+        else if (a == "--no-capture") o.noCapture = true;   // with --record: simulate and render, write no frames (scouting)
         else if (a == "--photo") o.photoAfter = std::atoi(next().c_str());
         else if (a == "--tutorial") o.tutorial = std::atoi(next().c_str());
         else if (a == "--danger") o.danger = float(std::atof(next().c_str()));
@@ -830,6 +850,9 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.laneSnap = o.laneSnap;
     game.renderer.sameKindGlow = !o.noGlow;
     game.effectsOn = !o.noFx;
+    game.hideUI = o.noUi;
+    game.renderer.showGizmo = !o.noUi;
+    game.logEvents = o.logEvents;
     game.dangerOverride = o.danger;
     game.photoAutoAfter = o.warmup > 0.0f ? -1 : o.photoAfter; // after a warm-up, from the first recorded frame
     if (o.tutorial >= 0) game.StartTutorial(o.tutorial);
@@ -933,9 +956,16 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
             if (hasMouse) { game.showCursor = true; mouse.fromX = mouse.toX = 0.5f; mouse.fromY = mouse.toY = 0.62f; }
             printf("warm-up: %d drops, %d fruit in play, %d game overs, state %d\n", drops, activeObjectCount(), resets, int(game.State));
         }
+        auto inCapture = [&](float t) {
+            if (o.captureRanges.empty()) return t >= o.captureFrom;
+            for (const auto& r : o.captureRanges) if (t >= r.first && t < r.second) return true;
+            return false;
+        };
         for (int i = 0; i < total; ++i) {
             if (i % 12 == 0 && i / 12 < o.demo) dropDemoFruit(i / 12);
             pathTime = i * rec.dt();
+            // Before --capture-from nothing is written, so render small (the sim does not depend on it).
+            game.renderer.renderScale = (!inCapture(pathTime) ? 0.06f : o.scale) * game.renderer.maxScale(o.width, o.height);
             if (hasPath) path.apply(pathTime, game.state.cam);
             play(o.warmup + pathTime, rec.dt());
             if (hasMouse) { game.showCursor = true; mouse.step(pathTime); }
@@ -947,7 +977,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
             glViewport(0, 0, o.width, o.height);
             glClearColor(0, 0, 0, 1);
             game.Render();
-            rec.capture(o.width, o.height);
+            if (!o.noCapture && inCapture(pathTime)) rec.capture(o.width, o.height);
             if (i % o.fps == 0) { printf("\rframe %d / %d", i, total); fflush(stdout); }
         }
         printf("\n");

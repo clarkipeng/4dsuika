@@ -84,3 +84,13 @@ make turntable SUBJECT=pear,bowl TURNTABLE_DIR=/tmp/tt
 This writes `<subject>.mp4` (960×960, 30 fps, 15 s), `<subject>_sheet.png` (one row per plane, a column every 30°) and the frames in `<subject>/`.
 The binary alone takes `--turntable dir --subject all|fruit|bowl|<names> --sweep seconds` plus the usual `--size`, `--fps` and `--quality`; it writes the frames and sheets, `make turntable` adds the videos.
 The bowl turns about its glome's centre, the origin at its rim height: at yw 90° the slice is the rim's own hyperplane.
+
+## Site clips
+
+Clean captures for a portfolio site (3:2 hover clips and a 16:9 long cut): `--no-ui` hides the HUD, labels, caption and the corner gizmo (the scene, depth rings, drop ghost and merge bursts stay). Moments are found with a scouting run, then rendered with the same flags:
+
+- `--log-events` prints `EV t=... merge fruit=N combo=C`, `danger=D` and `gameover` lines (game time, including the warm-up) on stderr.
+- `--no-capture` runs everything and writes no frames (scout with `--scale 0.06`); `--capture-from s` and `--capture-ranges a-b,c-d` write frames only inside those recording-time ranges, numbered consecutively, and the scene renders small outside them (the sim does not depend on it).
+- The scripted player aims through the camera, so the play run depends on the camera path and on `--play`, `--size` and `--warmup`: scout and final render must use identical ones. Compare the EV lines of both runs to confirm.
+
+`docs/recording/paths/site-a.path` (hover clips, 18 s cycle of drift and 4D turns) and `site-long.path` (long cut, six 7 s scenes) are those paths. Hover clips used `--play 0.8 --warmup 10 --fps 30 --size 2400x1600 --lane-snap --no-ui`, cropped to 3:2 around the bowl; the long cut `--play 0.9 --warmup 10 --size 2560x1440`.

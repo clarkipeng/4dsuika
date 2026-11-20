@@ -158,6 +158,8 @@ public:
     bool photoSaveRequested = false;
     std::string photoToast;
     float photoToastTime = 0.0f;
+    bool logEvents = false;            // --log-events: print merges and danger (to pick reel moments)
+    bool hideUI = false;               // --no-ui: capture the scene only (no HUD, labels or overlay)
     bool effectsOn = true;             // Settings > Effects: bursts, combo, danger
     std::vector<BurstInstance> bursts;
     int combo = 0;                     // merges in a row, each within kComboWindow of the last
@@ -466,6 +468,7 @@ public:
 #ifndef __EMSCRIPTEN__
                 if (State == GAME_ACTIVE && loseSound != nullptr) Mix_PlayChannel(-1, loseSound, 0);
 #endif
+                if (logEvents && State == GAME_ACTIVE) fprintf(stderr, "EV t=%.2f gameover\n", time);
                 State = GAME_OVER;
                 return;
             }
@@ -680,6 +683,7 @@ public:
         if (!effectsOn) { physics_solver->takeMerges(); bursts.clear(); combo = 0; danger = 0.0f; return; }
         for (const auto& m : physics_solver->takeMerges()) {
             combo = comboTimer > 0.0f ? combo + 1 : 1;
+            if (logEvents) fprintf(stderr, "EV t=%.2f merge fruit=%d combo=%d\n", time, int(m.fruit), combo);
             comboTimer = kComboWindow;
             comboPop = 1.0f;
             bursts.push_back({m.position, m.radius, m.fruit, 0.0f, std::min(1.0f + 0.4f * float(combo - 1), 2.6f)});
@@ -704,6 +708,7 @@ public:
         }
         danger += (target - danger) * std::min(1.0f, dt * (target > danger ? 1.2f : 1.5f));
         if (dangerOverride >= 0.0f) danger = dangerOverride;
+        if (logEvents && danger > 0.15f && int(time * 4) != int((time - dt) * 4)) fprintf(stderr, "EV t=%.2f danger=%.2f\n", time, danger);
     }
 
     int Sound(){
@@ -1106,6 +1111,7 @@ public:
         Hit4 aim;
         if (!sheetMode) aim = getPlacementMouse(state, boundary, *physics_solver);
         RenderScene(aim, state.cam);
+        if (hideUI) return;
         RenderGameUI(aim);
         RenderInputOverlay();
     }
