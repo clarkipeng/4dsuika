@@ -14,6 +14,10 @@ The game plays with one hand on the mouse. The keyboard still works for everythi
 | Ctrl + wheel | | band width | |
 | Shift + wheel | zoom | zoom | zoom |
 
+## Views
+
+**M** (or Settings > View) cycles Slice (default), 4D eye, then thick slice at band 0.5, 1 and 2. A label bottom-left names the current view and the key, and the choice is saved for the next run. Ctrl+wheel fine-tunes the thick band.
+
 ## Why
 
 - **Left and right keep their meaning in every mode.** Aim, drop and orbit are what players already do, and orbiting is the same drag in 3D and 4D (it stays inside the slice and never rebakes it).

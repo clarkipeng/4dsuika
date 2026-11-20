@@ -115,6 +115,9 @@ public:
     // Mouse-first controls (docs/controls.md). The wheel is per view mode: it turns
     // the slice (Slice, Thick), or sets the w of the drop (4D eye); Shift+wheel
     // always zooms, Ctrl+wheel sets the band (Thick). Both targets glide.
+    Rot4 nextOrient;                   // orientation the next drop will have (the ghost shows it)
+    bool nextOrientValid = false;
+    Fruit nextOrientFor = CHERRY;
     float wheelTurn = 0.0f;           // wheel turn still to apply (rad, xw)
     float dropW = 0.0f, dropWShown = 0.0f; // drop's w offset: target, eased value
     static constexpr float kWheelStep = 0.09f;   // rad per notch (about 5 degrees)
@@ -743,12 +746,28 @@ public:
         return c;
     }
 
+    // The next drop's orientation is chosen up front, so the ghost in the air and
+    // where it lands show the exact silhouette the fruit will have (a falling
+    // fruit does not spin until it touches something).
+    const Rot4& NextOrientation() {
+        if (!nextOrientValid || nextOrientFor != nextFruit) {
+            PhysicsObject tmp(glm::vec4(0.0f), nextFruit, true, true);
+            nextOrient = tmp.orientation;
+            nextOrientFor = nextFruit;
+            nextOrientValid = true;
+        }
+        return nextOrient;
+    }
+
     // Drop the next fruit above whatever the cursor points at.
     bool DropFruit() {
         if (photo) return false;
         Hit4 hit = getPlacementMouse(state, boundary, *physics_solver);
         if (hit.hit) {
-            physics_solver->addObject(PhysicsObject(DropCenter(hit), nextFruit, true, false));
+            PhysicsObject dropped(DropCenter(hit), nextFruit, true, false);
+            dropped.orientation = NextOrientation();
+            physics_solver->addObject(dropped);
+            nextOrientValid = false;
             nextFruit = FruitManager::getRandomFruit();
             ++tutorialDrops;
             ballPlaced = true;
@@ -775,8 +794,14 @@ public:
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
         renderer.cues4D = FourDUnlocked();
         renderer.setEffects(sheetMode ? std::vector<BurstInstance>{} : bursts, sheetMode ? 0.0f : danger);
-        renderer.setPreview(aim.hit, DropCenter(aim),
-                            FruitManager::getFruitProperties(nextFruit).radius, int(nextFruit));
+        {
+            const float radius = FruitManager::getFruitProperties(nextFruit).radius;
+            const glm::vec4 spawn = DropCenter(aim);
+            glm::vec4 land;
+            const bool landed = aim.hit && !sheetMode && LandingPoint(spawn, radius, land);
+            renderer.setPreview(aim.hit, spawn, radius, int(nextFruit),
+                                glm::transpose(NextOrientation().matrix()), landed, land);
+        }
         renderer.draw(cam, FbWidth, FbHeight, time);
     }
 
@@ -798,14 +823,8 @@ public:
         float y = Height - std::max(size * 2.5f + 8.0f, clearance);
         t_rend->RenderText(buf, 12.0f, y, s, glm::vec3(0.95f, 0.9f, 0.85f));
         if (homing) t_rend->RenderText("returning to default slice", 12.0f, y + 15.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
-        if (renderer.viewMode != ViewMode::Slice) {
-            std::string view = std::string("view: ") + viewModeName(renderer.viewMode);
-            if (renderer.viewMode == ViewMode::Thick) {
-                snprintf(buf, sizeof buf, "   band +-%.2f", renderer.band);
-                view += buf;
-            }
-            t_rend->RenderText(view + "   (M)", 12.0f, y - 18.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
-        }
+        // Always shown, so the player knows which view they are in and which key changes it.
+        t_rend->RenderText("view: " + ViewLabel() + "   (M changes)", 12.0f, y - 18.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
     }
 
     static glm::vec3 FruitUiColor(int type) {
@@ -925,11 +944,10 @@ public:
 
     // First contact along world gravity with the current sphere colliders.
     // The pile may move before the dropped fruit reaches it.
-    void RenderDropGuide(const Hit4& hit) {
-        if (!hit.hit || renderer.viewMode == ViewMode::Eye) return;
-        const glm::vec4 spawn = DropCenter(hit);
+    // Where a fruit of `radius` dropped from `spawn` comes to rest first (the bowl,
+    // the rim or another fruit). False if nothing is below it.
+    bool LandingPoint(const glm::vec4& spawn, float radius, glm::vec4& land) const {
         const glm::vec4 down(0.0f, -1.0f, 0.0f, 0.0f);
-        const float radius = FruitManager::getFruitProperties(nextFruit).radius;
         float t0, t1;
         const float inner = boundary.radius - boundary.margin;
         glomeRoots(spawn, down, boundary.center, inner - radius, t0, t1);
@@ -949,8 +967,17 @@ public:
             glomeRoots(spawn, down, obj.position, obj.radius + radius, t0, t1);
             if (t1 > 0.0f) travel = std::min(travel, std::max(t0, 0.0f));
         }
-        if (!std::isfinite(travel)) return;
-        const glm::vec4 land = spawn + down * travel;
+        if (!std::isfinite(travel)) return false;
+        land = spawn + down * travel;
+        return true;
+    }
+
+    void RenderDropGuide(const Hit4& hit) {
+        if (!hit.hit || renderer.viewMode == ViewMode::Eye) return;
+        const glm::vec4 spawn = DropCenter(hit);
+        const float radius = FruitManager::getFruitProperties(nextFruit).radius;
+        glm::vec4 land;
+        if (!LandingPoint(spawn, radius, land)) return;
         auto project = [&](glm::vec4 p, glm::vec2& screen) {
             glm::vec2 ndc;
             if (!state.cam.project(p, float(Width) / std::max(Height, 1u), ndc)) return false;
@@ -969,13 +996,7 @@ public:
             DrawLine(a + heading * (d / len), a + heading * (std::min(d + stride * 0.55f, len - r) / len),
                      0.9f, ui::kCream, 0.85f);
         }
-        FillCircle(b, r, FruitUiColor(int(nextFruit)), 0.25f, 28);
-        for (int i = 0; i < 16; ++i) {
-            float angle = glm::two_pi<float>() * i / 16.0f;
-            float end = angle + glm::two_pi<float>() * 0.58f / 16.0f;
-            DrawLine(b + r * glm::vec2(std::cos(angle), std::sin(angle)),
-                     b + r * glm::vec2(std::cos(end), std::sin(end)), 1.0f, ui::kCream, 0.9f);
-        }
+        // The landing spot itself is drawn in the scene as the fruit's own silhouette (setPreview).
     }
 
     float fitLabelScale(const std::string& text, float width, float scale) {
@@ -1131,11 +1152,61 @@ public:
 
     static void CycleIndex(int& i, int dir, int count) { i = (i + dir + count) % count; }
 
-    // M or Settings > View: slice (the game), thick slice, 4D eye.
+    // M or Settings > View cycles Slice (the game, the default), 4D eye, then the
+    // thick slice at three bands. The choice is saved for the next run.
+    struct ViewChoice { ViewMode mode; float band; };
+    static constexpr int kViewCount = 5;
+    static ViewChoice ViewAt(int i) {
+        static const ViewChoice v[kViewCount] = {{ViewMode::Slice, 1.0f}, {ViewMode::Eye, 1.0f},
+                                                 {ViewMode::Thick, 0.5f}, {ViewMode::Thick, 1.0f}, {ViewMode::Thick, 2.0f}};
+        return v[i];
+    }
+    int ViewIndex() const {
+        if (renderer.viewMode == ViewMode::Slice) return 0;
+        if (renderer.viewMode == ViewMode::Eye) return 1;
+        int best = 2;
+        for (int i = 2; i < kViewCount; ++i)
+            if (std::abs(ViewAt(i).band - renderer.band) < std::abs(ViewAt(best).band - renderer.band)) best = i;
+        return best;
+    }
+    std::string ViewLabel() const {
+        if (renderer.viewMode != ViewMode::Thick) return viewModeName(renderer.viewMode);
+        char buf[48];
+        snprintf(buf, sizeof buf, "Thick slice +-%.2f", renderer.band);
+        return buf;
+    }
+    void SetView(ViewMode m, float band) {
+        renderer.viewMode = m;
+        renderer.band = glm::clamp(band, RaymarchRenderer::kBandMin, RaymarchRenderer::kBandMax);
+    }
+    static std::string ViewFile() {
+#ifdef __EMSCRIPTEN__
+        return "";
+#else
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        return home ? std::string(home) + "/.4dsuika-view" : "";
+#endif
+    }
+    void SaveView() const {
+        std::string f = ViewFile();
+        if (f.empty()) return;
+        const ViewChoice c = ViewAt(ViewIndex());
+        std::ofstream(f) << (c.mode == ViewMode::Slice ? "slice" : c.mode == ViewMode::Eye ? "eye" : "thick") << " " << renderer.band << "\n";
+    }
+    // Interactive runs only: Slice unless the player chose another view last time.
+    void LoadView() {
+        std::ifstream in(ViewFile());
+        std::string name;
+        float band = 1.0f;
+        if (!(in >> name)) return;
+        in >> band;
+        SetView(name == "eye" ? ViewMode::Eye : name == "thick" ? ViewMode::Thick : ViewMode::Slice, band);
+    }
     void CycleViewMode(int dir) {
-        int m = int(renderer.viewMode);
-        CycleIndex(m, dir, 3);
-        renderer.viewMode = ViewMode(m);
+        const ViewChoice c = ViewAt((ViewIndex() + dir + kViewCount) % kViewCount);
+        SetView(c.mode, c.band);
+        SaveView();
     }
 
     // Rebuilds the menu when the screen it shows changes.
@@ -1217,7 +1288,7 @@ public:
         items.push_back(MenuItem::choice("Render scale", [this] {
                 return scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
             }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
-        items.push_back(MenuItem::choice("View", [this] { return std::string(viewModeName(renderer.viewMode)); },
+        items.push_back(MenuItem::choice("View", [this] { return ViewLabel(); },
             [this](int d) { CycleViewMode(d); }));
         items.push_back(MenuItem::slider("Band width", [this] {
                 return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
@@ -1268,7 +1339,7 @@ public:
         items.push_back(MenuItem::info("L", "snap drops to whole w lanes"));
         items.push_back(MenuItem::info("P", "photo mode: replay the last 10 s, slice and 4D eye side by side"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
-        items.push_back(MenuItem::info("M", "view: slice, thick slice, 4D eye"));
+        items.push_back(MenuItem::info("M", "change view: slice, 4D eye, thick slice"));
         items.push_back(MenuItem::info("Esc", "pause"));
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
         menu.set(std::move(items), std::move(st));

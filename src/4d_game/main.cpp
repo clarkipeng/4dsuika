@@ -105,7 +105,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //                          visible cursor and a caption naming each input. Lines are
 //                          `t=SEC action args`: move X Y [over S] (0..1 of the window),
 //                          down|up left|right|middle, scroll N, mods shift|ctrl|none,
-//                          caption TEXT, view slice|thick|eye, home, dropw V.
+//                          caption TEXT, view slice|thick|eye, cycle (M), home, dropw V.
 //                          The scripted player is off after the warm-up.
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -412,6 +412,9 @@ struct MouseScript {
                 game.inputCaption = e.arg;
             } else if (e.act == "view") {
                 game.renderer.viewMode = e.arg == "thick" ? ViewMode::Thick : e.arg == "eye" ? ViewMode::Eye : ViewMode::Slice;
+            } else if (e.act == "cycle") {   // M, without saving the choice
+                const Game::ViewChoice c = Game::ViewAt((game.ViewIndex() + 1) % Game::kViewCount);
+                game.SetView(c.mode, c.band);
             } else if (e.act == "home") {
                 game.homing = true;
             } else if (e.act == "dropw") {
@@ -1231,6 +1234,7 @@ int main(int argc, char* argv[])
         game.SetAudioState(sdlReady, audioReady, opt.muted());
         game.Init(window);
         game.LoadTutorialState();
+        game.LoadView();
         game.photoSaver = [](const std::string& path) { return savePng(path, game.FbWidth, game.FbHeight); };
 
 #ifndef __EMSCRIPTEN__
