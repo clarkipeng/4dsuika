@@ -52,6 +52,10 @@ uniform vec4  uGhostFade[MAX_FRUIT / 4]; // per ghost, packed by 4: opacity, sig
 uniform int   uHintCount;            // fruit just off the slice
 uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
 uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
+uniform int   uBurstCount;           // merge bursts
+uniform vec4  uBurstCenters[MAX_BURSTS]; // world centre of the merge
+uniform vec4  uBurstData[MAX_BURSTS]; // fruit radius, type, progress 0..1, power
+uniform float uDanger;               // 0..1, the pile is near the rim
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform float uFogStart;             // distance where fog begins (just past the orbit target)
@@ -498,6 +502,45 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     return col;
 }
 
+// ---------------------------------------------------------------- merge bursts
+//
+// A merge sends out a shell in 4D, from the fruit's radius to about 2.6 times
+// it. The slice sees the shell's cross-section, a ring that grows, thins and
+// fades, with sparks along it and a flash at the middle early on. A shell
+// the slice misses does not show, which is the point: turn to where it went.
+
+vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    for (int i = 0; i < MAX_BURSTS; ++i) {
+        if (i >= uBurstCount) break;
+        vec4 d = uBurstData[i];
+        float t = d.z;
+        float grow = 1.0 - (1.0 - t) * (1.0 - t);
+        float R = d.x * (1.0 + 1.6 * grow);
+        float off = dot(uBurstCenters[i] - ro, uCameraBasis[3]);
+        if (abs(off) >= R) continue;
+        vec4 c = uBurstCenters[i] - off * uCameraBasis[3];
+        float tc = dot(c - ro, rd);
+        if (tc <= 0.0) continue;
+        float section = sqrt(R * R - off * off);
+        vec4 delta = ro + rd * tc - c;
+        float miss = length(delta);
+        float width = max((3.5 - 2.0 * t) * pixel * tc, 0.04 * R);
+        float e = (miss - section) / width;
+        float ring = exp(-e * e);
+        vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
+        float ang = atan(plane.y, plane.x + 1e-6);
+        float sparks = exp(-4.0 * pow(abs(sin(7.0 * ang + 3.0 * t)), 0.5)) * smoothstep(-section * 0.1, section * 0.5, miss)
+                       * (1.0 - smoothstep(section * 0.75, section * 1.05, miss));
+        float flash = exp(-miss * miss / (d.x * d.x * 0.9)) * (1.0 - smoothstep(0.0, 0.4, t));
+        float fade = pow(1.0 - t, 1.4) * d.w;
+        float occluded = tc - section > sceneDist ? 0.35 : 1.0;
+        vec3 tint = mix(fruitBaseColor(d.y) * 1.6, vec3(1.0, 0.95, 0.78), 0.55);
+        col += tint * (1.1 * ring + 0.55 * sparks + 1.2 * flash) * fade * occluded;
+    }
+    return col;
+}
+
 // ---------------------------------------------------------------- thick slice
 //
 // Ghosts of the fruit within the band off the slice (the host moved each into
@@ -686,8 +729,10 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
                     wrapOf(h.kind), light);
         if (h.kind == MAT_BOWL) {
             vec3 radial = normalize(p.xzw);
-            float lip = 1.0 - smoothstep(0.018, 0.065, abs(p.y - bowlLipY(radial) + 0.027));
-            col += vec3(1.0, 0.72, 0.42) * (0.075 * lip);
+            float lip = 1.0 - smoothstep(0.018, 0.065 * (1.0 + 2.5 * uDanger), abs(p.y - bowlLipY(radial) + 0.027));
+            // Danger: the rim turns red and pulses as the pile nears it.
+            float alarm = uDanger * (0.55 + 0.45 * sin(uTime * 7.0));
+            col += mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.10, 0.05), uDanger) * ((0.075 + 0.9 * alarm) * lip);
         }
     }
 
@@ -705,6 +750,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     }
 
     col = drawHints(col, ro, rd, dist);
+    col = drawBursts(col, ro, rd, dist);
 
     // Ghost of the next drop, blended over the scene.
     if (uPreviewData.x > 0.0) {

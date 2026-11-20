@@ -30,6 +30,18 @@ struct PhysicSolver
 
     std::atomic<int> total_points = 0;
     std::atomic<int> just_merged =0;
+
+    // Where merges happened, for effects; filled from the collision threads,
+    // drained by the game.
+    struct MergeEvent { glm::vec4 position; int fruit; float radius; };
+    std::mutex merge_mutex;
+    std::vector<MergeEvent> merge_events;
+    std::vector<MergeEvent> takeMerges() {
+        std::lock_guard<std::mutex> lock(merge_mutex);
+        std::vector<MergeEvent> out;
+        out.swap(merge_events);
+        return out;
+    }
     // glm::vec4                   gravity = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Simulation solving pass count
@@ -93,6 +105,10 @@ struct PhysicSolver
                 obj_1.angular_velocity = merged_spin;
                 obj_1.addRollingSpin(normal, tangent_velocity, 0.45f);
                 obj_1.flash = 1.0f;
+                {
+                    std::lock_guard<std::mutex> lock(merge_mutex);
+                    merge_events.push_back({obj_1.position, int(obj_1.fruit), obj_1.radius});
+                }
                 
                 // Preserve momentum but dampen it slightly
                 glm::vec4 combined_vel = (vel_1 + vel_2) * 0.0f;

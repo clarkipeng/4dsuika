@@ -93,6 +93,8 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //                          scripted playtest: dir/view-<v>.png (early, mid, next merge),
 //                          all in dir/compare.png, and a 10 s clip of play turning in 4D
 //                          (frames in dir/view-<v>/; `make view-compare` adds the videos)
+//   --danger v             hold the danger level at v (0..1), for review stills
+//   --no-fx                no merge bursts, combo or danger (Settings > Effects)
 //   --no-glow              no same-kind glow (Settings > Merge glow)
 //   --lane-snap            drops snap to whole w lanes (L in game)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
@@ -135,6 +137,8 @@ struct Options {
     bool perf = false;
     bool laneSnap = false;
     bool noGlow = false;
+    bool noFx = false;
+    float danger = -1.0f;
     bool noCache = false;
     bool singlePass = false;
     float benchTurn = 0.0f;
@@ -196,6 +200,8 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--perf") o.perf = true;
         else if (a == "--lane-snap") o.laneSnap = true;
         else if (a == "--no-glow") o.noGlow = true;
+        else if (a == "--no-fx") o.noFx = true;
+        else if (a == "--danger") o.danger = float(std::atof(next().c_str()));
         else if (a == "--no-cache") o.noCache = true;
         else if (a == "--single-pass") o.singlePass = true;
         else if (a == "--bench-turn") o.benchTurn = std::atof(next().c_str());
@@ -736,6 +742,8 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.showPerf = o.perf;
     game.laneSnap = o.laneSnap;
     game.renderer.sameKindGlow = !o.noGlow;
+    game.effectsOn = !o.noFx;
+    game.dangerOverride = o.danger;
     game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.renderer.useCache = !o.noCache;
