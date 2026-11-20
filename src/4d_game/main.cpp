@@ -71,7 +71,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --focus N              focused menu row (for screenshots of the focus state)
 //   --turn xw:30,yw:0,zw:0,xy:0   4D turns in degrees, camera-local planes
 //   --orbit yaw,pitch      degrees
-//   --distance d           camera distance from the bowl (default 13; 34 frames the island)
+//   --distance d           camera distance from the bowl (default 9.2; 34 frames the island)
 //   --offset v             slice offset along its normal
 //   --demo N               drop N fruit and let them settle first
 //   --frames N             frames simulated before the capture (default 90, more with --demo)
@@ -561,7 +561,7 @@ static int runTurntable(const Options& o, GLuint fbo) {
 }
 
 // View-mode comparison (docs/4D.md, "View modes"): every view and every useful
-// combination with game's w-depth inset, on the same scripted-playtest run.
+// combination with game's w-depth strip, on the same scripted-playtest run.
 // One simulation drives all views at once, so each view sees exactly the same
 // game: a still per view of three moments (early, mid, the next merge), all of
 // them in compare.png, and a 10 s clip per view of real play around the mid
