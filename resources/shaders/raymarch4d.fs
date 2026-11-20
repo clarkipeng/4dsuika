@@ -47,8 +47,6 @@ uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, facet seed
 uniform float uFruitGlow[MAX_FRUIT]; // 0..1, a same-kind fruit is close in 4D
 uniform mat4  uFruitWorldToLocal[MAX_FRUIT]; // rotates (p - centre) into the fruit frame
-uniform int   uGhostCount;           // thick slice: ghosts follow the fruit in the arrays above
-uniform vec4  uGhostFade[MAX_FRUIT / 4]; // per ghost, packed by 4: opacity, signed by its side of the slice
 uniform int   uHintCount;            // fruit just off the slice
 uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
 uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed gap to the slice, strength 0..1
@@ -544,39 +542,6 @@ vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     return col;
 }
 
-// ---------------------------------------------------------------- thick slice
-//
-// Ghosts of the fruit within the band off the slice (the host moved each into
-// the slice from the offset where it is largest), see-through, drawn back to
-// front over the scene up to `limit`, tinted by their side like the hints.
-
-vec3 drawGhosts(vec3 col, vec4 ro, vec4 rd, float limit) {
-    float pixel = 2.0 * uTanHalfFov / uResolution.y;
-    for (int j = 0; j < MAX_FRUIT; ++j) {
-        if (j >= uGhostCount) break;
-        int i = uFruitCount + j;
-        vec4 d = uFruitData[i];
-        float t0, t1;
-        if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= limit) continue;
-        float lod = fruitLod(d.x, t0, pixel);
-        float t = fruitMarch(fruitLocalPoint(i, ro), fruitLocalVector(i, rd), d, t0, min(t1, limit), lod);
-        if (t <= 0.0) continue;
-        vec4 p = ro + rd * t;
-        vec4 q = fruitLocalPoint(i, p);
-        vec4 ns = lod > 0.0 ? fruitWorldNormal(i, q, d, lod) : normalize(p - uFruitCenters[i]);
-        // A ghost says "this fruit reaches here in w", so it is a tinted outline
-        // with a faint fill, not a second shaded fruit (which read as bubbles
-        // around the real cross-section, and beads on a grape cluster).
-        float a = uGhostFade[j / 4][j % 4];
-        vec3 side = a > 0.0 ? vec3(0.45, 0.75, 1.0) : vec3(1.0, 0.55, 0.35);
-        float rim = pow(1.0 - abs(dot(ns, rd)), 2.0);
-        vec3 albedo = fruitBaseColor(d.y);
-        vec3 g = mix(albedo * 0.8, side, 0.55) * (0.75 + 0.5 * rim);
-        col = mix(col, g, abs(a) * (0.07 + 0.80 * smoothstep(0.35, 0.95, rim)));
-    }
-    return col;
-}
-
 // A translucent copy of the next fruit (same model and SDF, same orientation)
 // at `center`: faint body, brighter rim.
 vec3 drawDropGhost(vec3 col, vec4 ro, vec4 rd, float dist, vec4 center, float alpha) {
@@ -766,21 +731,13 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
     if (fog > 0.002) col = mix(col, background(px, rd), fog);
 
-    // Ghosts see through the bowl (x-ray) up to its far wall.
-    if (uGhostCount > 0) {
-        float limit = dist;
-        float t0, t1;
-        if (h.kind == MAT_BOWL && glomeSpan(ro, rd, vec4(0.0), BOWL_R + BOWL_HALF, t0, t1)) limit = max(limit, t1);
-        col = drawGhosts(col, ro, rd, limit);
-    }
-
     col = drawHints(col, ro, rd, dist);
     col = drawBursts(col, ro, rd, dist);
 
     // Ghosts of the next drop (in the air) and where it lands: the fruit's own
     // SDF in its own orientation, translucent, so the outline is the real shape.
     if (uPreviewData.x > 0.0) {
-        float limit = dist;   // x-ray through the bowl's near wall, as thick-slice ghosts do
+        float limit = dist;   // x-ray through the bowl's near wall, 
         float t0, t1;
         if (h.kind == MAT_BOWL && glomeSpan(ro, rd, vec4(0.0), BOWL_R + BOWL_HALF, t0, t1)) limit = max(limit, t1);
         if (uLandCenter.w > -1e5) col = drawDropGhost(col, ro, rd, limit, uLandCenter, 0.45);

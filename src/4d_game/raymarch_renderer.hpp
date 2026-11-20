@@ -51,9 +51,9 @@ enum class Quality { Low = 0, Medium = 1, High = 2, Ultra = 3 };
 
 // How the 4D scene is shown (docs/4D.md, "View modes"). Slice is the game's
 // view; the others are for comparison and are off by default.
-enum class ViewMode { Slice = 0, Thick = 1, Eye = 2 };
+enum class ViewMode { Slice = 0, Eye = 1 };
 inline const char* viewModeName(ViewMode m) {
-    static const char* names[] = {"Slice", "Thick slice", "4D eye"};
+    static const char* names[] = {"Slice", "4D eye"};
     return names[int(m)];
 }
 
@@ -88,8 +88,6 @@ public:
     bool useCache = true;     // slice cache on (falls back to analytic if unsupported)
     bool useDeferred = true;  // three scene passes with half-resolution lighting (if supported)
     ViewMode viewMode = ViewMode::Slice;
-    float band = 1.0f;        // thick slice: how far off the slice (either side) fruit still show
-    static constexpr float kBandMin = 0.25f, kBandMax = 3.0f;
     std::string extraDefines; // added to the scene and bake shaders on the next setQuality
 
     // GPU time of the last cache bake in ms, and how many bakes ran.
@@ -598,62 +596,37 @@ private:
         // Rays never leave the slice, so a fruit is visible only if its glome
         // crosses the slice hyperplane; fruit within kHintRange beyond that
         // become depth hints. Nearest (to the camera, then the slice) first.
-        // Thick slice: every fruit that reaches into the band |offset| <= band
-        // also shows as a ghost, its cross-section at the offset in the band
-        // nearest its centre (the largest it has there), moved into the slice
-        // and faded by that offset.
         using Entry = std::pair<float, const FruitInstance*>;
         std::vector<Entry> visible, nearby; // (not "near": a Windows macro)
-        struct Ghost { float dist, shift; const FruitInstance* f; };
-        std::vector<Ghost> ghosts;
-        const bool thick = viewMode == ViewMode::Thick;
         for (const auto& f : fruit_) {
             float off = glm::dot(f.center - camPos, normal);
             float gap = std::abs(off) - f.radius;
-            float shift = std::clamp(off, -band, band);
-            bool ghost = thick && std::abs(off - shift) < f.radius && std::abs(off) > 0.05f * f.radius;
-            if (ghost) ghosts.push_back({glm::length(f.center - camPos), shift, &f});
             if (viewMode == ViewMode::Eye) visible.push_back({glm::length(f.center - camPos), &f}); // 4D rays see all
             else if (gap < 0.0f) visible.push_back({glm::length(f.center - camPos), &f});
-            else if (gap < kHintRange && !ghost) nearby.push_back({gap, &f});
+            else if (gap < kHintRange) nearby.push_back({gap, &f});
         }
         auto byKey = [](const Entry& a, const Entry& b) { return a.first < b.first; };
         std::sort(visible.begin(), visible.end(), byKey);
         std::sort(nearby.begin(), nearby.end(), byKey);
 
-        // Solid fruit first, then ghosts far to near (drawn back to front),
-        // sharing the arrays.
         int n = std::min<int>(int(visible.size()), kMaxFruit);
-        int g = std::min<int>(int(ghosts.size()), kMaxFruit - n);
-        std::sort(ghosts.begin(), ghosts.end(), [](const Ghost& a, const Ghost& b) { return a.dist < b.dist; });
-        ghosts.resize(g); // the nearest g, then far to near
-        std::reverse(ghosts.begin(), ghosts.end());
-        std::vector<glm::vec4> centers(n + g), data(n + g), fade((g + 3) / 4 + 1, glm::vec4(0.0f));
-        std::vector<float> glow(n + g, 0.0f);
-        std::vector<glm::mat4> world_to_local(n + g);
-        for (int i = 0; i < n + g; ++i) {
-            const FruitInstance& f = i < n ? *visible[i].second : *ghosts[i - n].f;
+        std::vector<glm::vec4> centers(n), data(n);
+        std::vector<float> glow(n, 0.0f);
+        std::vector<glm::mat4> world_to_local(n);
+        for (int i = 0; i < n; ++i) {
+            const FruitInstance& f = *visible[i].second;
             centers[i] = f.center;
             data[i] = glm::vec4(f.radius, float(f.type), f.flash, float(f.id + 1));
             world_to_local[i] = f.worldToLocal;
-            if (i < n) glow[i] = glowOf(f);
-            if (i >= n) {
-                float shift = ghosts[i - n].shift;
-                centers[i] -= shift * normal;
-                // Opacity, signed by the side of the slice.
-                float a = 0.8f * (1.0f - std::abs(shift) / band);
-                fade[(i - n) / 4][(i - n) % 4] = shift > 0.0f ? a : -a;
-            }
+            glow[i] = glowOf(f);
         }
         glUniform1i(loc(prog, "uFruitCount"), n);
-        glUniform1i(loc(prog, "uGhostCount"), g);
-        if (n + g > 0) {
-            glUniform4fv(loc(prog, "uFruitCenters"), n + g, glm::value_ptr(centers[0]));
-            glUniform4fv(loc(prog, "uFruitData"), n + g, glm::value_ptr(data[0]));
-            glUniform1fv(loc(prog, "uFruitGlow"), n + g, glow.data());
-            glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n + g, GL_FALSE, glm::value_ptr(world_to_local[0]));
+        if (n > 0) {
+            glUniform4fv(loc(prog, "uFruitCenters"), n, glm::value_ptr(centers[0]));
+            glUniform4fv(loc(prog, "uFruitData"), n, glm::value_ptr(data[0]));
+            glUniform1fv(loc(prog, "uFruitGlow"), n, glow.data());
+            glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n, GL_FALSE, glm::value_ptr(world_to_local[0]));
         }
-        if (g > 0) glUniform4fv(loc(prog, "uGhostFade"), int(fade.size()) - 1, glm::value_ptr(fade[0]));
 
         int h = std::min<int>(int(nearby.size()), kMaxHints);
         std::vector<glm::vec4> hc(h), hd(h);
