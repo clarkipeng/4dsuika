@@ -110,6 +110,8 @@ public:
     glm::vec2 orbitVel{0.0f};         // mouse-orbit glide after release (rad/s)
     float time = 0.0f;
     bool showPerf = false;            // F3: GPU time and render scale
+    bool laneSnap = false;             // L: drops snap to whole w lanes
+    static constexpr float kLaneSpacing = 1.0f;
     bool showDepthStrip = true;        // V: bottom strip of depth along the slice normal
 
     // Fruit sheet (headless --fruit-sheet): fixed fruit instead of physics, labelled.
@@ -271,6 +273,7 @@ public:
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
         if (keyPressedOnce(GLFW_KEY_V)) showDepthStrip = !showDepthStrip;
+        if (keyPressedOnce(GLFW_KEY_L)) laneSnap = !laneSnap;
         if (keyPressedOnce(GLFW_KEY_M)) CycleViewMode(+1);
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
@@ -394,8 +397,22 @@ public:
         return 0;
     }
 
-    static glm::vec4 DropCenter(const Hit4& hit) {
-        return hit.point + glm::vec4(0.0f, 3.0f, 0.0f, 0.0f);
+    // Above what the cursor points at; with lane snap, moved along world w to
+    // the nearest lane (every kLaneSpacing from the bowl's centre), or the
+    // next lane towards the centre if that one would fall outside the bowl,
+    // so a 4D aim is a choice of lane.
+    glm::vec4 DropCenter(const Hit4& hit) const {
+        glm::vec4 c = hit.point + glm::vec4(0.0f, 3.0f, 0.0f, 0.0f);
+        if (!laneSnap) return c;
+        const float reach = (boundary.radius - boundary.margin) * std::sin(boundary.cutoffAngle) - 0.3f;
+        float w = c.w - boundary.center.w;
+        float lane = std::round(w / kLaneSpacing);
+        for (; ; lane -= (lane > 0.0f) - (lane < 0.0f)) {
+            glm::vec3 radial(c.x - boundary.center.x, c.z - boundary.center.z, lane * kLaneSpacing);
+            if (glm::length(radial) <= reach || lane == 0.0f) break;
+        }
+        c.w = boundary.center.w + lane * kLaneSpacing;
+        return c;
     }
 
     // Drop the next fruit above whatever the cursor points at.
@@ -535,6 +552,13 @@ public:
             float tick = screenX(span * i / 3.0f);
             DrawLine({tick, rail - 4.0f}, {tick, rail + 4.0f}, 0.6f, ui::kCream, 0.45f);
         }
+        if (laneSnap) { // the world-w lanes, as they lie along the slice normal
+            for (int k = -int(span / kLaneSpacing) - 1; k <= int(span / kLaneSpacing) + 1; ++k) {
+                float lane = k * kLaneSpacing * normal.w;
+                if (std::abs(lane) > span) continue;
+                DrawLine({screenX(lane), y + 6.0f}, {screenX(lane), rail}, 0.7f, ui::kGold, 0.35f);
+            }
+        }
         const float marker = screenX(slice);
         DrawLine({marker, y + 4.0f}, {marker, y + h - 5.0f}, 1.8f, ui::kCream, 0.95f);
         t_rend->RenderText("-w", x + 7.0f, y + h * 0.40f, 0.55f, DepthUiColor(-span - slice));
@@ -657,6 +681,7 @@ public:
         FillCircle({nextX + 19.0f, cy}, 8.0f, FruitUiColor(int(nextFruit)), 1.0f);
         t_rend->RenderText(next, nextX + 32.0f, cy - 10.0f,
                            fitLabelScale(next, panelWidth - 40.0f, 0.75f), ui::kCream);
+        if (laneSnap) t_rend->RenderText("W-LANE SNAP  (L)", nextX + 10.0f, margin + panelHeight + 8.0f, 0.5f, ui::kGold);
         RenderSliceLabel();
         RenderDepthStrip(aim);
         if (!caption.empty())
@@ -784,6 +809,8 @@ public:
                 return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
             }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
+        items.push_back(MenuItem::choice("W-lane snap", [this] { return std::string(laneSnap ? "On" : "Off"); },
+            [this](int) { laneSnap = !laneSnap; }));
         items.push_back(MenuItem::choice("W-depth strip", [this] { return std::string(showDepthStrip ? "On" : "Off"); },
             [this](int) { showDepthStrip = !showDepthStrip; }));
 #ifndef __EMSCRIPTEN__
@@ -816,6 +843,7 @@ public:
         items.push_back(MenuItem::info("W / S", "move the slice along the 4th axis"));
         items.push_back(MenuItem::info("H / Space", "back to the default slice"));
         items.push_back(MenuItem::info("V", "toggle the bottom w strip"));
+        items.push_back(MenuItem::info("L", "snap drops to whole w lanes"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
         items.push_back(MenuItem::info("M", "view: slice, thick slice, 4D eye"));
         items.push_back(MenuItem::info("Esc", "pause"));

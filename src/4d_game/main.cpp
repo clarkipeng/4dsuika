@@ -93,6 +93,7 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //                          scripted playtest: dir/view-<v>.png (early, mid, next merge),
 //                          all in dir/compare.png, and a 10 s clip of play turning in 4D
 //                          (frames in dir/view-<v>/; `make view-compare` adds the videos)
+//   --lane-snap            drops snap to whole w lanes (L in game)
 //   --cursor x,y           mouse position in pixels (for the drop preview)
 //   --fruit-sheet out.png  all 11 fruit in a labelled row, at tilt 0 and after
 //                          --sheet-turn (default yw:35), stacked in one image
@@ -131,6 +132,7 @@ struct Options {
     std::string quality = "high";
     bool adaptive = false;
     bool perf = false;
+    bool laneSnap = false;
     bool noCache = false;
     bool singlePass = false;
     float benchTurn = 0.0f;
@@ -190,6 +192,7 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--quality") o.quality = next();
         else if (a == "--adaptive") o.adaptive = true;
         else if (a == "--perf") o.perf = true;
+        else if (a == "--lane-snap") o.laneSnap = true;
         else if (a == "--no-cache") o.noCache = true;
         else if (a == "--single-pass") o.singlePass = true;
         else if (a == "--bench-turn") o.benchTurn = std::atof(next().c_str());
@@ -728,6 +731,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     // are reproducible; adaptive resolution is for live play.
     game.renderer.adaptive = o.adaptive;
     game.showPerf = o.perf;
+    game.laneSnap = o.laneSnap;
     game.renderer.renderScale = o.scale * game.renderer.maxScale(o.width, o.height);
     if (o.facet >= 0.0f) game.renderer.facet = o.facet;
     game.renderer.useCache = !o.noCache;
