@@ -56,6 +56,12 @@ A scripted player drops the next fruit every 0.9 s through the real cursor path,
 It plays 30 s off camera first (`--warmup`), so the bowl is busy when the video starts, while `docs/recording/paths/gameplay.path` keeps the camera on the bowl and turns the slice through xw, yw and zw.
 The binary takes `--play s` (seconds between drops) and `--warmup s` alongside `--record`; it prints how many drops and game overs there were.
 
+`docs/recording/paths/features.path` is a 26 s variant for the website: slower drops (`--play 1.3`, 25 s warmup, `--lane-snap`) so the bowl never overflows mid-reel, and a plain slice for the first 7 s before the slice turns.
+
+```bash
+./build/4d_game --headless --mute --record DIR --camera-path docs/recording/paths/features.path --play 1.3 --warmup 25 --seconds 26 --fps 30 --size 1920x1080 --lane-snap
+```
+
 ## 4D turntable
 
 A review video and contact sheet per subject: one fruit, or the bowl, alone and centred against a plain backdrop, while the slice turns 0 to 180° through xw, then yw, then zw.

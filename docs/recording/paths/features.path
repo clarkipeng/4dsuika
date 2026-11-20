@@ -1,0 +1,9 @@
+# Feature reel for the store page and website (26 s): the bowl in its plain slice
+# first (depth rings, drop guide, merge bursts), then the slice turns through xw,
+# yw and zw so the 4D reveal shows rings, glow and the w strip changing.
+t=0   yaw=-15 pitch=-24 distance=10.5
+t=7   yaw=15  pitch=-25 distance=10
+t=10  yaw=25  pitch=-26 distance=10   xw=30
+t=15  yaw=35  pitch=-27 distance=10   xw=70 yw=15 offset=0.5
+t=20  yaw=10  pitch=-25 distance=10.5 xw=40 yw=35 zw=20 offset=-0.4
+t=26  yaw=-25 pitch=-25 distance=11   xw=0  yw=0  zw=0 offset=0
