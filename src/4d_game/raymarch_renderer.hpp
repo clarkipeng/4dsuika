@@ -68,6 +68,7 @@ public:
     static constexpr int kMaxHints = 16;
     static constexpr int kMaxBursts = 8;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
+    int viewportX = 0;                        // where in the target the frame is presented (photo mode draws two side by side)
     bool cues4D = true;                       // false: no depth rings, hints, glow or slice indicator (the 3D start of the tutorial)
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
@@ -232,7 +233,7 @@ private:
         // Both bindings back to the caller's target: readers (recorder,
         // screenshots) see the presented frame, not the scene target.
         glBindFramebuffer(GL_FRAMEBUFFER, target);
-        glViewport(0, 0, width, height);
+        glViewport(viewportX, 0, width, height);
         glUseProgram(present_);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, color_);
@@ -240,7 +241,7 @@ private:
         uniform(present_, "uUVScale", glm::vec2(float(rw) / fboW_, float(rh) / fboH_));
         glUniformMatrix4fv(loc(present_, "uCameraBasis"), 1, GL_FALSE, glm::value_ptr(basis));
         float size = std::max(28.0f, height * 0.045f);
-        glm::vec4 gizmo(size * 1.9f, size * 1.9f, size, cam.offset / Camera4D::kOffsetMax);
+        glm::vec4 gizmo(size * 1.9f + viewportX, size * 1.9f, size, cam.offset / Camera4D::kOffsetMax);
         glUniform4fv(loc(present_, "uGizmo"), 1, glm::value_ptr(gizmo));
         glUniform1f(loc(present_, "uDim"), dim);
         glUniform1f(loc(present_, "uShowGizmo"), cues4D ? 1.0f : 0.0f);

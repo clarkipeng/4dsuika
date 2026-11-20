@@ -1,6 +1,9 @@
 #pragma once
 #include <limits>
 #include <fstream>
+#include <deque>
+#include <functional>
+#include <ctime>
 #include <cstdlib>
 #include <algorithm>
 #include <cmath>
@@ -126,6 +129,21 @@ public:
     int tutorialPoints = 0;
     bool tutorialTurned = false;
     bool FourDUnlocked() const { return !tutorialActive || tutorialStep >= 2; }
+    // Photo and replay mode (P): the game freezes and shows the last 10 s of the
+    // world, scrubbable, the slice on the left and the 4D eye on the right, with
+    // the camera still free to turn in 4D. F12 saves the view as a PNG.
+    struct Snapshot { std::vector<FruitInstance> fruit; std::vector<BurstInstance> bursts; };
+    static constexpr size_t kHistory = 600;
+    std::deque<Snapshot> history;
+    bool photo = false;
+    int replayIndex = 0;
+    bool replayPlaying = false;
+    float scrubHeld = 0.0f;
+    int photoAutoAfter = -1;           // --photo: enter photo mode once this many frames are recorded
+    std::function<bool(const std::string&)> photoSaver; // set by main: writes the frame to a PNG
+    bool photoSaveRequested = false;
+    std::string photoToast;
+    float photoToastTime = 0.0f;
     bool effectsOn = true;             // Settings > Effects: bursts, combo, danger
     std::vector<BurstInstance> bursts;
     int combo = 0;                     // merges in a row, each within kComboWindow of the last
@@ -300,8 +318,10 @@ public:
         if (keyPressedOnce(GLFW_KEY_F1) && tutorialActive) EndTutorial();
         if (keyPressedOnce(GLFW_KEY_M)) CycleViewMode(+1);
 
+        if (keyPressedOnce(GLFW_KEY_P) && State == GAME_ACTIVE && page == Page::None) { if (photo) photo = false; else EnterPhoto(); }
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
-            if (page != Page::None) ClosePage();
+            if (photo) photo = false;
+            else if (page != Page::None) ClosePage();
             else if (State == GAME_ACTIVE) State = GAME_PAUSED;
             else if (State == GAME_PAUSED) State = GAME_ACTIVE;
         }
@@ -362,7 +382,12 @@ public:
 #ifndef __EMSCRIPTEN__
                 if (audioReady && !audioMuted && Mix_PausedMusic() == 1) Mix_ResumeMusic();
 #endif
-                UpdateGameActive(dt);
+                if (photo) UpdatePhoto(dt);
+                else {
+                    UpdateGameActive(dt);
+                    RecordSnapshot();
+                    if (photoAutoAfter >= 0 && int(history.size()) >= photoAutoAfter) { photoAutoAfter = -1; EnterPhoto(); replayPlaying = true; replayIndex = 0; }
+                }
                 break;
             case GAME_OVER:
                 UpdateGameOver(dt);
@@ -408,12 +433,114 @@ public:
 
     void FixedUpdate(float dt)
     {
-        if (State != GAME_ACTIVE) return;
+        if (State != GAME_ACTIVE || photo) return;
         physics_solver->update(dt);
         total_points = physics_solver->total_points;
         UpdateEffects(dt);
         UpdateTutorial(dt);
     }
+    // ---------------------------------------------------------------- photo and replay
+
+    void RecordSnapshot() {
+        history.push_back({CurrentFruit(), bursts});
+        if (history.size() > kHistory) history.pop_front();
+    }
+
+    void EnterPhoto() {
+        if (history.empty() || State != GAME_ACTIVE) return;
+        photo = true;
+        replayPlaying = false;
+        replayIndex = int(history.size()) - 1;
+    }
+
+    void UpdatePhoto(float dt) {
+        photoToastTime = std::max(0.0f, photoToastTime - dt);
+        const int last = int(history.size()) - 1;
+        if (keyPressedOnce(GLFW_KEY_ENTER)) replayPlaying = !replayPlaying;
+        int dir = int(keyDown(GLFW_KEY_PERIOD)) - int(keyDown(GLFW_KEY_COMMA));
+        if (dir != 0) {   // a tap steps one frame; holding speeds up
+            scrubHeld += dt;
+            replayPlaying = false;
+            bool first = scrubHeld - dt <= 0.0f;
+            int step = first ? 1 : (scrubHeld > 1.0f ? 6 : scrubHeld > 0.35f ? 2 : 0);
+            replayIndex = std::clamp(replayIndex + dir * step, 0, last);
+        } else scrubHeld = 0.0f;
+        if (keyPressedOnce(GLFW_KEY_HOME)) replayIndex = 0;
+        if (keyPressedOnce(GLFW_KEY_END)) replayIndex = last;
+        if (keyPressedOnce(GLFW_KEY_F12)) photoSaveRequested = true;
+        if (replayPlaying) replayIndex = replayIndex >= last ? 0 : replayIndex + 1;
+    }
+
+    static std::string PhotoPath() {
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        std::string dir = home ? std::string(home) : std::string(".");
+        if (std::ifstream((dir + "/Pictures/.").c_str()).good()) dir += "/Pictures";
+        char stamp[32];
+        std::time_t t = std::time(nullptr);
+        std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&t));
+        return dir + "/4dsuika-" + stamp + ".png";
+    }
+
+    // The slice (left) and the 4D eye (right) of the same replayed moment, from the same camera.
+    void RenderPhoto() {
+        const Snapshot& s = history[std::clamp(replayIndex, 0, int(history.size()) - 1)];
+        renderer.setFruit(s.fruit);
+        renderer.cues4D = FourDUnlocked();
+        renderer.setEffects(s.bursts, 0.0f);
+        renderer.setPreview(false, glm::vec4(0.0f), 0.0f, 0);
+        const ViewMode saved = renderer.viewMode;
+        const int half = FbWidth / 2;
+        renderer.viewportX = 0;
+        renderer.viewMode = ViewMode::Slice;
+        renderer.draw(state.cam, half, FbHeight, time);
+        renderer.viewportX = half;
+        renderer.viewMode = ViewMode::Eye;
+        renderer.draw(state.cam, half, FbHeight, time);
+        renderer.viewportX = 0;
+        renderer.viewMode = saved;
+        glViewport(0, 0, FbWidth, FbHeight);
+        if (photoSaveRequested) { // a clean frame, no panels
+            photoSaveRequested = false;
+            std::string path = PhotoPath();
+            bool ok = photoSaver && photoSaver(path);
+            photoToast = ok ? "saved " + path : "could not save the photo";
+            photoToastTime = 4.0f;
+            return;
+        }
+        RenderPhotoUI();
+    }
+
+    void RenderPhotoUI() {
+        BeginText();
+        const float mid = Width * 0.5f;
+        FillRect(mid - 1.0f, 0.0f, 2.0f, float(Height), ui::kGold, 0.7f);
+        auto tag = [&](const char* t, float x) {
+            float w = t_rend->GetTextWidth(t, 0.6f) + 20.0f;
+            FillRect(x, 14.0f, w, 30.0f, ui::kPanel, 0.88f);
+            t_rend->RenderText(t, x + 10.0f, 21.0f, 0.6f, ui::kGold);
+        };
+        tag("SLICE", 14.0f);
+        tag("4D EYE", mid + 14.0f);
+        const std::string title = "PHOTO MODE";
+        t_rend->RenderText(title, mid - t_rend->GetTextWidth(title, 0.7f) * 0.5f, 52.0f, 0.7f, ui::kCream);
+        // Timeline over the last seconds, oldest on the left.
+        const float bw = std::min(Width * 0.6f, 900.0f), bx = (Width - bw) * 0.5f, by = Height - 74.0f;
+        FillRect(bx - 14.0f, by - 14.0f, bw + 28.0f, 64.0f, ui::kPanel, 0.9f);
+        const int n = int(history.size());
+        const float frac = n > 1 ? float(replayIndex) / float(n - 1) : 1.0f;
+        FillRect(bx, by + 6.0f, bw, 4.0f, ui::kGold, 0.35f);
+        FillRect(bx, by + 6.0f, bw * frac, 4.0f, ui::kGold, 0.95f);
+        FillCircle({bx + bw * frac, by + 8.0f}, 7.0f, ui::kCream, 1.0f, 18);
+        char buf[96];
+        snprintf(buf, sizeof buf, "%.1f s ago", float(n - 1 - replayIndex) / 60.0f);
+        t_rend->RenderText(buf, bx, by + 18.0f, 0.5f, ui::kCream);
+        const std::string hint = "turn the slice as usual     , .  scrub     Enter  play     F12  save photo     P  back";
+        t_rend->RenderText(hint, mid - t_rend->GetTextWidth(hint, 0.45f) * 0.5f, by + 32.0f, 0.45f, glm::vec3(0.8f, 0.75f, 0.7f));
+        if (photoToastTime > 0.0f)
+            t_rend->RenderText(photoToast, mid - t_rend->GetTextWidth(photoToast, 0.55f) * 0.5f, by - 44.0f, 0.55f, ui::kGold);
+    }
+
     // ---------------------------------------------------------------- tutorial
 
     static std::string TutorialFile() {
@@ -559,6 +686,7 @@ public:
 
     // Drop the next fruit above whatever the cursor points at.
     bool DropFruit() {
+        if (photo) return false;
         Hit4 hit = getPlacementMouse(state, boundary, *physics_solver);
         if (hit.hit) {
             physics_solver->addObject(PhysicsObject(DropCenter(hit), nextFruit, true, false));
@@ -573,13 +701,18 @@ public:
 
     // ------------------------------------------------------------ rendering
 
-    void RenderScene(const Hit4& aim, const Camera4D& cam) {
+    std::vector<FruitInstance> CurrentFruit() const {
         std::vector<FruitInstance> fruit;
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
             const PhysicsObject& obj = physics_solver->objects[i];
             fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
         }
+        return fruit;
+    }
+
+    void RenderScene(const Hit4& aim, const Camera4D& cam) {
+        std::vector<FruitInstance> fruit = CurrentFruit();
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
         renderer.cues4D = FourDUnlocked();
         renderer.setEffects(sheetMode ? std::vector<BurstInstance>{} : bursts, sheetMode ? 0.0f : danger);
@@ -895,6 +1028,7 @@ public:
     }
 
     void RenderGame() {
+        if (photo) { RenderPhoto(); return; }
         Hit4 aim;
         if (!sheetMode) aim = getPlacementMouse(state, boundary, *physics_solver);
         RenderScene(aim, state.cam);
@@ -1038,6 +1172,7 @@ public:
         items.push_back(MenuItem::info("H / Space", "back to the default slice"));
         items.push_back(MenuItem::info("V", "toggle the bottom w strip"));
         items.push_back(MenuItem::info("L", "snap drops to whole w lanes"));
+        items.push_back(MenuItem::info("P", "photo mode: replay the last 10 s, slice and 4D eye side by side"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
         items.push_back(MenuItem::info("M", "view: slice, thick slice, 4D eye"));
         items.push_back(MenuItem::info("Esc", "pause"));
