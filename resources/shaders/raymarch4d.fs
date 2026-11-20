@@ -45,6 +45,7 @@ uniform vec4  uSunDir;
 uniform int   uFruitCount;
 uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, facet seed
+uniform float uFruitGlow[MAX_FRUIT]; // 0..1, a same-kind fruit is close in 4D
 uniform mat4  uFruitWorldToLocal[MAX_FRUIT]; // rotates (p - centre) into the fruit frame
 uniform int   uGhostCount;           // thick slice: ghosts follow the fruit in the arrays above
 uniform vec4  uGhostFade[MAX_FRUIT / 4]; // per ghost, packed by 4: opacity, signed by its side of the slice
@@ -656,6 +657,14 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
         col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
+        // Same-kind glow: a pulsing light rim on the fruit itself (so it follows
+        // the real silhouette), faster the closer its partner is in 4D.
+        float glow = uFruitGlow[fruit];
+        if (glow > 0.0) {
+            float rimG = pow(1.0 - abs(dot(n, rd)), 1.5);
+            float pulse = 0.8 + 0.2 * sin(uTime * (3.0 + 6.0 * glow));
+            col += mix(albedo, vec3(1.0, 0.93, 0.75), 0.55) * glow * pulse * (0.2 + 2.2 * rimG);
+        }
 #ifndef TURNTABLE
         float offset = dot(c - ro, uCameraBasis[3]);
         vec4 sectionNormal = normalize(p - c + offset * uCameraBasis[3]);
