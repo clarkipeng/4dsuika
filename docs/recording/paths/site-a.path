@@ -1,0 +1,28 @@
+# Site hover clips (3:2): slow constant drift in the plain slice, with the slice turning
+# through xw and yw, then back through zw, in an 18 s cycle repeated from r=34 so a turn
+# is available whenever play gives a moment. Times are recording time (warm-up 10 s, so
+# game time minus 10). The scripted player aims through the camera, so the sim depends
+# on this file: scout (--no-capture) and final render must use it with the same --play,
+# --warmup 10 --fps 30 --lane-snap --no-ui.
+t=0   yaw=-12 pitch=-24 distance=9.6
+t=34  yaw=-12 pitch=-24 distance=9.6 ease=linear
+t=42  yaw=12  pitch=-24 distance=9.6 ease=linear
+t=46 yaw=12  pitch=-24 distance=9.6 xw=85 yw=20 ease=linear
+t=49 yaw=-10 pitch=-24 distance=9.6 xw=85 yw=-45 zw=40 ease=linear
+t=52 yaw=-12 pitch=-24 distance=9.6 xw=0 yw=0 zw=0 ease=linear
+t=60  yaw=12  pitch=-24 distance=9.6 ease=linear
+t=64 yaw=12  pitch=-24 distance=9.6 xw=85 yw=20 ease=linear
+t=67 yaw=-10 pitch=-24 distance=9.6 xw=85 yw=-45 zw=40 ease=linear
+t=70 yaw=-12 pitch=-24 distance=9.6 xw=0 yw=0 zw=0 ease=linear
+t=78  yaw=12  pitch=-24 distance=9.6 ease=linear
+t=82 yaw=12  pitch=-24 distance=9.6 xw=85 yw=20 ease=linear
+t=85 yaw=-10 pitch=-24 distance=9.6 xw=85 yw=-45 zw=40 ease=linear
+t=88 yaw=-12 pitch=-24 distance=9.6 xw=0 yw=0 zw=0 ease=linear
+t=96  yaw=12  pitch=-24 distance=9.6 ease=linear
+t=100 yaw=12  pitch=-24 distance=9.6 xw=85 yw=20 ease=linear
+t=103 yaw=-10 pitch=-24 distance=9.6 xw=85 yw=-45 zw=40 ease=linear
+t=106 yaw=-12 pitch=-24 distance=9.6 xw=0 yw=0 zw=0 ease=linear
+t=114  yaw=12  pitch=-24 distance=9.6 ease=linear
+t=118 yaw=12  pitch=-24 distance=9.6 xw=85 yw=20 ease=linear
+t=121 yaw=-10 pitch=-24 distance=9.6 xw=85 yw=-45 zw=40 ease=linear
+t=124 yaw=-12 pitch=-24 distance=9.6 xw=0 yw=0 zw=0 ease=linear

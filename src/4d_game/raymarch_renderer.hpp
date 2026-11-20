@@ -69,6 +69,7 @@ public:
     static constexpr int kMaxBursts = 8;
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
     int viewportX = 0;                        // where in the target the frame is presented (photo mode draws two side by side)
+    bool showGizmo = true;                    // false: no corner axis gizmo (--no-ui captures)
     bool cues4D = true;                       // false: no depth rings, hints, glow or slice indicator (the 3D start of the tutorial)
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
@@ -248,7 +249,7 @@ private:
         glm::vec4 gizmo(size * 1.9f + viewportX, size * 1.9f, size, cam.offset / Camera4D::kOffsetMax);
         glUniform4fv(loc(present_, "uGizmo"), 1, glm::value_ptr(gizmo));
         glUniform1f(loc(present_, "uDim"), dim);
-        glUniform1f(loc(present_, "uShowGizmo"), cues4D ? 1.0f : 0.0f);
+        glUniform1f(loc(present_, "uShowGizmo"), (cues4D && showGizmo) ? 1.0f : 0.0f);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
         glBindVertexArray(0);
