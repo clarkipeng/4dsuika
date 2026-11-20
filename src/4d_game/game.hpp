@@ -1,4 +1,5 @@
 #pragma once
+#include <limits>
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -109,7 +110,7 @@ public:
     glm::vec2 orbitVel{0.0f};         // mouse-orbit glide after release (rad/s)
     float time = 0.0f;
     bool showPerf = false;            // F3: GPU time and render scale
-    bool showAxisInset = true;        // V: side view of depth through the current slice
+    bool showDepthStrip = true;        // V: bottom strip of depth along the slice normal
 
     // Fruit sheet (headless --fruit-sheet): fixed fruit instead of physics, labelled.
     bool sheetMode = false;
@@ -269,7 +270,7 @@ public:
             ApplyRenderScale();
         }
         if (keyPressedOnce(GLFW_KEY_F3)) showPerf = !showPerf;
-        if (keyPressedOnce(GLFW_KEY_V)) showAxisInset = !showAxisInset;
+        if (keyPressedOnce(GLFW_KEY_V)) showDepthStrip = !showDepthStrip;
         if (keyPressedOnce(GLFW_KEY_M)) CycleViewMode(+1);
 
         if (keyPressedOnce(GLFW_KEY_ESCAPE)) {
@@ -393,11 +394,15 @@ public:
         return 0;
     }
 
+    static glm::vec4 DropCenter(const Hit4& hit) {
+        return hit.point + glm::vec4(0.0f, 3.0f, 0.0f, 0.0f);
+    }
+
     // Drop the next fruit above whatever the cursor points at.
     bool DropFruit() {
         Hit4 hit = getPlacementMouse(state, boundary, *physics_solver);
         if (hit.hit) {
-            physics_solver->addObject(PhysicsObject(hit.point + glm::vec4(0, 3.0f, 0, 0), nextFruit, true, false));
+            physics_solver->addObject(PhysicsObject(DropCenter(hit), nextFruit, true, false));
             nextFruit = FruitManager::getRandomFruit();
             ballPlaced = true;
             return true;
@@ -408,8 +413,7 @@ public:
 
     // ------------------------------------------------------------ rendering
 
-    void RenderScene(bool showPreview) { RenderScene(showPreview, state.cam); }
-    void RenderScene(bool showPreview, const Camera4D& cam) {
+    void RenderScene(const Hit4& aim, const Camera4D& cam) {
         std::vector<FruitInstance> fruit;
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
@@ -417,9 +421,7 @@ public:
             fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
         }
         renderer.setFruit(sheetMode ? sheetFruit : fruit);
-        Hit4 hit;
-        if (showPreview && !sheetMode) hit = getPlacementMouse(state, boundary, *physics_solver);
-        renderer.setPreview(hit.hit, hit.point + glm::vec4(0, 3.0f, 0, 0),
+        renderer.setPreview(aim.hit, DropCenter(aim),
                             FruitManager::getFruitProperties(nextFruit).radius, int(nextFruit));
         renderer.draw(cam, FbWidth, FbHeight, time);
     }
@@ -436,17 +438,17 @@ public:
         char buf[96];
         float tiltDeg = glm::degrees(state.cam.tilt());
         snprintf(buf, sizeof buf, "slice tilt %2.0f deg   offset %+.2f", tiltDeg, state.cam.offset);
-        float s = 0.6f;
+        float s = Width < 650 ? 0.36f : 0.50f;
         float size = std::max(28.0f, FbHeight * 0.045f) * float(Height) / float(std::max(FbHeight, 1));
-        t_rend->RenderText(buf, size * 3.9f, Height - size * 1.9f - 8.0f, s, glm::vec3(0.95f, 0.9f, 0.85f));
-        if (homing) t_rend->RenderText("returning to default slice", size * 3.9f, Height - size * 1.9f + 14.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
+        t_rend->RenderText(buf, 12.0f, Height - size * 2.5f - 8.0f, s, glm::vec3(0.95f, 0.9f, 0.85f));
+        if (homing) t_rend->RenderText("returning to default slice", 12.0f, Height - size * 2.5f + 10.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
         if (renderer.viewMode != ViewMode::Slice) {
             std::string view = std::string("view: ") + viewModeName(renderer.viewMode);
             if (renderer.viewMode == ViewMode::Thick) {
                 snprintf(buf, sizeof buf, "   band +-%.2f", renderer.band);
                 view += buf;
             }
-            t_rend->RenderText(view + "   (M)", size * 3.9f, Height - size * 1.9f - 34.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
+            t_rend->RenderText(view + "   (M)", 12.0f, Height - size * 2.5f - 26.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
         }
     }
 
@@ -491,60 +493,119 @@ public:
         }
     }
 
-    void RenderAxisInset() {
-        if (!showAxisInset || sheetMode) return;
-        const glm::mat4 basis = state.cam.basis();
-        const glm::vec4 camPos = state.cam.position();
-        const glm::vec4 sideAxis = glm::normalize(basis[2]); // depth inside the slice
-        const glm::vec4 normalAxis = glm::normalize(basis[3]); // signed distance out of the slice
-        auto coord = [&](glm::vec4 p) {
-            return glm::vec2(glm::dot(p - boundary.center, sideAxis), glm::dot(p - camPos, normalAxis));
-        };
+    static glm::vec3 DepthUiColor(float offset) {
+        const glm::vec3 side = offset < 0.0f ? glm::vec3(1.0f, 0.50f, 0.40f)
+                                             : glm::vec3(0.42f, 0.82f, 1.0f);
+        return glm::mix(ui::kGold, side, glm::smoothstep(0.0f, 1.5f, std::abs(offset)));
+    }
 
-        const float margin = std::max(14.0f, float(Height) * 0.022f);
-        const float w = std::clamp(float(Width) * 0.22f, 170.0f, 250.0f);
-        const float h = std::clamp(float(Height) * 0.20f, 125.0f, 180.0f);
-        const float x = float(Width) - w - margin;
-        const float y = margin;
-        const float pad = 15.0f;
-        const float sx = (w - 2.0f * pad) / 8.0f;  // +-4 slice-depth units
-        const float sy = (h - 2.0f * pad) / 6.4f;  // +-3.2 out-of-slice units
-        const float s = std::min(sx, sy);
-        const glm::vec2 mid(x + w * 0.5f, y + h * 0.52f);
-        auto screen = [&](glm::vec2 q) { return glm::vec2(mid.x + q.x * s, mid.y - q.y * s); };
+    void RenderDepthStrip(const Hit4& hit) {
+        if (!showDepthStrip) return;
+        const glm::vec4 normal = state.cam.basis()[3];
+        auto depth = [&](glm::vec4 p) { return glm::dot(p - boundary.center, normal); };
+        const float slice = depth(state.cam.position());
+        float span = std::max(boundary.radius, std::abs(slice) + 0.25f);
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
+            const auto& obj = physics_solver->objects[i];
+            span = std::max(span, std::abs(depth(obj.position)) + obj.radius);
+        }
+        if (hit.hit) span = std::max(span, std::abs(depth(DropCenter(hit))) + 0.25f);
+        const float w = Width * (Width < 650 ? 0.88f : 0.63f);
+        const float h = std::clamp(Height * 0.11f, 54.0f, 104.0f);
+        const float x = (Width - w) * 0.5f, y = Height - h - 12.0f;
+        const float pad = std::min(48.0f, w * 0.12f);
+        auto screenX = [&](float d) { return Width * 0.5f + d / span * (w * 0.5f - pad); };
 
-        FillRect(x, y, w, h, ui::kPanel, 0.70f);
-        DrawLine({x + 10.0f, y}, {x + w - 10.0f, y}, 1.0f, ui::kGold, 0.45f);
-        DrawLine({x + w, y + 10.0f}, {x + w, y + h - 10.0f}, 1.0f, ui::kGold, 0.35f);
-        DrawLine({x + w - 10.0f, y + h}, {x + 10.0f, y + h}, 1.0f, ui::kGold, 0.35f);
-        DrawLine({x, y + h - 10.0f}, {x, y + 10.0f}, 1.0f, ui::kGold, 0.35f);
-
-        DrawCircle(screen(coord(boundary.center)), boundary.radius * s, 1.0f, ui::kCream, 0.22f);
-        DrawLine({x + pad, mid.y}, {x + w - pad, mid.y}, 1.2f, ui::kGold, 0.9f);
-        DrawLine({mid.x, y + pad}, {mid.x, y + h - pad}, 0.75f, ui::kCream, 0.22f);
+        FillRect(x, y, w, h, ui::kPanel, 0.91f);
+        const float rail = y + h - 12.0f;
+        for (int i = 0; i < 32; ++i) {
+            float left = glm::mix(-span, span, i / 32.0f);
+            float right = glm::mix(-span, span, (i + 1) / 32.0f);
+            DrawLine({screenX(left), rail}, {screenX(right), rail}, 1.6f,
+                     DepthUiColor((left + right) * 0.5f - slice), 0.9f);
+        }
+        for (int i = -3; i <= 3; ++i) {
+            float tick = screenX(span * i / 3.0f);
+            DrawLine({tick, rail - 4.0f}, {tick, rail + 4.0f}, 0.6f, ui::kCream, 0.45f);
+        }
+        const float marker = screenX(slice);
+        DrawLine({marker, y + 4.0f}, {marker, y + h - 5.0f}, 1.8f, ui::kCream, 0.95f);
+        t_rend->RenderText("-w", x + 7.0f, y + h * 0.40f, 0.55f, DepthUiColor(-span - slice));
+        t_rend->RenderText("+w", x + w - pad + 5.0f, y + h * 0.40f, 0.55f, DepthUiColor(span - slice));
 
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
-            const PhysicsObject& obj = physics_solver->objects[i];
-            glm::vec2 c = screen(coord(obj.position));
-            float r = std::clamp(obj.radius * s, 3.0f, 16.0f);
-            if (c.x + r < x || c.x - r > x + w || c.y + r < y || c.y - r > y + h) continue;
-            float sliceFade = 0.45f + 0.45f * (1.0f - std::clamp(std::abs(coord(obj.position).y) / std::max(obj.radius * 2.0f, 0.2f), 0.0f, 1.0f));
-            FillCircle(c, r, FruitUiColor(int(obj.fruit)), sliceFade);
-            DrawCircle(c, r, 0.8f, ui::kCream, 0.35f, 18);
+            const auto& obj = physics_solver->objects[i];
+            float d = depth(obj.position);
+            float level = glm::clamp((obj.position.y - boundary.center.y + boundary.radius) /
+                                     (boundary.radius + 1.0f), 0.0f, 1.0f);
+            glm::vec2 c(screenX(d), glm::mix(rail - 10.0f, y + 10.0f, level));
+            float r = std::clamp(obj.radius * h * 0.22f, 3.0f, h * 0.11f);
+            float opacity = std::abs(d - slice) < obj.radius ? 1.0f : 0.55f;
+            glm::vec3 fruit = FruitUiColor(int(obj.fruit));
+            DrawLine({screenX(d - obj.radius), c.y}, {screenX(d + obj.radius), c.y}, 1.4f, fruit, 0.45f);
+            FillCircle(c, r, fruit, opacity);
+            DrawCircle(c, r, 0.85f, DepthUiColor(d - slice), opacity, 14);
         }
-
-        Hit4 hit = getPlacementMouse(state, boundary, *physics_solver);
         if (hit.hit) {
-            glm::vec2 c = screen(coord(hit.point + glm::vec4(0.0f, 3.0f, 0.0f, 0.0f)));
-            float r = std::clamp(FruitManager::getFruitProperties(nextFruit).radius * s, 5.0f, 18.0f);
-            t_rend->FillPoly({{c.x, c.y - r}, {c.x + r, c.y}, {c.x, c.y + r}, {c.x - r, c.y}}, FruitUiColor(int(nextFruit)), 0.82f);
-            DrawLine(c + glm::vec2(-r * 1.5f, 0.0f), c + glm::vec2(r * 1.5f, 0.0f), 1.0f, ui::kCream, 0.85f);
-            DrawLine(c + glm::vec2(0.0f, -r * 1.5f), c + glm::vec2(0.0f, r * 1.5f), 1.0f, ui::kCream, 0.85f);
+            const float cursor = screenX(depth(DropCenter(hit)));
+            t_rend->FillPoly({{cursor - 6.0f, y}, {cursor + 6.0f, y}, {cursor, y + 9.0f}},
+                             FruitUiColor(int(nextFruit)), 1.0f);
         }
+    }
 
-        float label = fitLabelScale("side / w", w - 20.0f, 0.46f);
-        t_rend->RenderText("side / w", x + 10.0f, y + 8.0f, label, ui::kCream);
+    // First contact along world gravity with the current sphere colliders.
+    // The pile may move before the dropped fruit reaches it.
+    void RenderDropGuide(const Hit4& hit) {
+        if (!hit.hit || renderer.viewMode == ViewMode::Eye) return;
+        const glm::vec4 spawn = DropCenter(hit);
+        const glm::vec4 down(0.0f, -1.0f, 0.0f, 0.0f);
+        const float radius = FruitManager::getFruitProperties(nextFruit).radius;
+        float t0, t1;
+        const float inner = boundary.radius - boundary.margin;
+        glomeRoots(spawn, down, boundary.center, inner - radius, t0, t1);
+        float travel = t1 > 0.0f ? t1 : std::numeric_limits<float>::infinity();
+        // Near the edge the falling sphere can touch the rim above the cavity.
+        glm::vec4 radial = spawn - boundary.center;
+        radial.y = 0.0f;
+        if (glm::length(radial) > 1e-4f) {
+            glm::vec4 rim = boundary.center + glm::normalize(radial) * (inner * std::sin(boundary.cutoffAngle));
+            rim.y -= inner * std::cos(boundary.cutoffAngle);
+            glomeRoots(spawn, down, rim, radius, t0, t1);
+            if (t1 > 0.0f) travel = std::min(travel, std::max(t0, 0.0f));
+        }
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
+            const auto& obj = physics_solver->objects[i];
+            glomeRoots(spawn, down, obj.position, obj.radius + radius, t0, t1);
+            if (t1 > 0.0f) travel = std::min(travel, std::max(t0, 0.0f));
+        }
+        if (!std::isfinite(travel)) return;
+        const glm::vec4 land = spawn + down * travel;
+        auto project = [&](glm::vec4 p, glm::vec2& screen) {
+            glm::vec2 ndc;
+            if (!state.cam.project(p, float(Width) / std::max(Height, 1u), ndc)) return false;
+            screen = (ndc * glm::vec2(0.5f, -0.5f) + 0.5f) * glm::vec2(Width, Height);
+            return true;
+        };
+        glm::vec2 a, b, edge;
+        if (!project(spawn, a) || !project(land, b) ||
+            !project(land + state.cam.basis()[0] * radius, edge)) return;
+        float r = glm::clamp(glm::length(edge - b), 3.0f, Height * 0.3f);
+        glm::vec2 heading = b - a;
+        float len = glm::length(heading);
+        for (float d = 5.0f; d + r < len; d += 12.0f) {
+            DrawLine(a + heading * (d / len), a + heading * (std::min(d + 6.0f, len - r) / len),
+                     0.9f, ui::kCream, 0.85f);
+        }
+        FillCircle(b, r, FruitUiColor(int(nextFruit)), 0.25f, 28);
+        for (int i = 0; i < 16; ++i) {
+            float angle = glm::two_pi<float>() * i / 16.0f;
+            float end = angle + glm::two_pi<float>() * 0.58f / 16.0f;
+            DrawLine(b + r * glm::vec2(std::cos(angle), std::sin(angle)),
+                     b + r * glm::vec2(std::cos(end), std::sin(end)), 1.0f, ui::kCream, 0.9f);
+        }
     }
 
     float fitLabelScale(const std::string& text, float width, float scale) {
@@ -566,13 +627,29 @@ public:
         }
     }
 
-    void RenderGameUI()
+    void RenderGameUI(const Hit4& aim)
     {
         if (sheetMode) { RenderSheetLabels(); return; }
         BeginText();
-        t_rend->RenderText("Score " + std::to_string((int)physics_solver->total_points), 25.0f, 25.0f, 1.0f, glm::vec3(1.0f));
+        RenderDropGuide(aim);
+        const float panelWidth = std::clamp(Width * 0.20f, 100.0f, 185.0f);
+        const float panelHeight = std::clamp(Height * 0.12f, 56.0f, 104.0f);
+        const float margin = 14.0f;
+        const float nextX = Width - panelWidth - margin;
+        FillRect(margin, margin, panelWidth, panelHeight, ui::kPanel, 0.88f);
+        FillRect(nextX, margin, panelWidth, panelHeight, ui::kPanel, 0.88f);
+        t_rend->RenderText("SCORE", margin + 10.0f, margin + 7.0f, 0.50f, ui::kGold);
+        std::string score = std::to_string(int(physics_solver->total_points));
+        t_rend->RenderText(score, margin + 10.0f, margin + panelHeight * 0.34f,
+                           fitLabelScale(score, panelWidth - 20.0f, panelHeight / 49.0f), ui::kCream);
+        t_rend->RenderText("NEXT DROP", nextX + 10.0f, margin + 7.0f, 0.50f, ui::kGold);
+        std::string next = kFruitNames[int(nextFruit)];
+        float cy = margin + panelHeight * 0.65f;
+        FillCircle({nextX + 19.0f, cy}, 8.0f, FruitUiColor(int(nextFruit)), 1.0f);
+        t_rend->RenderText(next, nextX + 32.0f, cy - 10.0f,
+                           fitLabelScale(next, panelWidth - 40.0f, 0.75f), ui::kCream);
         RenderSliceLabel();
-        RenderAxisInset();
+        RenderDepthStrip(aim);
         if (!caption.empty())
             t_rend->RenderText(caption, (Width - t_rend->GetTextWidth(caption, 0.9f)) * 0.5f, 25.0f, 0.9f, glm::vec3(1.0f, 0.92f, 0.75f));
         if (showPerf) {
@@ -595,8 +672,10 @@ public:
     }
 
     void RenderGame() {
-        RenderScene(true);
-        RenderGameUI();
+        Hit4 aim;
+        if (!sheetMode) aim = getPlacementMouse(state, boundary, *physics_solver);
+        RenderScene(aim, state.cam);
+        RenderGameUI(aim);
     }
 
     // ---------------------------------------------------------------- menus
@@ -696,8 +775,8 @@ public:
                 return (renderer.band - RaymarchRenderer::kBandMin) / (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin);
             }, [this](float v) { renderer.band = RaymarchRenderer::kBandMin + v * (RaymarchRenderer::kBandMax - RaymarchRenderer::kBandMin); }));
         items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
-        items.push_back(MenuItem::choice("W-depth inset", [this] { return std::string(showAxisInset ? "On" : "Off"); },
-            [this](int) { showAxisInset = !showAxisInset; }));
+        items.push_back(MenuItem::choice("W-depth strip", [this] { return std::string(showDepthStrip ? "On" : "Off"); },
+            [this](int) { showDepthStrip = !showDepthStrip; }));
 #ifndef __EMSCRIPTEN__
         items.push_back(MenuItem::choice("Sound", [this] { return std::string(soundOn ? "On" : "Muted"); },
             [this](int) { soundOn = !soundOn; ApplyVolumeSettings(); }));
@@ -727,7 +806,7 @@ public:
         }
         items.push_back(MenuItem::info("W / S", "move the slice along the 4th axis"));
         items.push_back(MenuItem::info("H / Space", "back to the default slice"));
-        items.push_back(MenuItem::info("V", "toggle the side / w inset"));
+        items.push_back(MenuItem::info("V", "toggle the bottom w strip"));
         items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
         items.push_back(MenuItem::info("M", "view: slice, thick slice, 4D eye"));
         items.push_back(MenuItem::info("Esc", "pause"));
@@ -739,7 +818,7 @@ public:
     void RenderMenuScreen(const Camera4D& cam, float dim) {
         EnsureMenu();
         renderer.dim = dim;
-        RenderScene(false, cam);
+        RenderScene({}, cam);
         renderer.dim = 0.0f;
         BeginText();
         menu.draw(*t_rend, float(Width), float(Height));

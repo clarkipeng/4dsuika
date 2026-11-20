@@ -595,7 +595,7 @@ static int runViewCompare(const Options& o, GLuint fbo) {
     auto render = [&](const View& v, const std::string& caption) {
         game.renderer.viewMode = v.mode;
         game.renderer.band = v.band;
-        game.showAxisInset = v.inset;
+        game.showDepthStrip = v.inset;
         game.caption = caption;
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, o.width, o.height);

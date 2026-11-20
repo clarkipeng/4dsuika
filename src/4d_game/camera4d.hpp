@@ -90,8 +90,8 @@ struct Camera4D {
     float offset = 0.0f;                 // along the slice normal
     float fovY = glm::radians(45.0f);
 
-    static constexpr float kDefaultPitch = -0.40f;
-    static constexpr float kDefaultDistance = 13.0f;
+    static constexpr float kDefaultPitch = -0.32f;
+    static constexpr float kDefaultDistance = 9.2f;
     static constexpr float kOffsetMax = 3.0f;
 
     Rot4 orbit() const {

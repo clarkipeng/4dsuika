@@ -20,7 +20,7 @@
 #endif
 
 #if PASS == 1
-layout(location = 0) out vec4 gGeom;   // t, kind, fruit lod, bowl distance
+layout(location = 0) out vec4 gGeom;   // t, kind, fruit lod, unused
 layout(location = 1) out vec4 gNormal; // smooth normal
 #elif PASS == 4
 layout(location = 0) out vec4 out0;
@@ -300,8 +300,7 @@ bool cacheSpan(vec3 o, vec3 d, out float t0, out float t1) {
 
 // Static world along an in-slice ray: (t, material, distance at t),
 // material 0 = miss.
-// bowlNear collects the closest approach to the bowl for its glow.
-vec3 marchStatic(vec4 ro, vec4 rd, float tMax, inout float bowlNear) {
+vec3 marchStatic(vec4 ro, vec4 rd, float tMax) {
     if (uCacheMode == 0) {
         float t = uNearCut; // cutaway, as below
         for (int i = 0; i < 24 && worldStaticSDF(ro + rd * t).x < 0.02; ++i) t += 0.1;
@@ -309,7 +308,6 @@ vec3 marchStatic(vec4 ro, vec4 rd, float tMax, inout float bowlNear) {
             vec4 p = ro + rd * t;
             vec2 h = worldStaticSDF(p);
             COST(1);
-            bowlNear = min(bowlNear, bowlSDF(p));
             if (h.x < 0.001 * t) return vec3(t, h.y, h.x);
             t += h.x;
             if (t > tMax) break;
@@ -336,7 +334,6 @@ vec3 marchStatic(vec4 ro, vec4 rd, float tMax, inout float bowlNear) {
     float margin = 0.9 * uCacheVoxel + 0.01;
     for (int i = 0; i < MAX_STEPS; ++i) {
         vec4 p = ro + rd * t;
-        bowlNear = min(bowlNear, bowlSDF(p));
         float adv = cacheDist(o + d * t) - margin;
         if (adv < uCacheVoxel) {
             vec2 h = worldStaticSDF(p);
@@ -470,6 +467,11 @@ vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wra
 // side, fading with distance from the slice. Rings and a thin fill read as
 // hints, never as solid fruit; behind scene geometry they are fainter.
 
+vec3 depthColor(float offset) {
+    vec3 side = offset < 0.0 ? vec3(1.0, 0.31, 0.18) : vec3(0.20, 0.68, 1.0);
+    return mix(vec3(1.0, 0.76, 0.32), side, smoothstep(0.0, 1.5, abs(offset)));
+}
+
 vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
     for (int i = 0; i < MAX_HINTS; ++i) {
@@ -482,11 +484,13 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
         float miss = length(c - ro - rd * tc);
         float width = max(1.5 * pixel * tc, 0.02 * r);
         float ring = exp(-pow((miss - r) / width, 2.0));
-        float fill = 0.18 * (1.0 - smoothstep(r - width, r, miss));
+        vec4 delta = ro + rd * tc - c;
+        vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
+        if (ring > 0.001) ring *= smoothstep(-0.15, 0.25, cos(12.0 * atan(plane.y, plane.x + 1e-6)));
+        float fill = 0.08 * (1.0 - smoothstep(r - width, r, miss));
         float occluded = tc - r > sceneDist ? 0.35 : 1.0;
         float a = d.w * occluded * (0.95 * ring + fill);
-        vec3 side = d.z > 0.0 ? vec3(0.45, 0.75, 1.0) : vec3(1.0, 0.55, 0.35);
-        col = mix(col, mix(fruitBaseColor(d.y), side, 0.35) * 1.3, clamp(a, 0.0, 0.8));
+        col = mix(col, depthColor(d.z), clamp(a, 0.0, 0.85));
     }
     return col;
 }
@@ -531,10 +535,7 @@ struct Hit {
     float t;
     float kind;
     float lod;      // fruit detail
-    float bowlNear; // closest approach to the bowl (glow)
     vec4 ns;        // smooth normal
-    float behind;   // bowl hits: fruit seen through the wall, index + 1 (0 = none)
-    float behindT;  // and its distance
 };
 
 // Ray through the centre of render-target pixel `px` (in pixels).
@@ -566,14 +567,18 @@ Hit traceScene(vec4 ro, vec4 rd) {
 
     // World, stopped early at the nearest fruit.
     Hit h;
-    h.bowlNear = 1e3;
-    vec3 hs = marchStatic(ro, rd, min(tHit, FAR), h.bowlNear);
+    vec3 hs = marchStatic(ro, rd, min(tHit, FAR));
     vec3 hd = marchDynamic(ro, rd, hs.x);
     vec3 hw = hd.y > 0.0 ? hd : hs;
 
-    h.behind = 0.0;
-    h.behindT = 0.0;
-    if (fruit >= 0 && tHit <= hw.x) {
+    // Reveal a fruit through the near shell only if the ray reaches the cavity
+    // before that fruit. This preserves the far wall and exterior silhouettes.
+    float enter, exit;
+    bool cutaway = hw.y == MAT_BOWL &&
+        glomeSpan(ro, rd, vec4(0.0), BOWL_IN, enter, exit) &&
+        hw.x < enter && tHit >= enter && tHit <= exit &&
+        (ro + rd * enter).y <= 0.0;
+    if (fruit >= 0 && (tHit <= hw.x || cutaway)) {
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
         vec4 p = ro + rd * tHit;
@@ -587,10 +592,6 @@ Hit traceScene(vec4 ro, vec4 rd) {
         h.kind = hw.y;
         h.lod = 0.0;
         h.ns = worldNormal(ro + rd * hw.x, hw.z, hw.y, hd.y > 0.0);
-        if (hw.y == MAT_BOWL && fruit >= 0) {
-            h.behind = float(fruit + 1);
-            h.behindT = tHit;
-        }
     } else {
         h.t = FAR;
         h.kind = 0.0;
@@ -621,7 +622,8 @@ vec3 background(vec2 px, vec4 rd) {
     float y = px.y / uResolution.y;
     return mix(vec3(0.012, 0.012, 0.018), vec3(0.075, 0.05, 0.075), y);
 #else
-    return skyColor(rd);
+    vec3 sky = skyColor(rd);
+    return mix(sky, vec3(dot(sky, vec3(0.299, 0.587, 0.114))), 0.18);
 #endif
 }
 
@@ -643,9 +645,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         vec4 p = ro + rd * h.t;
         vec4 c = uFruitCenters[fruit];
         vec4 d = uFruitData[fruit];
-        vec4 qWorld = p - c;
         vec4 q = fruitLocalPoint(fruit, p);
-        vec4 body = normalize(qWorld); // the physics glome's normal
         vec4 ns = h.ns;
         vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
         // A little self-light keeps each fruit's colour identifiable even
@@ -655,32 +655,21 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
         col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
-        // 4D lean: a fruit's cross-section normals tilt along the slice
-        // normal as it drifts out of the slice. Warm it towards the w-axis
-        // gold of the indicator so "about to vanish" reads at a glance.
-        // Added light (mostly at the rim), so the fruit keeps its own hue.
-        float lean = smoothstep(0.35, 0.95, abs(dot(body, uCameraBasis[3])));
-        float edge = 0.35 + 0.65 * pow(1.0 - max(dot(body, -rd), 0.0), 2.0);
-        col += vec3(0.55, 0.38, 0.06) * lean * edge;
+#ifndef TURNTABLE
+        float offset = dot(c - ro, uCameraBasis[3]);
+        vec4 sectionNormal = normalize(p - c + offset * uCameraBasis[3]);
+        float ring = 1.0 - smoothstep(0.10, 0.29, abs(dot(sectionNormal, rd)));
+        col = mix(col, depthColor(offset), 0.75 * ring);
+#endif
     } else if (h.kind > 0.0) {
         vec4 p = ro + rd * h.t;
         vec4 n = facetBlend(h.ns, 6.0, 0.0);
         col = shade(p, n, h.ns, rd, materialColor(h.kind, p, n), h.kind == MAT_BOWL ? 0.25 : 0.0,
                     wrapOf(h.kind), light);
-        // The bowl is frosted glass for the fruit inside: they show through
-        // its wall, softened, so the player never loses them behind it.
-        if (h.behind > 0.0) {
-            int i = int(h.behind) - 1;
-            vec4 d = uFruitData[i];
-            vec4 p = ro + rd * h.behindT;
-            vec4 q = fruitLocalPoint(i, p);
-            vec4 fn = normalize(q);
-            vec4 fnWorld = normalize(fruitWorldVector(i, fn));
-            vec3 albedo = fruitAlbedo(q, fn, d.x, d.y, d.w, 0.0);
-            float lit = 0.35 + 0.65 * max(dot(fnWorld, uSunDir), 0.0) + 0.3 * max(dot(fnWorld, -rd), 0.0);
-            vec3 seen = albedo * lit * vec3(1.0, 0.9, 0.8) * 1.6;
-            float rim = pow(1.0 - abs(dot(h.ns, rd)), 2.0);
-            col = mix(seen, col, 0.35 + 0.5 * rim);
+        if (h.kind == MAT_BOWL) {
+            vec3 radial = normalize(p.xzw);
+            float lip = 1.0 - smoothstep(0.018, 0.065, abs(p.y - bowlLipY(radial) + 0.027));
+            col += vec3(1.0, 0.72, 0.42) * (0.075 * lip);
         }
     }
 
@@ -688,10 +677,6 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     // only where it shows.
     float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
     if (fog > 0.002) col = mix(col, background(px, rd), fog);
-
-    // The bowl glows softly, as in the cover art.
-    // Not over fruit, which must stay readable.
-    col += vec3(1.0, 0.72, 0.42) * (h.kind < 0.0 ? 0.0 : 0.22) * exp(-h.bowlNear * 5.0);
 
     // Ghosts see through the bowl (x-ray) up to its far wall.
     if (uGhostCount > 0) {
@@ -725,11 +710,7 @@ Hit readGeometry(ivec2 texel) {
     Hit h;
     h.t = g.x;
     h.kind = g.y;
-    bool bowl = h.kind == MAT_BOWL;
-    h.lod = bowl ? 0.0 : g.z;
-    h.bowlNear = bowl ? 0.0 : g.w;
-    h.behind = bowl ? g.z : 0.0;
-    h.behindT = bowl ? g.w : 0.0;
+    h.lod = g.z;
     h.ns = texelFetch(uNormal, texel, 0);
     return h;
 }
@@ -815,7 +796,7 @@ vec4 eyeRay(vec4 ro, vec4 rd) {
     vec4 n = normalize(vec4(occluderSDF(p + vec4(e, 0, 0, 0)), occluderSDF(p + vec4(0, e, 0, 0)),
                             occluderSDF(p + vec4(0, 0, e, 0)), occluderSDF(p + vec4(0, 0, 0, e))) - f0);
     vec3 wc = shade(p, n, n, rd, materialColor(mat, p, n), 0.0, wrapOf(mat), vec2(1.0));
-    // The bowl is glass for the fruit inside it, as in the slice view.
+    // The experimental retina volume uses a translucent bowl.
     if (mat == MAT_BOWL && fruit >= 0) return vec4(grade(mix(fc.rgb, wc, 0.3)), 1.0);
     return vec4(grade(wc), mat == MAT_BOWL ? EYE_BOWL : EYE_WORLD);
 }
@@ -882,10 +863,7 @@ void main() {
     vec4 ro = uCameraPos;
 #if PASS == 1
     Hit h = traceScene(ro, rayDir(px));
-    // z: fruit lod, or for bowl hits the fruit behind the wall; w: bowl
-    // distance (glow), or for bowl hits that fruit's distance.
-    bool bowl = h.kind == MAT_BOWL;
-    gGeom = vec4(h.t, h.kind, bowl ? h.behind : h.lod, bowl ? h.behindT : h.bowlNear);
+    gGeom = vec4(h.t, h.kind, h.lod, 0.0);
     gNormal = h.ns;
 #elif PASS == 2
     // Each half-resolution texel lights the top-left pixel of its 2x2 block.
