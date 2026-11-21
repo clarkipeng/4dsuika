@@ -67,7 +67,7 @@ make run
 `4d_game --headless --mute --playtest-seconds 600` runs ten simulated minutes of deterministic drops while rotating through 4D and prints placement, merge, loss, and score stats.
 
 ## Platform-Specific Building (CI/CD)
-Automated builds for Windows and macOS are handled via GitHub Actions. The built artifacts are available in the GitHub Actions run results or as releases.
+GitHub Actions builds `4D-Suika-<version>-windows.zip` and `4D-Suika-<version>-macos.zip` (one universal app for Apple Silicon and Intel) on every push. In CI `SUIKA_PORTABLE` is on: every dependency is built from source and linked statically. On macOS, cpack then smoke-tests the unpacked zip with a 120 s scripted playtest (`cmake/smoke-zip.cmake`, `SUIKA_SHIPPED=1` so the game ignores the source tree); Windows runners have no OpenGL 3.3, so test the Windows zip on a real machine. A `v*` tag also attaches both zips to a GitHub release; tags publish to players, so only on the PI's word. The game finds `resources/` next to the executable or inside the app bundle, wherever the zip is unpacked.
 
 ### Manual Build
 If you prefer manual building with CMake:

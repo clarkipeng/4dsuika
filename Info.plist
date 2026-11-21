@@ -3,18 +3,24 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>4d_game_</string>
-    <key>CFBundleIconFile</key>
-    <string></string>
+    <string>4d_game</string>
+    <key>CFBundleName</key>
+    <string>4D Suika</string>
+    <key>CFBundleDisplayName</key>
+    <string>4D Suika</string>
     <key>CFBundleIdentifier</key>
-    <string>com.yourcompany.learnopengl</string>
+    <string>com.clarkipeng.4dsuika</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>1.1</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2024 Your Name. All rights reserved.</string>
+    <string>Copyright © 2026 werus23.</string>
 </dict>
 </plist>

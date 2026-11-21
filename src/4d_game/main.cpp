@@ -1170,6 +1170,16 @@ static void runInteractiveFrame(GLFWwindow* window, float& fixedUpdateAccumulato
 #endif
 }
 
+// Leave without running global destructors: the Game global owns GL objects
+// and audio whose teardown after glfwTerminate crashed every exit (no context
+// left). The OS reclaims everything; saves are written as they change.
+[[noreturn]] static void quitNow(int rc) {
+    glfwTerminate();
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(rc);
+}
+
 int main(int argc, char* argv[])
 {
     Options opt = parseOptions(argc, argv);
@@ -1266,8 +1276,7 @@ int main(int argc, char* argv[])
 #endif
         if (opt.headless()) {
             int rc = runHeadless(window, opt);
-            glfwTerminate();
-            return rc;
+            quitNow(rc);
         }
 
 #ifdef __EMSCRIPTEN__
@@ -1297,14 +1306,11 @@ int main(int argc, char* argv[])
             runInteractiveFrame(window, fixedUpdateAccumulator, lastFrame, true);
         }
         live.rec.stop();
-
-        glfwTerminate();
-        return 0;
+        quitNow(0);
 #endif
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
-        glfwTerminate();
-        return -1;
+        quitNow(-1);
     }
 }
 
