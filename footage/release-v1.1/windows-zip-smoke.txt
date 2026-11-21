@@ -1,0 +1,2 @@
+playtest render 1920x1080: 720 frames, median 124.52 ms, p95 160.40 ms, p99 183.46 ms, max 195.86 ms (4 objects)
+scripted playtest 120.0s: frames 7200, attempts 160, hit 111, placed 111, missed 49, full 0, merges 89, losses 3, max objects 10, score 70, high score 314, max y 3.65, max tilt 69.3 deg

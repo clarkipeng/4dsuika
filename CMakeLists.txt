@@ -2,7 +2,28 @@ cmake_minimum_required(VERSION 3.14)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 cmake_policy(VERSION 3.14)
 
-project(Suika4D)
+# Release builds for players (on by default in GitHub Actions): every
+# dependency built from source and linked statically, never taken from the
+# machine (Homebrew dylibs would not exist on a player's Mac), and one
+# universal app for Apple Silicon and Intel Macs.
+if(DEFINED ENV{GITHUB_ACTIONS})
+    set(SUIKA_PORTABLE_DEFAULT ON)
+else()
+    set(SUIKA_PORTABLE_DEFAULT OFF)
+endif()
+option(SUIKA_PORTABLE "Self-contained release build" ${SUIKA_PORTABLE_DEFAULT})
+if(SUIKA_PORTABLE)
+    # PNG, BZip2, HarfBuzz and Brotli are freetype's optional extras (off below).
+    foreach(pkg glfw3 SDL2 SDL2_mixer Freetype PNG BZip2 HarfBuzz BrotliDec)
+        set(CMAKE_DISABLE_FIND_PACKAGE_${pkg} ON)
+    endforeach()
+    if(CMAKE_HOST_APPLE)
+        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
+    endif()
+endif()
+
+project(Suika4D VERSION 1.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -102,6 +123,9 @@ if(NOT EMSCRIPTEN)
         set(FT_WITH_PNG OFF CACHE BOOL "" FORCE)
         set(FT_WITH_HARFBUZZ OFF CACHE BOOL "" FORCE)
         set(FT_WITH_BROTLI OFF CACHE BOOL "" FORCE)
+        foreach(ft PNG BZIP2 HARFBUZZ BROTLI)
+            set(FT_DISABLE_${ft} ON CACHE BOOL "" FORCE)
+        endforeach()
         FetchContent_MakeAvailable(freetype)
         set(SUIKA_FREETYPE_TARGET freetype)
     endif()
@@ -185,17 +209,46 @@ elseif(APPLE)
     )
 endif()
 
-# Installation
+# Installation: only the game goes in the release zip (component "game"),
+# not the headers and libraries the fetched dependencies install. The game
+# finds resources/ next to the executable, or inside the macOS bundle.
 install(TARGETS 4d_game
-    BUNDLE DESTINATION .
-    RUNTIME DESTINATION .
+    BUNDLE DESTINATION . COMPONENT game
+    RUNTIME DESTINATION . COMPONENT game
 )
-install(DIRECTORY resources/ DESTINATION resources)
-
-# Packaging
+if(APPLE)
+    install(DIRECTORY resources/ DESTINATION 4d_game.app/Contents/Resources/resources COMPONENT game)
+else()
+    install(DIRECTORY resources/ DESTINATION resources COMPONENT game)
+endif()
 if(WIN32)
+    # Ship the MSVC runtime so the game starts without the VC++ redistributable.
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT game)
+    include(InstallRequiredSystemLibraries)
+endif()
+
+# Packaging: 4D-Suika-<version>-windows.zip / -macos.zip
+if(WIN32 OR APPLE)
     set(CPACK_GENERATOR "ZIP")
-elseif(APPLE)
-    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+    set(CPACK_COMPONENTS_ALL game)
+    if(WIN32)
+        set(CPACK_ARCHIVE_GAME_FILE_NAME "4D-Suika-${PROJECT_VERSION}-windows")
+    else()
+        set(CPACK_ARCHIVE_GAME_FILE_NAME "4D-Suika-${PROJECT_VERSION}-macos")
+    endif()
+    # Smoke test the zip as a player gets it, right after cpack makes it: a
+    # 120 s scripted playtest from the unpacked copy, ignoring the source tree.
+    # On by default in CI on macOS; Windows runners have no OpenGL 3.3.
+    if(APPLE AND DEFINED ENV{GITHUB_ACTIONS})
+        set(SUIKA_SMOKE_DEFAULT ON)
+    else()
+        set(SUIKA_SMOKE_DEFAULT OFF)
+    endif()
+    option(SUIKA_SMOKE "Smoke test the release zip after packaging" ${SUIKA_SMOKE_DEFAULT})
+    if(SUIKA_SMOKE)
+        set(CPACK_POST_BUILD_SCRIPTS "${CMAKE_SOURCE_DIR}/cmake/smoke-zip.cmake")
+    endif()
 endif()
 include(CPack)

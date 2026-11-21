@@ -31,3 +31,6 @@ Thumbs.db
 *.cache
 *.db
 recordings/
+
+# itch.io uploader, downloaded per project (docs/release.md)
+tools/butler/
