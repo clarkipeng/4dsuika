@@ -15,7 +15,7 @@ The game plays with one hand on the mouse. The keyboard still works for everythi
 
 ## Views
 
-**M** (or Settings > View) switches between Slice (default) and 4D eye. A label bottom-left names the current view and the key, and the choice is saved for the next run.
+**M** (or Settings > View) switches between Slice (default) and 4D eye. A pill under the next-drop panel (top right) names the current view and the key, clicking it switches, and the choice is saved for the next run.
 
 ## Why
 

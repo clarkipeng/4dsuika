@@ -239,6 +239,7 @@ public:
         physics_solver->total_points = 0;
         statMerges = statBestCombo = 0; statBiggest = -1;
         bestAtStart = high_score;
+        playClock = 0.0f; scoreShown = 0.0f; scorePop = 0.0f; lastCombo = 0;
         fm.initializeFruits();
         nextFruit = fm.getRandomFruit();
         state.reset();
@@ -391,6 +392,7 @@ public:
         }
         if (State == GAME_OVER && page == Page::None && keyPressedOnce(GLFW_KEY_R)) { UiSound(1); Reset(); }
         if (State != GAME_ACTIVE && page != Page::Controls && keyPressedOnce(GLFW_KEY_SLASH)) { UiSound(1); Open(Page::Controls); }
+        else if (State == GAME_ACTIVE && !photo && keyPressedOnce(GLFW_KEY_SLASH)) { UiSound(1); OpenControlsFromGame(); }
         if (State != GAME_ACTIVE) UpdateMenuInput(dt);
     }
 
@@ -695,28 +697,6 @@ public:
         }
     }
 
-    void RenderTutorial() {
-        if (!tutorialActive || sheetMode) return;
-        static const char* titles[] = {"AIM AND DROP", "MERGE", "THE BOWL IS 4D", "FRUIT HIDE IN W"};
-        static const char* lines[][2] = {
-            {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
-            {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
-            {"Everything here is a slice of a 4D world.", "Scroll the wheel, middle-drag, or hold A or D to turn the slice into 4D."},
-            {"Fruit off the slice show as dashed rings; the bar below places every fruit in w.", "Press H or Space to come back to the default slice."},
-        };
-        const int s = std::min(tutorialStep, kTutorialSteps - 1);
-        const float w = std::clamp(Width * 0.5f, 340.0f, 780.0f), h = 92.0f;
-        const float bottom = (showDepthStrip && FourDUnlocked()) ? Height - DepthStripHeight() - 28.0f : Height - 24.0f;
-        const float x = (Width - w) * 0.5f, y = bottom - h;
-        FillRect(x, y, w, h, ui::kPanel, 0.92f);
-        FillRect(x, y, 4.0f, h, ui::kGold, 0.95f);
-        t_rend->RenderText(titles[s], x + 18.0f, y + 9.0f, 0.62f, ui::kGold);
-        for (int i = 0; i < 2; ++i)
-            t_rend->RenderText(lines[s][i], x + 18.0f, y + 33.0f + 20.0f * i, fitLabelScale(lines[s][i], w - 36.0f, 0.55f), ui::kCream);
-        for (int i = 0; i < kTutorialSteps; ++i)
-            FillCircle({x + w - 18.0f - 14.0f * (kTutorialSteps - 1 - i), y + 16.0f}, i == s ? 4.5f : 3.0f, ui::kGold, i <= s ? 0.95f : 0.3f, 12);
-        t_rend->RenderText("F1 skip", x + w - 58.0f, y + h - 18.0f, 0.4f, glm::vec3(0.7f, 0.65f, 0.6f));
-    }
 
     // Merge events become bursts; merges in quick succession count as a combo
     // (cosmetic: scoring is unchanged). Danger rises when settled fruit pile up
@@ -850,25 +830,12 @@ public:
             renderer.setPreview(aim.hit, spawn, radius, int(nextFruit),
                                 glm::transpose(NextOrientation().matrix()), landed, land);
         }
+        renderer.showGizmo = showPerf && !hideUI;  // the axis gizmo is a debug read-out (F3)
         renderer.draw(cam, FbWidth, FbHeight, time);
     }
 
     void BeginText() { t_rend->Begin(float(Width), float(Height)); }
 
-    // Slice read-out next to the orientation indicator (bottom-left).
-    void RenderSliceLabel() {
-        char buf[96];
-        float tiltDeg = glm::degrees(state.cam.tilt());
-        snprintf(buf, sizeof buf, "slice tilt %2.0f deg   offset %+.2f", tiltDeg, state.cam.offset);
-        float s = Width < 650 ? 0.36f : 0.50f;
-        float size = std::max(28.0f, FbHeight * 0.045f) * float(Height) / float(std::max(FbHeight, 1));
-        float clearance = showDepthStrip ? DepthStripHeight() + (homing ? 42.0f : 26.0f) : 0.0f;
-        float y = Height - std::max(size * 2.5f + 8.0f, clearance);
-        t_rend->RenderText(buf, 12.0f, y, s, glm::vec3(0.95f, 0.9f, 0.85f));
-        if (homing) t_rend->RenderText("returning to default slice", 12.0f, y + 15.0f, s, glm::vec3(1.0f, 0.8f, 0.3f));
-        // Always shown, so the player knows which view they are in and which key changes it.
-        t_rend->RenderText("view: " + ViewLabel() + "   (M changes)", 12.0f, y - 18.0f, s, glm::vec3(0.75f, 0.9f, 1.0f));
-    }
 
     static glm::vec3 FruitUiColor(int type) {
         static const glm::vec3 colors[] = {
@@ -922,72 +889,6 @@ public:
     float UiScale() const { return std::max(1.0f, Height / 720.0f); }
     float DepthStripHeight() const { return std::clamp(Height * 0.125f, 54.0f, 104.0f * UiScale()); }
 
-    void RenderDepthStrip(const Hit4& hit) {
-        if (!showDepthStrip || !FourDUnlocked()) return;
-        const glm::vec4 normal = state.cam.basis()[3];
-        auto depth = [&](glm::vec4 p) { return glm::dot(p - boundary.center, normal); };
-        const float slice = depth(state.cam.position());
-        float span = std::max(boundary.radius, std::abs(slice) + 0.25f);
-        for (int i = 0; i < MAX_OBJECTS; ++i) {
-            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
-            const auto& obj = physics_solver->objects[i];
-            span = std::max(span, std::abs(depth(obj.position)) + obj.radius);
-        }
-        if (hit.hit) span = std::max(span, std::abs(depth(DropCenter(hit))) + 0.25f);
-        const float gizmoSpace = std::max(112.0f, Height * 0.173f);
-        const float x = std::clamp(std::max(gizmoSpace, Width * 0.185f), 0.0f, Width * 0.42f);
-        const float w = std::min(Width * 0.63f, Width - x - 12.0f);
-        const float h = DepthStripHeight();
-        const float y = Height - h - 12.0f;
-        const float u = UiScale();
-        const float pad = std::min(48.0f * u, w * 0.12f);
-        auto screenX = [&](float d) { return x + w * 0.5f + d / span * (w * 0.5f - pad); };
-
-        FillRect(x, y, w, h, ui::kPanel, 0.91f);
-        const float rail = y + h - 12.0f * u;
-        for (int i = 0; i < 32; ++i) {
-            float left = glm::mix(-span, span, i / 32.0f);
-            float right = glm::mix(-span, span, (i + 1) / 32.0f);
-            DrawLine({screenX(left), rail}, {screenX(right), rail}, 1.6f * u,
-                     DepthUiColor((left + right) * 0.5f - slice), 0.9f);
-        }
-        for (int i = -3; i <= 3; ++i) {
-            float tick = screenX(span * i / 3.0f);
-            DrawLine({tick, rail - 4.0f * u}, {tick, rail + 4.0f * u}, 0.6f * u, ui::kCream, 0.45f);
-        }
-        if (laneSnap) { // the world-w lanes, as they lie along the slice normal
-            for (int k = -int(span / kLaneSpacing) - 1; k <= int(span / kLaneSpacing) + 1; ++k) {
-                float lane = k * kLaneSpacing * normal.w;
-                if (std::abs(lane) > span) continue;
-                DrawLine({screenX(lane), y + 6.0f}, {screenX(lane), rail}, 0.7f, ui::kGold, 0.35f);
-            }
-        }
-        const float marker = screenX(slice);
-        DrawLine({marker, y + 4.0f}, {marker, y + h - 5.0f}, 1.8f * u, ui::kCream, 0.95f);
-        t_rend->RenderText("-w", x + 7.0f * u, y + h * 0.40f, 0.55f * u, DepthUiColor(-span - slice));
-        t_rend->RenderText("+w", x + w - t_rend->GetTextWidth("+w", 0.55f * u) - 7.0f * u,
-                           y + h * 0.40f, 0.55f * u, DepthUiColor(span - slice));
-
-        for (int i = 0; i < MAX_OBJECTS; ++i) {
-            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
-            const auto& obj = physics_solver->objects[i];
-            float d = depth(obj.position);
-            float level = glm::clamp((obj.position.y - boundary.center.y + boundary.radius) /
-                                     (boundary.radius + 1.0f), 0.0f, 1.0f);
-            glm::vec2 c(screenX(d), glm::mix(rail - 10.0f * u, y + 10.0f * u, level));
-            float r = std::clamp(obj.radius * h * 0.22f, 3.0f * u, h * 0.11f);
-            float opacity = std::abs(d - slice) < obj.radius ? 1.0f : 0.55f;
-            glm::vec3 fruit = FruitUiColor(int(obj.fruit));
-            DrawLine({screenX(d - obj.radius), c.y}, {screenX(d + obj.radius), c.y}, 1.4f * u, fruit, 0.45f);
-            FillCircle(c, r, fruit, opacity);
-            DrawCircle(c, r, 1.2f * u, DepthUiColor(d - slice), opacity, 14);
-        }
-        if (hit.hit) {
-            const float cursor = screenX(depth(DropCenter(hit)));
-            t_rend->FillPoly({{cursor - 6.0f * u, y}, {cursor + 6.0f * u, y}, {cursor, y + 9.0f * u}},
-                             FruitUiColor(int(nextFruit)), 1.0f);
-        }
-    }
 
     // First contact along world gravity with the current sphere colliders.
     // The pile may move before the dropped fruit reaches it.
@@ -1065,85 +966,442 @@ public:
         }
     }
 
-    // Combo counter near the top, popping on each merge; a red edge pulse when
-    // the pile nears the rim (the rim itself pulses in the scene).
-    void RenderEffectsUI() {
-        if (danger > 0.02f) {
-            float pulse = 0.5f + 0.5f * std::sin(time * 7.0f);
-            float a = danger * (0.10f + 0.22f * pulse);
-            const glm::vec3 red(1.0f, 0.12f, 0.06f);
-            float e = std::max(10.0f, Height * 0.012f) * (1.0f + 2.0f * danger);
-            FillRect(0.0f, 0.0f, float(Width), e, red, a);
-            FillRect(0.0f, Height - e, float(Width), e, red, a);
-            FillRect(0.0f, e, e, Height - 2.0f * e, red, a);
-            FillRect(Width - e, e, e, Height - 2.0f * e, red, a);
-            if (danger > 0.5f) {
-                const std::string warn = "FULL BOWL";
-                float sc = 0.9f;
-                t_rend->RenderText(warn, (Width - t_rend->GetTextWidth(warn, sc)) * 0.5f, Height * 0.065f, sc,
-                                   glm::mix(glm::vec3(1.0f, 0.55f, 0.4f), glm::vec3(1.0f, 0.2f, 0.12f), pulse));
-            }
-        }
-        if (combo >= 2 && comboTimer > 0.0f) {
-            std::string text = "COMBO x" + std::to_string(combo);
-            float sc = (0.9f + 0.25f * std::min(combo, 6)) * (1.0f + 0.35f * comboPop);
-            float fade = std::min(1.0f, comboTimer / 0.5f);
-            glm::vec3 col = glm::mix(ui::kGold, glm::vec3(1.0f, 0.95f, 0.8f), comboPop) * fade;
-            t_rend->RenderText(text, Width * 0.02f, 14.0f * UiScale() + std::clamp(Height * 0.12f, 56.0f, 104.0f * UiScale()) + 22.0f * UiScale(), sc * std::min(UiScale(), 1.3f), col); // left, under the score: centre is where the drop preview hangs
-        }
+
+    // ------------------------------------------------------------------ HUD
+    // Glazed-ceramic HUD (docs/ui.md): score and next-drop cards at the top,
+    // icon buttons under the next card, the slice dial and w track along the
+    // bottom. Debug read-outs and the axis gizmo only with F3.
+    enum HudId { HudNone = -1, HudView = 0, HudHelp, HudPause, HudHome, kHudButtons };
+    ui::Rect hudRect[kHudButtons];
+    bool hudVisible[kHudButtons] = {};
+    float hudHover[kHudButtons] = {}, hudPress[kHudButtons] = {};
+    float scoreShown = 0.0f, scorePop = 0.0f, comboShown = 0.0f, homeShown = 0.0f;
+    float playClock = 0.0f;           // seconds of play since Reset (starter chips fade out)
+    float hudLastTime = -1.0f;
+    bool controlsFromGame = false;    // ? in play opened Controls; Back returns to the game
+
+    int HudButtonAt(glm::vec2 p) const {
+        for (int i = 0; i < kHudButtons; ++i)
+            if (hudVisible[i] && hudRect[i].has(p)) return i;
+        return HudNone;
     }
+    // A left click on a HUD button runs it and does not drop a fruit.
+    bool HudClick(glm::vec2 p) {
+        if (State != GAME_ACTIVE || photo || hideUI) return false;
+        int b = HudButtonAt(p);
+        if (b == HudNone) return false;
+        hudPress[b] = 1.0f;
+        UiSound(1);
+        switch (b) {
+            case HudView: CycleViewMode(+1); break;
+            case HudHelp: OpenControlsFromGame(); break;
+            case HudPause: State = GAME_PAUSED; break;
+            case HudHome: homing = true; break;
+        }
+        return true;
+    }
+    void OpenControlsFromGame() {
+        controlsFromGame = true;
+        State = GAME_PAUSED;
+        page = Page::None;
+        Open(Page::Controls);
+    }
+
+    float HudMargin() const { return 18.0f * UiScale(); }
+    float TopCardHeight() const { return 100.0f * UiScale(); }
 
     void RenderGameUI(const Hit4& aim)
     {
         if (sheetMode) { RenderSheetLabels(); return; }
         BeginText();
+        const float dt = hudLastTime < 0.0f ? 0.0f : std::clamp(time - hudLastTime, 0.0f, 0.1f);
+        hudLastTime = time;
+        playClock += dt;
         RenderDropGuide(aim);
-        const float u = UiScale();
-        const float panelWidth = std::clamp(Width * 0.20f, 100.0f, 185.0f * u);
-        const float panelHeight = std::clamp(Height * 0.12f, 56.0f, 104.0f * u);
-        const float margin = 14.0f * u;
-        const float nextX = Width - panelWidth - margin;
-        FillRect(margin, margin, panelWidth, panelHeight, ui::kPanel, 0.88f);
-        FillRect(nextX, margin, panelWidth, panelHeight, ui::kPanel, 0.88f);
-        t_rend->RenderText("SCORE", margin + 10.0f * u, margin + 7.0f * u, 0.50f * u, ui::kGold);
-        std::string score = std::to_string(int(physics_solver->total_points));
-        t_rend->RenderText(score, margin + 10.0f * u, margin + panelHeight * 0.34f,
-                           fitLabelScale(score, panelWidth - 20.0f * u, panelHeight / 49.0f), ui::kCream);
-        t_rend->RenderText("NEXT DROP", nextX + 10.0f * u, margin + 7.0f * u, 0.50f * u, ui::kGold);
-        {   // The fruit at its true size against the whole ladder, so a merge is easy to plan.
-            std::string next = kFruitNames[int(nextFruit)];
-            const float rMin = FruitManager::getFruitProperties(CHERRY).radius;
-            const float rMax = FruitManager::getFruitProperties(WATERMELON).radius;
-            float t = (FruitManager::getFruitProperties(nextFruit).radius - rMin) / std::max(rMax - rMin, 1e-3f);
-            float r = glm::mix(6.0f * u, panelHeight * 0.25f, t);
-            float cy = margin + panelHeight * 0.50f;
-            FillCircle({nextX + 12.0f * u + panelHeight * 0.25f, cy}, r, FruitUiColor(int(nextFruit)), 1.0f, 24);
-            float tx = nextX + 22.0f * u + panelHeight * 0.5f;
-            t_rend->RenderText(next, tx, cy - 9.0f * u, fitLabelScale(next, nextX + panelWidth - tx - 8.0f * u, 0.75f * u), ui::kCream);
-            const float ly = margin + panelHeight - 10.0f * u;
-            const float step = (panelWidth - 28.0f * u) / 10.0f;
-            for (int k = 0; k <= int(WATERMELON); ++k) {
-                glm::vec2 c(nextX + 14.0f * u + step * k, ly);
-                bool now = k == int(nextFruit);
-                FillCircle(c, (now ? 4.5f : 2.6f) * u, FruitUiColor(k), now ? 1.0f : 0.55f, 12);
-                if (now) DrawCircle(c, 6.5f * u, 1.0f * u, ui::kCream, 0.9f, 16);
-            }
-        }
-        if (laneSnap) t_rend->RenderText("W-LANE SNAP  (L)", nextX + 10.0f * u, margin + panelHeight + 8.0f * u, 0.5f * u, ui::kGold);
-        RenderEffectsUI();
-        if (FourDUnlocked()) RenderSliceLabel();
+        RenderEffectsUI(dt);
+        RenderScoreCard(dt);
+        RenderNextCard();
+        RenderHudButtons(dt);
         RenderDepthStrip(aim);
+        RenderSliceDial(dt);
+        RenderStarterChips();
         RenderTutorial();
-        if (!caption.empty())
-            t_rend->RenderText(caption, (Width - t_rend->GetTextWidth(caption, 0.9f)) * 0.5f, 25.0f, 0.9f, glm::vec3(1.0f, 0.92f, 0.75f));
-        if (showPerf) {
-            char buf[128];
-            int rw = int(FbWidth * renderer.renderScale), rh = int(FbHeight * renderer.renderScale);
-            snprintf(buf, sizeof buf, "%s  scene %.1f ms  %dx%d (%.0f%%)", qualityName(renderer.quality()),
-                     renderer.gpuMs(), rw, rh, renderer.renderScale * 100.0f);
-            t_rend->RenderText(buf, 25.0f, 60.0f, 0.6f, glm::vec3(0.9f, 0.95f, 0.8f));
+        if (!caption.empty()) {
+            const float u = UiScale();
+            FaceScope f(*t_rend, TextRenderer::Display);
+            float sc = 0.8f * u;
+            ui::textOnScene(*t_rend, caption, (Width - t_rend->GetTextWidth(caption, sc)) * 0.5f, HudMargin() + 8.0f * u, sc, ui::kCream);
+        }
+        if (showPerf) RenderDebugInfo();
+    }
+
+    void RenderScoreCard(float dt) {
+        TextRenderer& t = *t_rend;
+        const float u = UiScale(), m = HudMargin();
+        const int pts = int(physics_solver->total_points);
+        if (float(pts) > scoreShown + 0.5f && scoreShown >= 0.0f) scorePop = 1.0f;
+        scoreShown += (float(pts) - scoreShown) * std::min(1.0f, dt * 10.0f);
+        if (std::abs(float(pts) - scoreShown) < 0.5f) scoreShown = float(pts);
+        scorePop = std::max(0.0f, scorePop - dt * 3.5f);
+        ui::Rect r{m, m, 220.0f * u, TopCardHeight()};
+        ui::glazePanel(t, r, u, 1.0f, 22.0f * u);
+        FaceScope f(t, TextRenderer::Display);
+        const float ls = 0.5f * u;
+        t.RenderText("SCORE", r.x + 20.0f * u, r.y + 16.0f * u, ls, ui::kTerracotta);
+        const int best = std::max(high_score, pts);
+        if (best > 0) {
+            FaceScope fb(t, TextRenderer::Body);
+            std::string b = "best " + ui::thousands(best);
+            float bs = 0.48f * u;
+            t.RenderText(b, r.x + r.w - 20.0f * u - t.GetTextWidth(b, bs), r.y + 16.0f * u, bs,
+                         pts > 0 && pts >= high_score && high_score > 0 ? ui::kGoldFoot : ui::kClayDeep);
+        }
+        std::string s = ui::thousands((long long)std::lround(scoreShown));
+        float vs = ui::fit(t, s, 1.75f * u, r.w - 40.0f * u) * (1.0f + 0.12f * ui::easeOutCubic(scorePop));
+        float cap = t.CapHeight(vs);
+        t.RenderText(s, r.x + 20.0f * u, r.y + r.h - 18.0f * u - cap, vs, glm::mix(ui::kInk, ui::kGoldFoot, scorePop * 0.6f));
+    }
+
+    void RenderNextCard() {
+        TextRenderer& t = *t_rend;
+        const float u = UiScale(), m = HudMargin();
+        ui::Rect r{Width - m - 250.0f * u, m, 250.0f * u, TopCardHeight()};
+        ui::glazePanel(t, r, u, 1.0f, 22.0f * u);
+        FaceScope f(t, TextRenderer::Display);
+        t.RenderText("NEXT", r.x + 20.0f * u, r.y + 16.0f * u, 0.5f * u, ui::kTerracotta);
+        // The fruit at its size on the ladder (cherry small, watermelon big), its name, and the ladder.
+        const float rMin = FruitManager::getFruitProperties(CHERRY).radius;
+        const float rMax = FruitManager::getFruitProperties(WATERMELON).radius;
+        float k = (FruitManager::getFruitProperties(nextFruit).radius - rMin) / std::max(rMax - rMin, 1e-3f);
+        const float slot = 30.0f * u;
+        float fr = glm::mix(9.0f * u, slot, std::sqrt(k));
+        glm::vec2 c(r.x + 20.0f * u + slot, r.y + r.h * 0.55f);
+        DrawFruitBall(c, fr, int(nextFruit), 1.0f);
+        std::string name = kFruitNames[int(nextFruit)];
+        if (!name.empty()) name[0] = char(std::toupper((unsigned char)name[0]));
+        float tx = c.x + slot + 14.0f * u;
+        float ns = ui::fit(t, name, 0.85f * u, r.x + r.w - tx - 16.0f * u);
+        t.RenderText(name, tx, c.y - t.CapHeight(ns) * 0.5f - 8.0f * u, ns, ui::kInk);
+        // Ladder: every fruit as a dot, the next one marked.
+        const float ly = c.y + 18.0f * u, lx0 = tx + 2.0f * u, lx1 = r.x + r.w - 20.0f * u;
+        const float step = (lx1 - lx0) / float(WATERMELON);
+        for (int i = 0; i <= int(WATERMELON); ++i) {
+            glm::vec2 d(lx0 + step * float(i), ly);
+            bool now = i == int(nextFruit);
+            if (now) t.Shape(UiShape::circle(d, 6.5f * u).ring(1.6f * u).fill(ui::kInk, 0.9f));
+            t.Shape(UiShape::circle(d, (now ? 4.0f : 2.8f) * u).fill(FruitUiColor(i), now ? 1.0f : 0.6f));
+        }
+        if (laneSnap) {
+            FaceScope fb(t, TextRenderer::Body);
+            const std::string tag = "w-lane snap  L";
+            float s = 0.46f * u, h = 26.0f * u, w = t.GetTextWidth(tag, s) + 24.0f * u;
+            ui::Rect g{r.x, r.y + r.h + 12.0f * u, w, h};
+            t.Shape(UiShape::rect(g.x, g.y, g.w, g.h, h * 0.5f).grad(ui::kGoldTop, ui::kGoldBottom));
+            t.RenderText(tag, g.x + 12.0f * u, g.y + (h - t.CapHeight(s)) * 0.5f, s, ui::kInk);
         }
     }
+
+    // A shaded fruit dot for the HUD: soft shadow, colour gradient, highlight.
+    void DrawFruitBall(glm::vec2 c, float r, int type, float alpha) {
+        TextRenderer& t = *t_rend;
+        glm::vec3 col = FruitUiColor(type);
+        t.Shape(UiShape::circle(c + glm::vec2(0.0f, r * 0.12f), r).fill(ui::kShadow, 0.25f * alpha).soft(std::max(2.0f, r * 0.3f)));
+        t.Shape(UiShape::circle(c, r).grad(glm::mix(col, glm::vec3(1.0f), 0.28f), col * 0.85f, alpha));
+        t.Shape(UiShape::circle(c + glm::vec2(-0.32f, -0.36f) * r, r * 0.26f).fill(glm::vec3(1.0f), 0.5f * alpha));
+    }
+
+    // View, help and pause under the next card. The view button names the view and its key.
+    void RenderHudButtons(float dt) {
+        TextRenderer& t = *t_rend;
+        const float u = UiScale(), m = HudMargin();
+        const glm::vec2 mouse(state.m_xpos, state.m_ypos);
+        const int hover = HudButtonAt(mouse);
+        for (int i = 0; i < kHudButtons; ++i) {
+            ui::approach(hudHover[i], i == hover ? 1.0f : 0.0f, dt, 18.0f);
+            hudPress[i] = std::max(0.0f, hudPress[i] - dt * 6.0f);
+        }
+        const float br = 22.0f * u, y = m + TopCardHeight() + 16.0f * u + (laneSnap ? 38.0f * u : 0.0f);
+        float x = Width - m;
+        hudRect[HudPause] = {x - 2.0f * br, y, 2.0f * br, 2.0f * br};
+        x -= 2.0f * br + 10.0f * u;
+        hudRect[HudHelp] = {x - 2.0f * br, y, 2.0f * br, 2.0f * br};
+        x -= 2.0f * br + 10.0f * u;
+        const bool eye = renderer.viewMode == ViewMode::Eye;
+        const std::string label = eye ? "4D eye" : "Slice";
+        float vw;
+        {
+            FaceScope f(t, TextRenderer::Display);
+            vw = 2.0f * br * 0.9f + t.GetTextWidth(label, 0.6f * u) + 10.0f * u + ui::keycapWidth(t, "M", 22.0f * u) + 16.0f * u;
+        }
+        hudRect[HudView] = {x - vw, y, vw, 2.0f * br};
+        hudVisible[HudView] = hudVisible[HudHelp] = hudVisible[HudPause] = true;
+
+        ui::iconButton(t, hudRect[HudPause].centre(), br, ui::Icon::Pause, u, hudHover[HudPause], hudPress[HudPause]);
+        ui::iconButton(t, hudRect[HudHelp].centre(), br, ui::Icon::Help, u, hudHover[HudHelp], hudPress[HudHelp]);
+        {
+            const ui::Rect& v = hudRect[HudView];
+            ui::pill(t, v, u, ui::Tone::Secondary, hudHover[HudView], hudPress[HudView]);
+            float sink = 4.0f * u * hudPress[HudView];
+            ui::icon(t, eye ? ui::Icon::Eye : ui::Icon::Slice, {v.x + br * 0.95f, v.y + br + sink}, br * 1.1f, ui::kInk);
+            FaceScope f(t, TextRenderer::Display);
+            float s = 0.6f * u;
+            float lx = v.x + 2.0f * br * 0.9f;
+            t.RenderText(label, lx, v.y + (v.h - t.CapHeight(s)) * 0.5f + sink, s, ui::kInk);
+            ui::keycap(t, "M", lx + t.GetTextWidth(label, s) + 10.0f * u, v.y + (v.h - 22.0f * u) * 0.5f - 1.0f * u + sink, 22.0f * u);
+        }
+        // Tooltip for the round buttons.
+        if (hover == HudHelp || hover == HudPause) {
+            const char* tip = hover == HudHelp ? "Controls  ?" : "Pause  Esc";
+            FaceScope f(t, TextRenderer::Body);
+            float s = 0.46f * u, w = t.GetTextWidth(tip, s) + 20.0f * u, h = 26.0f * u;
+            const ui::Rect& b = hudRect[hover];
+            float tx = std::min(b.centre().x - w * 0.5f, Width - m - w);
+            float a = hudHover[hover];
+            t.Shape(UiShape::rect(tx, b.y + b.h + 10.0f * u, w, h, h * 0.5f).fill(ui::kShadow, 0.8f * a));
+            t.RenderText(tip, tx + 10.0f * u, b.y + b.h + 10.0f * u + (h - t.CapHeight(s)) * 0.5f, s, ui::kCream, a);
+        }
+    }
+
+    // First seconds of a game (after the tutorial): the three inputs that matter, fading out.
+    void RenderStarterChips() {
+        if (tutorialActive || playClock > 10.0f) return;
+        float a = ui::clamp01((playClock - 0.3f) / 0.5f) * ui::clamp01((10.0f - playClock) / 1.5f);
+        if (a <= 0.0f) return;
+        const float u = UiScale();
+        float h = 34.0f * u;
+        float bottom = (showDepthStrip && FourDUnlocked()) ? Height - DepthStripHeight() - HudMargin() - 16.0f * u : Height - HudMargin();
+        ui::keyChipRow(*t_rend, StarterChips(), Width * 0.5f, bottom - h, h, a);
+    }
+
+    // Bottom-left: how far the slice is turned and moved, the view, and a home button.
+    void RenderSliceDial(float dt) {
+        hudVisible[HudHome] = false;
+        if (!FourDUnlocked()) return;
+        TextRenderer& t = *t_rend;
+        const float u = UiScale(), m = HudMargin();
+        const float size = DepthStripHeight();
+        ui::Rect r{m, Height - m - size, size, size};
+        t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, 20.0f * u).fill(ui::kShadow, 0.58f));
+        const float tilt = glm::degrees(state.cam.tilt());
+        const float off = state.cam.offset;
+        glm::vec2 c(r.x + r.w * 0.5f, r.y + r.h * 0.46f);
+        float rad = r.w * 0.30f, th = 5.0f * u;
+        t.Shape(UiShape::arcRing(c, rad, th, 0.0f, 6.2832f).fill(ui::kCream, 0.18f));
+        float sweep = glm::radians(std::clamp(tilt, 0.0f, 180.0f)) * 2.0f;
+        if (sweep > 0.01f) t.Shape(UiShape::arcRing(c, rad, th, -1.5708f, sweep).fill(DepthUiColor(tilt / 60.0f), 1.0f));
+        {
+            FaceScope f(t, TextRenderer::Display);
+            std::string deg = std::to_string(int(std::lround(tilt))) + "\xC2\xB0";
+            float s = ui::fit(t, deg, 0.66f * u, rad * 1.6f);
+            ui::textCentered(t, deg, c.x, c.y - t.CapHeight(s) * 0.5f, s, ui::kCream);
+        }
+        {
+            FaceScope f(t, TextRenderer::Body);
+            char buf[32];
+            if (std::abs(off) >= 0.005f) snprintf(buf, sizeof buf, "w %+.1f", off);
+            else snprintf(buf, sizeof buf, "slice turn");
+            float s = ui::fit(t, buf, 0.42f * u, r.w - 12.0f * u);
+            ui::textCentered(t, buf, c.x, r.y + r.h - 8.0f * u - t.CapHeight(s), s, ui::kMuted);
+        }
+        const bool away = tilt > 1.0f || std::abs(off) > 0.01f;
+        ui::approach(homeShown, away ? 1.0f : 0.0f, dt, 10.0f);
+        if (homeShown > 0.02f) {
+            float br = 20.0f * u;
+            glm::vec2 bc(r.x + r.w + 14.0f * u + br, r.y + br + 4.0f * u);
+            hudRect[HudHome] = {bc.x - br, bc.y - br, 2.0f * br, 2.0f * br};
+            hudVisible[HudHome] = homeShown > 0.5f;
+            float pop = ui::easeOutBack(homeShown);
+            ui::iconButton(t, bc, br * pop, ui::Icon::Home, u, hudHover[HudHome], hudPress[HudHome], homeShown, homing);
+            ui::keycap(t, "H", bc.x - 11.0f * u, bc.y + br + 10.0f * u, 22.0f * u, homeShown);
+        }
+    }
+
+    // F3: frame time, render size, slice numbers and the axis gizmo.
+    void RenderDebugInfo() {
+        TextRenderer& t = *t_rend;
+        const float u = UiScale();
+        FaceScope f(t, TextRenderer::Body);
+        char buf[160];
+        int rw = int(FbWidth * renderer.renderScale), rh = int(FbHeight * renderer.renderScale);
+        snprintf(buf, sizeof buf, "%s  scene %.1f ms  %dx%d (%.0f%%)  view %s  tilt %.1f deg  offset %+.2f",
+                 qualityName(renderer.quality()), renderer.gpuMs(), rw, rh, renderer.renderScale * 100.0f,
+                 ViewLabel().c_str(), glm::degrees(state.cam.tilt()), state.cam.offset);
+        float s = 0.46f * u, w = t.GetTextWidth(buf, s) + 24.0f * u, h = 30.0f * u;
+        float x = (Width - w) * 0.5f, y = HudMargin() + TopCardHeight() + 14.0f * u;
+        t.Shape(UiShape::rect(x, y, w, h, 8.0f * u).fill(ui::kShadow, 0.8f));
+        t.RenderText(buf, x + 12.0f * u, y + (h - t.CapHeight(s)) * 0.5f, s, ui::kCream);
+    }
+
+    // Coach panel for the onboarding steps, above the w track.
+    void RenderTutorial() {
+        if (!tutorialActive || sheetMode) return;
+        TextRenderer& t = *t_rend;
+        static const char* titles[] = {"Aim and drop", "Merge", "The bowl is 4D", "Fruit hide in w"};
+        static const char* lines[][2] = {
+            {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
+            {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
+            {"Everything here is a slice of a 4D world.", "Scroll the wheel, middle-drag, or hold A or D to turn the slice."},
+            {"Fruit off the slice show as rings; the track below places every fruit in w.", "Press H or Space to come back to the default slice."},
+        };
+        const int s = std::min(tutorialStep, kTutorialSteps - 1);
+        const float u = UiScale();
+        const float w = std::min(Width - 2.0f * HudMargin(), 640.0f * u), h = 128.0f * u;
+        const float bottom = (showDepthStrip && FourDUnlocked()) ? Height - DepthStripHeight() - HudMargin() - 18.0f * u
+                                                                 : Height - HudMargin() - 8.0f * u;
+        ui::Rect r{(Width - w) * 0.5f, bottom - h, w, h};
+        ui::glazePanel(t, r, u, 1.0f, 22.0f * u);
+        const float pad = 24.0f * u;
+        {
+            FaceScope f(t, TextRenderer::Display);
+            float ts = 0.8f * u;
+            t.RenderText(titles[s], r.x + pad, r.y + 20.0f * u, ts, ui::kTerracotta);
+        }
+        for (int i = 0; i < kTutorialSteps; ++i) {
+            glm::vec2 d(r.x + r.w - pad - 18.0f * u * float(kTutorialSteps - 1 - i), r.y + 30.0f * u);
+            if (i == s) t.Shape(UiShape::capsule(d - glm::vec2(5.0f * u, 0.0f), d + glm::vec2(5.0f * u, 0.0f), 5.0f * u).fill(ui::kGoldBottom));
+            else t.Shape(UiShape::circle(d, 4.5f * u).fill(i < s ? ui::kGoldBottom : ui::kClay, i < s ? 1.0f : 0.5f));
+        }
+        {
+            FaceScope f(t, TextRenderer::Body);
+            for (int i = 0; i < 2; ++i) {
+                float ls = ui::fit(t, lines[s][i], 0.62f * u, r.w - 2.0f * pad);
+                t.RenderText(lines[s][i], r.x + pad, r.y + 58.0f * u + 28.0f * u * float(i), ls, i == 0 ? ui::kInk : ui::kClayDeep);
+            }
+            float kh = 22.0f * u, ks = 0.44f * u;
+            float lw = t.GetTextWidth("skip", ks);
+            float kx = r.x + r.w - pad - lw - 8.0f * u - ui::keycapWidth(t, "F1", kh);
+            ui::keycap(t, "F1", kx, r.y + r.h - kh - 14.0f * u, kh);
+            t.RenderText("skip", r.x + r.w - pad - lw, r.y + r.h - 14.0f * u - kh * 0.5f - t.CapHeight(ks) * 0.5f, ks, ui::kClayDeep);
+        }
+    }
+
+    // The w track: every fruit placed along the slice normal (world w at tilt 0),
+    // stacked by height. The cream bar is the current slice; fruit it cuts are
+    // bright, the rest faded. A triangle marks where the held fruit will drop.
+    void RenderDepthStrip(const Hit4& hit) {
+        if (!showDepthStrip || !FourDUnlocked()) return;
+        TextRenderer& t = *t_rend;
+        const glm::vec4 normal = state.cam.basis()[3];
+        auto depth = [&](glm::vec4 p) { return glm::dot(p - boundary.center, normal); };
+        const float slice = depth(state.cam.position());
+        float span = std::max(boundary.radius, std::abs(slice) + 0.25f);
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
+            const auto& obj = physics_solver->objects[i];
+            span = std::max(span, std::abs(depth(obj.position)) + obj.radius);
+        }
+        if (hit.hit) span = std::max(span, std::abs(depth(DropCenter(hit))) + 0.25f);
+        const float u = UiScale(), m = HudMargin();
+        const float h = DepthStripHeight();
+        const float x = m + h + 14.0f * u + 40.0f * u + 14.0f * u;   // after the slice dial and its home button
+        const float w = std::min(Width * 0.62f, Width - x - m);
+        const float y = Height - h - m;
+        const float pad = std::min(54.0f * u, w * 0.12f);
+        auto screenX = [&](float d) { return x + w * 0.5f + d / span * (w * 0.5f - pad); };
+
+        t.Shape(UiShape::rect(x, y, w, h, 20.0f * u).fill(ui::kShadow, 0.58f));
+        const float top = y + 30.0f * u, rail = y + h - 16.0f * u;
+        {   // legend
+            FaceScope f(t, TextRenderer::Body);
+            float s = 0.42f * u;
+            t.RenderText("w track: where each fruit sits in the 4th dimension", x + 16.0f * u, y + 10.0f * u, s, ui::kMuted, 0.9f);
+            const std::string r = "faded = off your slice";
+            t.RenderText(r, x + w - 16.0f * u - t.GetTextWidth(r, s), y + 10.0f * u, s, ui::kMuted, 0.6f);
+        }
+        // Rail, coloured from coral (-w) through gold (the slice) to sky (+w).
+        const int seg = 40;
+        for (int i = 0; i < seg; ++i) {
+            float a = glm::mix(-span, span, i / float(seg)), b = glm::mix(-span, span, (i + 1) / float(seg));
+            t.Shape(UiShape::capsule({screenX(a), rail}, {screenX(b), rail}, 2.2f * u).fill(DepthUiColor((a + b) * 0.5f - slice), 0.95f));
+        }
+        {
+            FaceScope f(t, TextRenderer::Display);
+            float s = 0.56f * u;
+            float cy = rail - t.CapHeight(s) * 0.5f;
+            t.RenderText("\xE2\x88\x92w", x + 14.0f * u, cy, s, DepthUiColor(-span - slice));
+            t.RenderText("+w", x + w - 14.0f * u - t.GetTextWidth("+w", s), cy, s, DepthUiColor(span - slice));
+        }
+        if (laneSnap) {   // the world-w lanes, as they lie along the slice normal
+            for (int k = -int(span / kLaneSpacing) - 1; k <= int(span / kLaneSpacing) + 1; ++k) {
+                float lane = k * kLaneSpacing * normal.w;
+                if (std::abs(lane) > span) continue;
+                t.Shape(UiShape::capsule({screenX(lane), top}, {screenX(lane), rail}, 0.8f * u).fill(ui::kGold, 0.3f));
+            }
+        }
+        // The slice: a cream bar with a soft glow.
+        const float sx = screenX(slice);
+        t.Shape(UiShape::capsule({sx, top - 4.0f * u}, {sx, rail + 6.0f * u}, 6.0f * u).fill(ui::kCream, 0.18f).soft(6.0f * u));
+        t.Shape(UiShape::capsule({sx, top - 4.0f * u}, {sx, rail + 6.0f * u}, 1.8f * u).fill(ui::kCream, 0.95f));
+        // Fruit, far ones first so the cut ones sit on top.
+        std::vector<int> order;
+        for (int i = 0; i < MAX_OBJECTS; ++i)
+            if (physics_solver->has_obj[i] && !physics_solver->objects[i].hidden) order.push_back(i);
+        auto cut = [&](int i) { const auto& o = physics_solver->objects[i]; return std::abs(depth(o.position) - slice) < o.radius; };
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return !cut(a) && cut(b); });
+        for (int i : order) {
+            const auto& obj = physics_solver->objects[i];
+            float d = depth(obj.position);
+            float level = glm::clamp((obj.position.y - boundary.center.y + boundary.radius) / (boundary.radius + 1.0f), 0.0f, 1.0f);
+            float r = std::clamp(obj.radius / span * (w * 0.5f - pad), 3.5f * u, (rail - top) * 0.32f);
+            glm::vec2 c(screenX(d), glm::mix(rail - 6.0f * u - r, top + r, level));
+            const bool on = cut(i);
+            float a = on ? 1.0f : 0.42f;
+            t.Shape(UiShape::capsule({screenX(d - obj.radius), c.y}, {screenX(d + obj.radius), c.y}, 1.2f * u)
+                        .fill(FruitUiColor(int(obj.fruit)), 0.35f * a));
+            DrawFruitBall(c, r, int(obj.fruit), a);
+            if (on) t.Shape(UiShape::circle(c, r + 1.5f * u).ring(1.6f * u).fill(ui::kCream, 0.9f));
+        }
+        if (hit.hit) {
+            const float cx = screenX(depth(DropCenter(hit)));
+            const float th = 12.0f * u;
+            t.Shape(UiShape::tri({cx - th, y - 2.0f * u}, {cx + th, y - 2.0f * u}, {cx, y + th}, 2.0f * u).fill(ui::kCream));
+            t.Shape(UiShape::tri({cx - th * 0.62f, y + 0.5f * u}, {cx + th * 0.62f, y + 0.5f * u}, {cx, y + th * 0.72f}, 1.0f * u)
+                        .fill(FruitUiColor(int(nextFruit))));
+        }
+    }
+
+    // Combo badge under the score card, popping on each merge; a soft red
+    // vignette and a warning pill when the pile nears the rim.
+    void RenderEffectsUI(float dt) {
+        TextRenderer& t = *t_rend;
+        const float u = UiScale(), m = HudMargin();
+        if (danger > 0.02f) {
+            float pulse = 0.5f + 0.5f * std::sin(time * 7.0f);
+            float a = danger * (0.35f + 0.35f * pulse);
+            float e = std::max(24.0f, Height * 0.05f) * (0.6f + danger);
+            t.Shape(UiShape::rect(-e, -e, Width + 2.0f * e, Height + 2.0f * e, e).ring(e * 1.4f).soft(e * 1.2f).fill(ui::kDanger, a));
+            if (danger > 0.5f) {
+                FaceScope f(t, TextRenderer::Display);
+                const std::string warn = "Bowl almost full!";
+                float s = 0.62f * u, h = 40.0f * u, w = t.GetTextWidth(warn, s) + 40.0f * u;
+                float k = 1.0f + 0.04f * pulse;
+                ui::Rect r{(Width - w * k) * 0.5f, m + 4.0f * u, w * k, h * k};
+                t.Shape(UiShape::rect(r.x, r.y + 4.0f * u, r.w, r.h, r.h * 0.5f).fill(ui::kClayDeep));
+                t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, r.h * 0.5f).grad(glm::mix(ui::kDanger, glm::vec3(1.0f), 0.2f), ui::kDanger));
+                ui::textCentered(t, warn, Width * 0.5f, r.y + (r.h - t.CapHeight(s * k)) * 0.5f, s * k, ui::kCream);
+            }
+        }
+        const bool showCombo = combo >= 2 && comboTimer > 0.0f;
+        ui::approach(comboShown, showCombo ? std::min(1.0f, comboTimer / 0.4f) : 0.0f, dt, 12.0f);
+        if (comboShown > 0.02f && lastCombo >= 2) {
+            if (showCombo) lastCombo = combo;
+            FaceScope f(t, TextRenderer::Display);
+            std::string text = "Combo \xC3\x97" + std::to_string(lastCombo);
+            float pop = 1.0f + 0.25f * ui::easeOutBack(comboPop);
+            float s = (0.72f + 0.05f * std::min(lastCombo, 6)) * u * pop;
+            float h = t.CapHeight(s) + 22.0f * u * pop, w = t.GetTextWidth(text, s) + 32.0f * u * pop;
+            ui::Rect r{m, m + TopCardHeight() + 16.0f * u, w, h};
+            float a = comboShown;
+            t.Shape(UiShape::rect(r.x, r.y + 4.0f * u, r.w, r.h, r.h * 0.5f).fill(ui::kGoldFoot, a));
+            t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, r.h * 0.5f).grad(ui::kGoldTop, ui::kGoldBottom, a));
+            t.Shape(UiShape::rect(r.x + r.h * 0.3f, r.y + 3.0f * u, r.w - r.h * 0.6f, r.h * 0.3f, r.h * 0.15f).fill(glm::vec3(1.0f), 0.3f * a));
+            t.RenderText(text, r.x + 16.0f * u * pop, r.y + (r.h - t.CapHeight(s)) * 0.5f, s, ui::kInk, a);
+        } else if (showCombo) {
+            lastCombo = combo;
+        }
+    }
+    int lastCombo = 0;                // the combo the fading badge shows
+
 
     void Render() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1250,7 +1508,10 @@ public:
 
     Page returnPage = Page::None;     // where Back from a page goes
     void Open(Page p) { returnPage = page; page = p; EnsureMenu(); }
-    void ClosePage() { page = returnPage; returnPage = Page::None; }
+    void ClosePage() {
+        page = returnPage; returnPage = Page::None;
+        if (controlsFromGame && page == Page::None) { controlsFromGame = false; State = GAME_ACTIVE; }
+    }
 
     // Key chips at the bottom of the title screen: the three inputs that matter, and where the rest are.
     static std::vector<std::pair<std::string, std::string>> StarterChips() {
