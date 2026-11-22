@@ -20,4 +20,9 @@ One visual system for every 2D screen (menus, HUD, overlays): *glazed ceramic*, 
 - **In-game HUD:** a glaze score card top left (the score counts up and pops, the best beside it), with a gold combo badge that pops in and fades below it; a next-drop card top right (a shaded fruit ball sized on the ladder, its name, the ladder dots with the next one ringed, a gold tag when lane snap is on); under it a view pill (icon, name, M) and ? and pause icon buttons with tooltips. Clicking a HUD button never drops a fruit. Bottom: the w track panel with a legend, the slice dial with a Home button while off home, starter key chips for the first 10 s, and the tutorial coach panel. Near the top a red vignette and a pulsing "Bowl almost full!" pill warn before overflow. **F3** shows debug info (perf, view, tilt, offset and the axis gizmo); nothing debug shows otherwise.
 - **Controls:** keycaps in two columns grouped by Play, Turn into 4D, View and extras. **?** opens it from any menu.
 
+## Sound and pointer
+
+- Samples: drop (`click.wav`), merge thud (`drop.wav`), lose (`game_over.wav`), music (`theme.wav`). `src/4d_game/synth.hpp` builds the rest in memory at start: a soft tick when focus moves, a wooden tock on press, a blip when a value changes, a marimba merge chime per fruit on a pentatonic ladder (small fruit high, big fruit low and fuller; a running combo climbs a step per merge, up to three), and a rising arpeggio after the lose sound on a new best. All follow Settings > Sound and the effects volume.
+- The pointer turns into a hand over anything clickable (menu rows, HUD buttons, the coach panel's skip).
+
 Keyboard: ↑/↓ move between lines, ←/→ move within a line of buttons or change a value, Enter or Space selects, Esc goes back. Mouse: hover highlights, click selects.

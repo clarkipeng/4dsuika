@@ -7,7 +7,7 @@ The game plays with one hand on the mouse. The keyboard still works for everythi
 | Input | Slice | 4D eye |
 |---|---|---|
 | Move | aim the drop | aim the drop |
-| Left click | drop | drop |
+| Left click | drop (off the bowl, at the nearest spot inside the rim; on a HUD button, the button) | drop |
 | Right-drag | orbit the camera | orbit the camera |
 | Middle-drag, or Shift + right-drag | turn into 4D (arcball: horizontal xw, vertical yw) | same |
 | Wheel | turn the slice through w (xw, about 5 degrees a notch, eased) | set the w of the drop (0.5 a notch, within the bowl) |

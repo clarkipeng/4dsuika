@@ -90,6 +90,7 @@ struct Hit4 {
     bool hit = false;
     float t = 1e30f;
     glm::vec4 point{0.0f};
+    bool clamped = false;   // the cursor missed the bowl; point is the nearest spot inside the rim
 };
 
 // Nearest positive hit of a 4D ray with the glome |p - c| = r (both roots).
@@ -124,5 +125,24 @@ inline Hit4 getPlacementMouse(const ViewState& state, const HemisphereBoundary& 
         glomeRoots(o, d, obj.position, obj.radius, t0, t1);
         if (t0 > 0.0f && t0 < best.t) best = {true, t0, o + d * t0};
     }
+    if (best.hit) return best;
+    // Off the bowl: aim at the rim plane (or, looking above the horizon, the
+    // ray's closest approach to the bowl), pulled inside the rim. The drop then
+    // follows the cursor round the edge instead of vanishing.
+    const float rimY = bowl.center.y - (bowl.radius - bowl.margin) * std::cos(bowl.cutoffAngle);
+    float t = d.y < -1e-3f ? (rimY - o.y) / d.y : glm::dot(bowl.center - o, d);
+    if (t <= 0.0f) t = glm::dot(bowl.center - o, d);
+    if (t <= 0.0f) return best;
+    glm::vec4 p = o + d * t;
+    p.y = rimY;
+    const float reach = (bowl.radius - bowl.margin) * std::sin(bowl.cutoffAngle) - 0.3f;
+    glm::vec4 off = p - bowl.center;
+    off.y = 0.0f;
+    float len = glm::length(off);
+    if (len > reach) p = bowl.center + off * (reach / len) + glm::vec4(0.0f, rimY - bowl.center.y, 0.0f, 0.0f);
+    best.hit = true;
+    best.t = t;
+    best.point = p;
+    best.clamped = true;
     return best;
 }

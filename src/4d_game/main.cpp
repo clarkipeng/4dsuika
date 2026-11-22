@@ -1311,9 +1311,13 @@ int main(int argc, char* argv[])
         float fixedUpdateAccumulator = 0.0f;
         float lastFrame = glfwGetTime();
         if (!opt.record.empty()) live.toggle = true;  // --record starts at once
+        GLFWcursor* handCursor = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
+        bool handShown = false;
         while (!glfwWindowShouldClose(window))
         {
             runInteractiveFrame(window, fixedUpdateAccumulator, lastFrame, true);
+            const bool hand = game.WantsHandCursor();
+            if (hand != handShown) { glfwSetCursor(window, hand ? handCursor : nullptr); handShown = hand; }
         }
         live.rec.stop();
         quitNow(0);
