@@ -639,7 +639,7 @@ private:
             float gap = nearby[i].first;
             hc[i] = f.center - off * normal; // projected into the slice
             float strength = 1.0f - gap / kHintRange;
-            hd[i] = glm::vec4(f.radius, float(f.type), off, std::max(strength * strength, 0.9f * glowOf(f)));
+            hd[i] = glm::vec4(f.radius, float(f.type), off, std::max(strength, 0.9f * glowOf(f)));
         }
         glUniform1i(loc(prog, "uHintCount"), h);
         if (h > 0) {

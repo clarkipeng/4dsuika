@@ -31,12 +31,14 @@ struct MenuItem {
     bool primary = false;                     // gold button
     bool joinRow = false;                     // shares the line of the item before it
     std::string key;                          // shortcut shown as a keycap on the button
+    int swatch = 0;                           // Info: draw a 4D cue sample instead of keycaps (ui::cueSwatch)
     bool focusable() const { return kind == Button || kind == Choice || kind == Slider; }
 
     MenuItem& withIcon(ui::Icon i) { icon = i; return *this; }
     MenuItem& asPrimary() { primary = true; return *this; }
     MenuItem& sameRow() { joinRow = true; return *this; }
     MenuItem& withKey(std::string k) { key = std::move(k); return *this; }
+    MenuItem& withSwatch(int k) { swatch = k; return *this; }
 
     static MenuItem button(std::string label, std::function<void()> f) {
         MenuItem m; m.kind = Button; m.label = std::move(label); m.activate = std::move(f); return m;
@@ -444,7 +446,8 @@ private:
             float kh = std::min(r.h - 6.0f * u, 26.0f * u);
             float x = r.x + 4.0f * u;
             float keyW = style_.keyColumn * u;
-            std::string rest = m.label;
+            std::string rest = m.swatch ? std::string() : m.label;
+            if (m.swatch) ui::cueSwatch(t, m.swatch, {x + kh * (m.swatch == 4 ? 1.1f : 0.7f), r.y + r.h * 0.5f}, kh * 0.5f, u, alpha);
             while (!rest.empty()) {
                 size_t sep = rest.find(" / ");
                 std::string tok = rest.substr(0, sep);
