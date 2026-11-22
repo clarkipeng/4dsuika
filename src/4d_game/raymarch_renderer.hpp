@@ -70,6 +70,7 @@ public:
     static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
     int viewportX = 0;                        // where in the target the frame is presented (photo mode draws two side by side)
     bool showGizmo = true;                    // false: no corner axis gizmo (--no-ui captures)
+    float bgSoft = 0.8;                       // 0..1, softened background (sky and world away from the bowl)
     bool cues4D = true;                       // false: no depth rings, hints, glow or slice indicator (the 3D start of the tutorial)
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
@@ -590,6 +591,7 @@ private:
             glUniform4fv(loc(prog, "uBurstData"), n, glm::value_ptr(data[0]));
         }
         glUniform1f(loc(prog, "uDanger"), danger_);
+        glUniform1f(loc(prog, "uBgSoft"), bgSoft);
         glUniform1f(loc(prog, "uCues"), cues4D ? 1.0f : 0.0f);
     }
 

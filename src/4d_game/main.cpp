@@ -149,6 +149,8 @@ struct Options {
     bool perf = false;
     bool laneSnap = false;
     bool noGlow = false;
+    float bgSoft = -1.0f;
+    float targetY = Camera4D::kDefaultTargetY;
     bool noUi = false, logEvents = false, noCapture = false;
     float captureFrom = 0.0f;
     std::vector<std::pair<float, float>> captureRanges;   // --capture-ranges a-b,c-d
@@ -217,6 +219,8 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--perf") o.perf = true;
         else if (a == "--lane-snap") o.laneSnap = true;
         else if (a == "--no-glow") o.noGlow = true;
+        else if (a == "--target-y") o.targetY = float(std::atof(next().c_str()));
+        else if (a == "--bg-soft") o.bgSoft = float(std::atof(next().c_str()));
         else if (a == "--no-fx") o.noFx = true;
         else if (a == "--no-ui") o.noUi = true;
         else if (a == "--log-events") o.logEvents = true;
@@ -277,6 +281,7 @@ static void applyCameraOptions(const Options& o, Camera4D& cam) {
     cam.pitch = glm::radians(o.pitch);
     cam.offset = o.offset;
     cam.distance = o.distance;
+    cam.target.y = o.targetY;
     applyTurns(o.turn, cam);
 }
 
@@ -849,6 +854,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     game.showPerf = o.perf;
     game.laneSnap = o.laneSnap;
     game.renderer.sameKindGlow = !o.noGlow;
+    if (o.bgSoft >= 0.0f) game.renderer.bgSoft = std::min(o.bgSoft, 1.0f);
     game.effectsOn = !o.noFx;
     game.hideUI = o.noUi;
     game.renderer.showGizmo = !o.noUi;

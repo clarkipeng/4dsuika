@@ -55,6 +55,7 @@ uniform vec4  uBurstCenters[MAX_BURSTS]; // world centre of the merge
 uniform vec4  uBurstData[MAX_BURSTS]; // fruit radius, type, progress 0..1, power
 uniform float uCues;                // 0 hides depth rings, hints and glow (tutorial, 3D phase)
 uniform float uDanger;               // 0..1, the pile is near the rim
+uniform float uBgSoft;               // 0..1, how much the background is softened (present pass blurs it)
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform mat4  uPreviewWorldToLocal;  // the next fruit's real orientation
@@ -679,8 +680,13 @@ vec3 grade(vec3 col) {
 }
 
 // Final colour of a pixel from its hit and light (shadow, AO).
+// Softness of this pixel for the present pass (0 sharp .. 1 fully softened),
+// written to the scene's alpha as 1 - gSoft.
+float gSoft = 0.0;
+
 vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     vec3 col = vec3(0.0);
+    gSoft = 0.0;
     float dist = h.t;
     if (h.kind < 0.0) {
         int fruit = int(-h.kind) - 1;
@@ -746,6 +752,20 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.012);
     if (fog > 0.002) col = mix(col, background(px, rd), fog);
 
+#ifndef TURNTABLE
+    // Softened background: the sky and the world beyond the bowl's surroundings
+    // lose some saturation and contrast here and are blurred in the present
+    // pass, so the bowl and the fruit are what stays crisp.
+    if (h.kind == 0.0) gSoft = uBgSoft;
+    else if (h.kind > 0.0 && h.kind != MAT_BOWL)
+        gSoft = uBgSoft * smoothstep(BOWL_R + 1.5, BOWL_R + 6.0, length((ro + rd * h.t).xyz));
+    if (gSoft > 0.0) {
+        float luma = dot(col, vec3(0.299, 0.587, 0.114));
+        col = mix(col, mix(vec3(luma), col, 0.6) * 0.92 + vec3(0.035, 0.022, 0.025), gSoft);
+    }
+    vec3 beforeOverlay = col;
+#endif
+
     col = drawHints(col, ro, rd, dist);
     col = drawBursts(col, ro, rd, dist);
 
@@ -759,6 +779,10 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         col = drawDropGhost(col, ro, rd, limit, uPreviewCenter, 0.55);
     }
 
+#ifndef TURNTABLE
+    // Hints, bursts and the drop ghosts drawn over the background stay sharp.
+    if (dot(abs(col - beforeOverlay), vec3(1.0)) > 0.01) gSoft = 0.0;
+#endif
     // The cover art's darker edges.
     col = grade(col);
     vec2 v = px / uResolution - 0.5;
@@ -960,11 +984,11 @@ void main() {
     Hit h = readGeometry(texel);
     vec2 light = h.kind == 0.0 ? vec2(1.0) : upsampleLight(texel, h.t);
     gCutEdge = h.kind == MAT_BOWL ? cutEdge(texel) : 0.0;
-    fragColor = vec4(compose(px, ro, rayDir(px), h, light), 1.0);
+    fragColor = vec4(compose(px, ro, rayDir(px), h, light), 1.0 - gSoft);
 #else
     vec4 rd = rayDir(px);
     Hit h = traceScene(ro, rd);
-    fragColor = vec4(compose(px, ro, rd, h, lightHit(ro, rd, h)), 1.0);
+    fragColor = vec4(compose(px, ro, rd, h, lightHit(ro, rd, h)), 1.0 - gSoft);
 #endif
 #if defined(COST_MAP) && PASS != 1 && PASS != 4
     // Evaluations / 255 per channel: R static world, G moving world, B fruit.

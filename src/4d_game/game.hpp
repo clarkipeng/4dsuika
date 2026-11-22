@@ -873,7 +873,10 @@ public:
         return glm::mix(ui::kGold, side, glm::smoothstep(0.0f, 1.5f, std::abs(offset)));
     }
 
-    float DepthStripHeight() const { return std::clamp(Height * 0.11f, 54.0f, 104.0f); }
+    // HUD scale: 1 up to 720 lines, then grows with the window so panels,
+    // text and the w strip stay big and clean at 1080p and 4K.
+    float UiScale() const { return std::max(1.0f, Height / 720.0f); }
+    float DepthStripHeight() const { return std::clamp(Height * 0.125f, 54.0f, 104.0f * UiScale()); }
 
     void RenderDepthStrip(const Hit4& hit) {
         if (!showDepthStrip || !FourDUnlocked()) return;
@@ -892,20 +895,21 @@ public:
         const float w = std::min(Width * 0.63f, Width - x - 12.0f);
         const float h = DepthStripHeight();
         const float y = Height - h - 12.0f;
-        const float pad = std::min(48.0f, w * 0.12f);
+        const float u = UiScale();
+        const float pad = std::min(48.0f * u, w * 0.12f);
         auto screenX = [&](float d) { return x + w * 0.5f + d / span * (w * 0.5f - pad); };
 
         FillRect(x, y, w, h, ui::kPanel, 0.91f);
-        const float rail = y + h - 12.0f;
+        const float rail = y + h - 12.0f * u;
         for (int i = 0; i < 32; ++i) {
             float left = glm::mix(-span, span, i / 32.0f);
             float right = glm::mix(-span, span, (i + 1) / 32.0f);
-            DrawLine({screenX(left), rail}, {screenX(right), rail}, 1.6f,
+            DrawLine({screenX(left), rail}, {screenX(right), rail}, 1.6f * u,
                      DepthUiColor((left + right) * 0.5f - slice), 0.9f);
         }
         for (int i = -3; i <= 3; ++i) {
             float tick = screenX(span * i / 3.0f);
-            DrawLine({tick, rail - 4.0f}, {tick, rail + 4.0f}, 0.6f, ui::kCream, 0.45f);
+            DrawLine({tick, rail - 4.0f * u}, {tick, rail + 4.0f * u}, 0.6f * u, ui::kCream, 0.45f);
         }
         if (laneSnap) { // the world-w lanes, as they lie along the slice normal
             for (int k = -int(span / kLaneSpacing) - 1; k <= int(span / kLaneSpacing) + 1; ++k) {
@@ -915,10 +919,10 @@ public:
             }
         }
         const float marker = screenX(slice);
-        DrawLine({marker, y + 4.0f}, {marker, y + h - 5.0f}, 1.8f, ui::kCream, 0.95f);
-        t_rend->RenderText("-w", x + 7.0f, y + h * 0.40f, 0.55f, DepthUiColor(-span - slice));
-        t_rend->RenderText("+w", x + w - t_rend->GetTextWidth("+w", 0.55f) - 7.0f,
-                           y + h * 0.40f, 0.55f, DepthUiColor(span - slice));
+        DrawLine({marker, y + 4.0f}, {marker, y + h - 5.0f}, 1.8f * u, ui::kCream, 0.95f);
+        t_rend->RenderText("-w", x + 7.0f * u, y + h * 0.40f, 0.55f * u, DepthUiColor(-span - slice));
+        t_rend->RenderText("+w", x + w - t_rend->GetTextWidth("+w", 0.55f * u) - 7.0f * u,
+                           y + h * 0.40f, 0.55f * u, DepthUiColor(span - slice));
 
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
@@ -926,17 +930,17 @@ public:
             float d = depth(obj.position);
             float level = glm::clamp((obj.position.y - boundary.center.y + boundary.radius) /
                                      (boundary.radius + 1.0f), 0.0f, 1.0f);
-            glm::vec2 c(screenX(d), glm::mix(rail - 10.0f, y + 10.0f, level));
-            float r = std::clamp(obj.radius * h * 0.22f, 3.0f, h * 0.11f);
+            glm::vec2 c(screenX(d), glm::mix(rail - 10.0f * u, y + 10.0f * u, level));
+            float r = std::clamp(obj.radius * h * 0.22f, 3.0f * u, h * 0.11f);
             float opacity = std::abs(d - slice) < obj.radius ? 1.0f : 0.55f;
             glm::vec3 fruit = FruitUiColor(int(obj.fruit));
-            DrawLine({screenX(d - obj.radius), c.y}, {screenX(d + obj.radius), c.y}, 1.4f, fruit, 0.45f);
+            DrawLine({screenX(d - obj.radius), c.y}, {screenX(d + obj.radius), c.y}, 1.4f * u, fruit, 0.45f);
             FillCircle(c, r, fruit, opacity);
-            DrawCircle(c, r, 0.85f, DepthUiColor(d - slice), opacity, 14);
+            DrawCircle(c, r, 1.2f * u, DepthUiColor(d - slice), opacity, 14);
         }
         if (hit.hit) {
             const float cursor = screenX(depth(DropCenter(hit)));
-            t_rend->FillPoly({{cursor - 6.0f, y}, {cursor + 6.0f, y}, {cursor, y + 9.0f}},
+            t_rend->FillPoly({{cursor - 6.0f * u, y}, {cursor + 6.0f * u, y}, {cursor, y + 9.0f * u}},
                              FruitUiColor(int(nextFruit)), 1.0f);
         }
     }
@@ -1041,7 +1045,7 @@ public:
             float sc = (0.9f + 0.25f * std::min(combo, 6)) * (1.0f + 0.35f * comboPop);
             float fade = std::min(1.0f, comboTimer / 0.5f);
             glm::vec3 col = glm::mix(ui::kGold, glm::vec3(1.0f, 0.95f, 0.8f), comboPop) * fade;
-            t_rend->RenderText(text, Width * 0.02f, Height * 0.15f, sc, col); // left, under the score: centre is where the drop preview hangs
+            t_rend->RenderText(text, Width * 0.02f, 14.0f * UiScale() + std::clamp(Height * 0.12f, 56.0f, 104.0f * UiScale()) + 22.0f * UiScale(), sc * std::min(UiScale(), 1.3f), col); // left, under the score: centre is where the drop preview hangs
         }
     }
 
@@ -1050,37 +1054,38 @@ public:
         if (sheetMode) { RenderSheetLabels(); return; }
         BeginText();
         RenderDropGuide(aim);
-        const float panelWidth = std::clamp(Width * 0.20f, 100.0f, 185.0f);
-        const float panelHeight = std::clamp(Height * 0.12f, 56.0f, 104.0f);
-        const float margin = 14.0f;
+        const float u = UiScale();
+        const float panelWidth = std::clamp(Width * 0.20f, 100.0f, 185.0f * u);
+        const float panelHeight = std::clamp(Height * 0.12f, 56.0f, 104.0f * u);
+        const float margin = 14.0f * u;
         const float nextX = Width - panelWidth - margin;
         FillRect(margin, margin, panelWidth, panelHeight, ui::kPanel, 0.88f);
         FillRect(nextX, margin, panelWidth, panelHeight, ui::kPanel, 0.88f);
-        t_rend->RenderText("SCORE", margin + 10.0f, margin + 7.0f, 0.50f, ui::kGold);
+        t_rend->RenderText("SCORE", margin + 10.0f * u, margin + 7.0f * u, 0.50f * u, ui::kGold);
         std::string score = std::to_string(int(physics_solver->total_points));
-        t_rend->RenderText(score, margin + 10.0f, margin + panelHeight * 0.34f,
-                           fitLabelScale(score, panelWidth - 20.0f, panelHeight / 49.0f), ui::kCream);
-        t_rend->RenderText("NEXT DROP", nextX + 10.0f, margin + 7.0f, 0.50f, ui::kGold);
+        t_rend->RenderText(score, margin + 10.0f * u, margin + panelHeight * 0.34f,
+                           fitLabelScale(score, panelWidth - 20.0f * u, panelHeight / 49.0f), ui::kCream);
+        t_rend->RenderText("NEXT DROP", nextX + 10.0f * u, margin + 7.0f * u, 0.50f * u, ui::kGold);
         {   // The fruit at its true size against the whole ladder, so a merge is easy to plan.
             std::string next = kFruitNames[int(nextFruit)];
             const float rMin = FruitManager::getFruitProperties(CHERRY).radius;
             const float rMax = FruitManager::getFruitProperties(WATERMELON).radius;
             float t = (FruitManager::getFruitProperties(nextFruit).radius - rMin) / std::max(rMax - rMin, 1e-3f);
-            float r = glm::mix(6.0f, panelHeight * 0.25f, t);
+            float r = glm::mix(6.0f * u, panelHeight * 0.25f, t);
             float cy = margin + panelHeight * 0.50f;
-            FillCircle({nextX + 12.0f + panelHeight * 0.25f, cy}, r, FruitUiColor(int(nextFruit)), 1.0f, 24);
-            float tx = nextX + 22.0f + panelHeight * 0.5f;
-            t_rend->RenderText(next, tx, cy - 9.0f, fitLabelScale(next, nextX + panelWidth - tx - 8.0f, 0.75f), ui::kCream);
-            const float ly = margin + panelHeight - 10.0f;
-            const float step = (panelWidth - 28.0f) / 10.0f;
+            FillCircle({nextX + 12.0f * u + panelHeight * 0.25f, cy}, r, FruitUiColor(int(nextFruit)), 1.0f, 24);
+            float tx = nextX + 22.0f * u + panelHeight * 0.5f;
+            t_rend->RenderText(next, tx, cy - 9.0f * u, fitLabelScale(next, nextX + panelWidth - tx - 8.0f * u, 0.75f * u), ui::kCream);
+            const float ly = margin + panelHeight - 10.0f * u;
+            const float step = (panelWidth - 28.0f * u) / 10.0f;
             for (int k = 0; k <= int(WATERMELON); ++k) {
-                glm::vec2 c(nextX + 14.0f + step * k, ly);
+                glm::vec2 c(nextX + 14.0f * u + step * k, ly);
                 bool now = k == int(nextFruit);
-                FillCircle(c, now ? 4.5f : 2.6f, FruitUiColor(k), now ? 1.0f : 0.55f, 12);
-                if (now) DrawCircle(c, 6.5f, 1.0f, ui::kCream, 0.9f, 16);
+                FillCircle(c, (now ? 4.5f : 2.6f) * u, FruitUiColor(k), now ? 1.0f : 0.55f, 12);
+                if (now) DrawCircle(c, 6.5f * u, 1.0f * u, ui::kCream, 0.9f, 16);
             }
         }
-        if (laneSnap) t_rend->RenderText("W-LANE SNAP  (L)", nextX + 10.0f, margin + panelHeight + 8.0f, 0.5f, ui::kGold);
+        if (laneSnap) t_rend->RenderText("W-LANE SNAP  (L)", nextX + 10.0f * u, margin + panelHeight + 8.0f * u, 0.5f * u, ui::kGold);
         RenderEffectsUI();
         if (FourDUnlocked()) RenderSliceLabel();
         RenderDepthStrip(aim);

@@ -83,15 +83,16 @@ struct Rot4 {
 // `slice` holds every 4D turn (and roll); `orbit` is ordinary yaw and pitch
 // inside the slice, so mouse turning never tilts the slice into w.
 struct Camera4D {
-    glm::vec4 target{0.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec4 target{0.0f, kDefaultTargetY, 0.0f, 0.0f};
     Rot4 slice;
     float yaw = 0.0f, pitch = kDefaultPitch;
     float distance = kDefaultDistance;
     float offset = 0.0f;                 // along the slice normal
     float fovY = glm::radians(45.0f);
 
-    static constexpr float kDefaultPitch = -0.32f;
-    static constexpr float kDefaultDistance = 9.2f;
+    static constexpr float kDefaultPitch = -0.30f;
+    static constexpr float kDefaultDistance = 8.8f;
+    static constexpr float kDefaultTargetY = -0.1f;  // gameplay look-at height (the rim is y = 0)
     static constexpr float kOffsetMax = 3.0f;
 
     Rot4 orbit() const {
