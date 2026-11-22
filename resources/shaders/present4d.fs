@@ -58,8 +58,31 @@ vec4 gizmo(vec2 px) {
     return acc;
 }
 
+// Softened background: the scene's alpha is 1 - softness (0 on the bowl,
+// fruit and overlays). A disc blur that only gathers soft pixels, so nothing
+// crisp bleeds into the background and the background never smears over it.
+vec3 sceneColor(vec2 uv) {
+    vec4 c = texture(uScene, uv);
+    float soft = 1.0 - c.a;
+    if (soft < 0.01) return c.rgb;
+    vec2 texel = 1.0 / vec2(textureSize(uScene, 0));
+    float radius = soft * float(textureSize(uScene, 0).y) / 240.0;  // 4.5 texels at 1080
+    vec3 sum = c.rgb;
+    float wsum = 1.0;
+    const float GOLDEN = 2.39996;
+    for (int k = 1; k <= 16; ++k) {
+        float r = sqrt(float(k) / 16.0) * radius;
+        vec2 o = vec2(cos(float(k) * GOLDEN), sin(float(k) * GOLDEN)) * r * texel;
+        vec4 s = texture(uScene, clamp(uv + o, vec2(0.0), uUVScale - texel));
+        float w = 1.0 - s.a;
+        sum += s.rgb * w;
+        wsum += w;
+    }
+    return sum / wsum;
+}
+
 void main() {
-    vec3 col = texture(uScene, vUV * uUVScale).rgb * (1.0 - uDim);
+    vec3 col = sceneColor(vUV * uUVScale) * (1.0 - uDim);
     vec4 g = (uDim > 0.0 || uShowGizmo < 0.5) ? vec4(0.0) : gizmo(gl_FragCoord.xy);
     fragColor = vec4(mix(col, g.rgb, g.a), 1.0);
 }
