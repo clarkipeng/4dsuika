@@ -472,7 +472,7 @@ public:
         if (keyPressedOnce(GLFW_KEY_LEFT) || keyPressedOnce(GLFW_KEY_A)) in.horizontal = -1;
         if (keyPressedOnce(GLFW_KEY_RIGHT) || keyPressedOnce(GLFW_KEY_D)) in.horizontal = +1;
         in.mouse = glm::vec2(state.m_xpos, state.m_ypos);
-        in.mouseDown = window && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        in.mouseDown = (heldButtons & 1) || (window && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);  // heldButtons: also the scripted mouse
         in.mousePressed = in.mouseDown && !mouseWasDown;
         mouseWasDown = in.mouseDown;
         menu.update(*t_rend, in, dt, float(Width), float(Height));
