@@ -424,7 +424,7 @@ struct MouseScript {
                 const bool press = e.act == "down";
                 game.heldButtons = press ? (game.heldButtons | bit) : (game.heldButtons & ~bit);
                 game.state.onMouseButton(button, press ? GLFW_PRESS : GLFW_RELEASE, game.state.m_xpos, game.state.m_ypos, mods);
-                if (press && button == GLFW_MOUSE_BUTTON_LEFT) game.DropFruit();
+                if (press && button == GLFW_MOUSE_BUTTON_LEFT && !game.HudClick(glm::vec2(game.state.m_xpos, game.state.m_ypos))) game.DropFruit();
             } else if (e.act == "scroll") {
                 game.OnScroll(e.a, mods & GLFW_MOD_SHIFT, mods & GLFW_MOD_CONTROL);
             } else if (e.act == "mods") {
@@ -857,7 +857,7 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (o.bgSoft >= 0.0f) game.renderer.bgSoft = std::min(o.bgSoft, 1.0f);
     game.effectsOn = !o.noFx;
     game.hideUI = o.noUi;
-    game.renderer.showGizmo = !o.noUi;
+    game.renderer.showGizmo = false;  // F3 shows it (Game::RenderScene)
     game.logEvents = o.logEvents;
     game.dangerOverride = o.danger;
     game.photoAutoAfter = o.warmup > 0.0f ? -1 : o.photoAfter; // after a warm-up, from the first recorded frame
@@ -1360,7 +1360,8 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
         const int bit = button == GLFW_MOUSE_BUTTON_LEFT ? 1 : button == GLFW_MOUSE_BUTTON_RIGHT ? 2 : 4;
         game.heldButtons = action == GLFW_PRESS ? (game.heldButtons | bit) : (game.heldButtons & ~bit);
     }
-    if (game.State == GAME_ACTIVE && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+    if (game.State == GAME_ACTIVE && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS &&
+        !game.HudClick(glm::vec2(game.state.m_xpos, game.state.m_ypos))) {
         game.DropFruit();
     }
 }
