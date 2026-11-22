@@ -76,6 +76,7 @@ public:
     RaymarchRenderer renderer;
     TextRenderer    *t_rend = nullptr;
     Shader          *text_shader = nullptr;
+    Shader          *shape_shader = nullptr;
 
     PhysicSolver *physics_solver;
     tp::ThreadPool *thread_pool;
@@ -95,7 +96,10 @@ public:
     FruitManager fm;
 
     int total_points=0;
-    int high_score = 0;
+    int high_score = 0;               // best score, saved between runs (interactive)
+    int bestAtStart = 0;              // the best before this game: game over shows a new best against it
+    // This game's stats for the game-over card.
+    int statMerges = 0, statBestCombo = 0, statBiggest = -1;
     ViewState state;
     Menu menu;
     enum class Page { None, Settings, Controls };
@@ -207,6 +211,7 @@ public:
 #endif
         delete t_rend;
         delete text_shader;
+        delete shape_shader;
         delete physics_solver;
         delete thread_pool;
     }
@@ -232,6 +237,8 @@ public:
         wheelTurn = dropW = dropWShown = 0.0f;
         total_points = 0;
         physics_solver->total_points = 0;
+        statMerges = statBestCombo = 0; statBiggest = -1;
+        bestAtStart = high_score;
         fm.initializeFruits();
         nextFruit = fm.getRandomFruit();
         state.reset();
@@ -243,12 +250,18 @@ public:
         window = win;
         if (!renderer.init()) std::cerr << "Raymarch renderer failed to initialise" << std::endl;
         text_shader = new Shader(FileSystem::getPath("resources/shaders/text_2d.vs").c_str(), FileSystem::getPath("resources/shaders/text_2d.fs").c_str());
+        shape_shader = new Shader(FileSystem::getPath("resources/shaders/ui_shape.vs").c_str(), FileSystem::getPath("resources/shaders/ui_shape.fs").c_str());
         t_rend = new TextRenderer(text_shader);
+        t_rend->SetShapeShader(shape_shader);
         try {
-            t_rend->Load(FileSystem::getPath("resources/fonts/OCRAEXT.TTF").c_str(), 24);
+            // Fredoka (OFL): semi-bold for body text, bold for titles, numbers and buttons.
+            // Baked large and mipmapped so the HUD stays crisp from 720p to 4K.
+            t_rend->LoadFace(TextRenderer::Body, FileSystem::getPath("resources/fonts/Fredoka-SemiBold.ttf"), 64);
+            t_rend->LoadFace(TextRenderer::Display, FileSystem::getPath("resources/fonts/Fredoka-Bold.ttf"), 128);
         } catch (const std::exception& e) {
             std::cerr << "Failed to load font: " << e.what() << std::endl;
         }
+        menu.onSound = [this](int k) { UiSound(k); };
 
         fm.initializeFruits();
         nextFruit = fm.getRandomFruit();
@@ -376,8 +389,37 @@ public:
             else if (State == GAME_ACTIVE) State = GAME_PAUSED;
             else if (State == GAME_PAUSED) State = GAME_ACTIVE;
         }
+        if (State == GAME_OVER && page == Page::None && keyPressedOnce(GLFW_KEY_R)) { UiSound(1); Reset(); }
+        if (State != GAME_ACTIVE && page != Page::Controls && keyPressedOnce(GLFW_KEY_SLASH)) { UiSound(1); Open(Page::Controls); }
         if (State != GAME_ACTIVE) UpdateMenuInput(dt);
     }
+
+    // Best score file (interactive runs only, so headless stills stay reproducible).
+    bool bestFileOn = false;
+    static std::string BestFile() {
+#ifdef __EMSCRIPTEN__
+        return "";
+#else
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        return home ? std::string(home) + "/.4dsuika-best" : "";
+#endif
+    }
+    void LoadBest() {
+        if (!bestFileOn) return;
+        std::ifstream in(BestFile());
+        int b = 0;
+        if (in >> b) high_score = std::max(high_score, b);
+        bestAtStart = high_score;
+    }
+    void SaveBest() const {
+        if (!bestFileOn) return;
+        std::string f = BestFile();
+        if (!f.empty()) std::ofstream(f) << high_score << "\n";
+    }
+
+    // UI feedback sounds: 0 focus moved, 1 pressed, 2 value changed.
+    void UiSound(int) {}
 
     void UpdateMenuInput(float dt) {
         EnsureMenu();
@@ -464,7 +506,7 @@ public:
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i]) continue;
             if (physics_solver->objects[i].position.y < -3) {
-                if (total_points > high_score) high_score = total_points;
+                if (total_points > high_score) { high_score = total_points; SaveBest(); }
 #ifndef __EMSCRIPTEN__
                 if (State == GAME_ACTIVE && loseSound != nullptr) Mix_PlayChannel(-1, loseSound, 0);
 #endif
@@ -680,9 +722,16 @@ public:
     // (cosmetic: scoring is unchanged). Danger rises when settled fruit pile up
     // to the rim.
     void UpdateEffects(float dt) {
-        if (!effectsOn) { physics_solver->takeMerges(); bursts.clear(); combo = 0; danger = 0.0f; return; }
+        if (!effectsOn) {
+            for (const auto& m : physics_solver->takeMerges()) { ++statMerges; statBiggest = std::max(statBiggest, int(m.fruit)); }
+            bursts.clear(); combo = 0; danger = 0.0f;
+            return;
+        }
         for (const auto& m : physics_solver->takeMerges()) {
             combo = comboTimer > 0.0f ? combo + 1 : 1;
+            ++statMerges;
+            statBestCombo = std::max(statBestCombo, combo);
+            statBiggest = std::max(statBiggest, int(m.fruit));
             if (logEvents) fprintf(stderr, "EV t=%.2f merge fruit=%d combo=%d\n", time, int(m.fruit), combo);
             comboTimer = kComboWindow;
             comboPop = 1.0f;
@@ -804,12 +853,7 @@ public:
         renderer.draw(cam, FbWidth, FbHeight, time);
     }
 
-    void BeginText() {
-        glm::mat4 projection = glm::ortho(0.0f, float(Width), float(Height), 0.0f);
-        text_shader->use();
-        text_shader->setMat4("projection", projection);
-        text_shader->setInt("text", 0);
-    }
+    void BeginText() { t_rend->Begin(float(Width), float(Height)); }
 
     // Slice read-out next to the orientation indicator (bottom-left).
     void RenderSliceLabel() {
@@ -1112,6 +1156,7 @@ public:
     }
 
     void RenderGame() {
+        dimShown = 0.0f; lastMenuTime = time;  // menus fade the backdrop in from the game
         if (photo) { RenderPhoto(); return; }
         Hit4 aim;
         if (!sheetMode) aim = getPlacementMouse(state, boundary, *physics_solver);
@@ -1207,129 +1252,224 @@ public:
     void Open(Page p) { returnPage = page; page = p; EnsureMenu(); }
     void ClosePage() { page = returnPage; returnPage = Page::None; }
 
+    // Key chips at the bottom of the title screen: the three inputs that matter, and where the rest are.
+    static std::vector<std::pair<std::string, std::string>> StarterChips() {
+        return {{"Click", "drop"}, {"Right drag", "orbit"}, {"Wheel", "turn into 4D"}, {"?", "all controls"}};
+    }
+
     void BuildTitleMenu() {
         MenuStyle st;
-        st.title = "SUIKA 4D";
+        st.title = "Suika";
+        st.badge = "4D";
         st.subtitle = "Merge fruit in four dimensions";
         st.hero = true;
         st.width = 360.0f;
+        st.keys = {};
+        if (high_score > 0) st.note = [this] { return "Best  " + ui::thousands(high_score); };
+        st.sceneChips = StarterChips();
         std::vector<MenuItem> items = {
-            MenuItem::button("Play", [this] { Reset(); if (!tutorialSeen) StartTutorial(0); }),
-            MenuItem::button("Tutorial", [this] { Reset(); StartTutorial(0); }),
-            MenuItem::button("Settings", [this] { Open(Page::Settings); }),
-            MenuItem::button("Controls", [this] { Open(Page::Controls); }),
+            MenuItem::button("Play", [this] { Reset(); if (!tutorialSeen) StartTutorial(0); }).withIcon(ui::Icon::Play).asPrimary(),
+            MenuItem::button("Tutorial", [this] { Reset(); StartTutorial(0); }).withIcon(ui::Icon::Book),
+            MenuItem::button("Controls", [this] { Open(Page::Controls); }).withIcon(ui::Icon::Keys).sameRow(),
+            MenuItem::button("Settings", [this] { Open(Page::Settings); }).withIcon(ui::Icon::Gear),
         };
 #ifndef __EMSCRIPTEN__
-        items.push_back(MenuItem::button("Quit", [this] { if (window) glfwSetWindowShouldClose(window, GLFW_TRUE); }));
+        items.push_back(MenuItem::button("Quit", [this] { if (window) glfwSetWindowShouldClose(window, GLFW_TRUE); }).withIcon(ui::Icon::Quit).sameRow());
 #endif
-        st.hint = "Up / Down  choose     Enter  select";
         menu.set(std::move(items), std::move(st));
+    }
+
+    // Score and best as two big numbers, for the pause and game-over cards.
+    void DrawScorePair(TextRenderer& t, const ui::Rect& r, float u, float alpha, bool newBest) {
+        FaceScope f(t, TextRenderer::Display);
+        const float half = r.w * 0.5f;
+        auto block = [&](float cx, const char* label, int value, glm::vec3 col) {
+            float ls = 0.52f * u;
+            ui::textCentered(t, label, cx, r.y, ls, ui::kClayDeep, alpha);
+            float vs = ui::fit(t, ui::thousands(value), 2.3f * u, half - 16.0f * u);
+            ui::textCentered(t, ui::thousands(value), cx, r.y + t.CapHeight(ls) + 12.0f * u, vs, col, alpha);
+        };
+        block(r.x + half * 0.5f, "SCORE", total_points, ui::kInk);
+        block(r.x + half * 1.5f, "BEST", std::max(high_score, total_points), newBest ? ui::kGoldFoot : ui::kClayDeep);
+        t.Shape(UiShape::capsule({r.x + half, r.y + 4.0f * u}, {r.x + half, r.y + r.h - 6.0f * u}, 0.8f * u).fill(ui::kClay, 0.6f * alpha));
     }
 
     void BuildPauseMenu() {
         MenuStyle st;
-        st.title = "PAUSED";
-        st.subtitle = "Score " + std::to_string(total_points);
-        st.width = 380.0f;
-        st.hint = "Up / Down  choose     Enter  select     Esc  resume";
+        st.title = "Paused";
+        st.width = 400.0f;
+        st.keys = {{"Esc", "resume"}, {"Enter", "select"}};
+        st.headerHeight = 86.0f;
+        st.header = [this](TextRenderer& t, const ui::Rect& r, float u, float a) { DrawScorePair(t, r, u, a, false); };
         menu.set({
-            MenuItem::button("Resume", [this] { State = GAME_ACTIVE; }),
-            MenuItem::button("Restart", [this] { Reset(); }),
-            MenuItem::button("Settings", [this] { Open(Page::Settings); }),
-            MenuItem::button("Controls", [this] { Open(Page::Controls); }),
-            MenuItem::button("Main menu", [this] { State = GAME_MENU; }),
+            MenuItem::button("Resume", [this] { State = GAME_ACTIVE; }).withIcon(ui::Icon::Play).asPrimary(),
+            MenuItem::button("Restart", [this] { Reset(); }).withIcon(ui::Icon::Restart),
+            MenuItem::button("Controls", [this] { Open(Page::Controls); }).withIcon(ui::Icon::Keys).sameRow(),
+            MenuItem::button("Settings", [this] { Open(Page::Settings); }).withIcon(ui::Icon::Gear),
+            MenuItem::button("Menu", [this] { State = GAME_MENU; }).withIcon(ui::Icon::Home).sameRow(),
         }, std::move(st));
+    }
+
+    // Game over: the score, a new-best badge, and three facts about the game.
+    void DrawGameOverHeader(TextRenderer& t, const ui::Rect& r, float u, float alpha) {
+        FaceScope f(t, TextRenderer::Display);
+        const bool newBest = total_points > bestAtStart && total_points > 0;
+        const float cx = r.x + r.w * 0.5f;
+        float y = r.y;
+        ui::textCentered(t, "SCORE", cx, y, 0.52f * u, ui::kClayDeep, alpha);
+        y += t.CapHeight(0.52f * u) + 12.0f * u;
+        // The number counts up as the card opens.
+        float count = ui::easeOutCubic(alpha);
+        std::string score = ui::thousands((long long)std::lround(total_points * count));
+        float ss = 3.0f * u;
+        ui::textCentered(t, score, cx, y, ss, ui::kInk, alpha);
+        y += t.CapHeight(ss) + 14.0f * u;
+        {   // new best badge, or the best to beat
+            std::string b = newBest ? "New best!" : "Best  " + ui::thousands(high_score);
+            float bs = 0.56f * u, bh = 30.0f * u;
+            float iconW = newBest ? bh * 0.8f : 0.0f;
+            float bw = t.GetTextWidth(b, bs) + iconW + 28.0f * u;
+            float pop = newBest ? ui::easeOutBack((alpha - 0.5f) * 2.0f) : 1.0f;
+            ui::Rect br{cx - bw * 0.5f * pop, y, bw * pop, bh};
+            if (newBest) {
+                t.Shape(UiShape::rect(br.x, br.y + 3.0f * u, br.w, br.h, bh * 0.5f).fill(ui::kGoldFoot, alpha));
+                t.Shape(UiShape::rect(br.x, br.y, br.w, br.h, bh * 0.5f).grad(ui::kGoldTop, ui::kGoldBottom, alpha));
+                ui::icon(t, ui::Icon::Star, {br.x + 14.0f * u + iconW * 0.4f, br.y + bh * 0.5f}, bh * 0.75f, ui::kInk, alpha * pop);
+            } else {
+                t.Shape(UiShape::rect(br.x, br.y, br.w, br.h, bh * 0.5f).fill(ui::kGlaze2, alpha));
+            }
+            t.RenderText(b, br.x + 14.0f * u + iconW, br.y + (bh - t.CapHeight(bs)) * 0.5f, bs, ui::kInk, alpha * pop);
+            y += bh + 22.0f * u;
+        }
+        // Stats: biggest fruit (drawn), merges, best combo.
+        const float col = r.w / 3.0f;
+        const float vs = 1.1f * u, ls = 0.5f * u;
+        auto label = [&](int i, const std::string& l) {
+            FaceScope fb(t, TextRenderer::Body);
+            ui::textCentered(t, l, r.x + col * (i + 0.5f), y + 6.0f * u + t.CapHeight(vs) + 16.0f * u, ls, ui::kClayDeep, alpha);
+        };
+        float vy = y + 6.0f * u;
+        {
+            glm::vec2 c(r.x + col * 0.5f, vy + t.CapHeight(vs) * 0.5f);
+            if (statBiggest >= 0) {
+                float fr = t.CapHeight(vs) * 0.75f;
+                t.Shape(UiShape::circle(c + glm::vec2(0.0f, 2.0f * u), fr).fill(ui::kShadow, 0.25f * alpha).soft(4.0f * u));
+                t.Shape(UiShape::circle(c, fr).grad(glm::mix(FruitUiColor(statBiggest), glm::vec3(1.0f), 0.25f), FruitUiColor(statBiggest), alpha));
+                t.Shape(UiShape::circle(c + glm::vec2(-0.3f, -0.35f) * fr, fr * 0.28f).fill(glm::vec3(1.0f), 0.55f * alpha));
+            } else {
+                ui::textCentered(t, "-", c.x, vy, vs, ui::kInk, alpha);
+            }
+            label(0, statBiggest >= 0 ? kFruitNames[statBiggest] : "biggest");
+        }
+        ui::textCentered(t, std::to_string(statMerges), r.x + col * 1.5f, vy, vs, ui::kInk, alpha);
+        label(1, "merges");
+        ui::textCentered(t, statBestCombo >= 2 ? "x" + std::to_string(statBestCombo) : "-", r.x + col * 2.5f, vy, vs, ui::kInk, alpha);
+        label(2, "best combo");
     }
 
     void BuildGameOverMenu() {
         MenuStyle st;
-        st.title = "GAME OVER";
-        st.titleColor = ui::kCoral;
-        st.subtitle = "Score " + std::to_string(total_points) + "     Best " + std::to_string(high_score);
-        st.width = 380.0f;
-        st.hint = "Up / Down  choose     Enter  select";
+        st.title = "Bowl overflowed!";
+        st.width = 420.0f;
+        st.keys = {{"R", "play again"}, {"Enter", "select"}};
+        st.headerHeight = 214.0f;
+        st.header = [this](TextRenderer& t, const ui::Rect& r, float u, float a) { DrawGameOverHeader(t, r, u, a); };
         menu.set({
-            MenuItem::button("Play again", [this] { Reset(); }),
-            MenuItem::button("Settings", [this] { Open(Page::Settings); }),
-            MenuItem::button("Main menu", [this] { State = GAME_MENU; }),
+            MenuItem::button("Play again", [this] { Reset(); }).withIcon(ui::Icon::Restart).asPrimary().withKey("R"),
+            MenuItem::button("Menu", [this] { State = GAME_MENU; }).withIcon(ui::Icon::Home),
+            MenuItem::button("Settings", [this] { Open(Page::Settings); }).withIcon(ui::Icon::Gear).sameRow(),
         }, std::move(st));
+    }
+
+    std::string ResolutionLabel() const {
+        float s = std::min(renderer.renderScale, renderer.maxScale(FbWidth, FbHeight));
+        int h = std::max(1, int(FbHeight * s + 0.5f));
+        std::string mode = scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
+        return mode + "  " + std::to_string(h) + "p";
     }
 
     void BuildSettingsMenu() {
         MenuStyle st;
-        st.title = "SETTINGS";
-        st.width = 580.0f;
-        st.note = [this] {
-            int w = std::max(1, int(FbWidth * std::min(renderer.renderScale, renderer.maxScale(FbWidth, FbHeight)) + 0.5f));
-            int h = std::max(1, int(FbHeight * std::min(renderer.renderScale, renderer.maxScale(FbWidth, FbHeight)) + 0.5f));
-            return "Scene rendered at " + std::to_string(w) + " x " + std::to_string(h);
-        };
+        st.title = "Settings";
+        st.width = 600.0f;
+        st.keys = {{"Esc", "back"}, {"Enter", "change"}};
         std::vector<MenuItem> items;
+        auto onOff = [](bool v) { return std::string(v ? "On" : "Off"); };
+        items.push_back(MenuItem::header("Picture"));
         items.push_back(MenuItem::choice("Quality", [this] { return std::string(qualityName(renderer.quality())); },
             [this](int d) { renderer.setQuality(Quality((int(renderer.quality()) + d + 4) % 4)); ApplyRenderScale(); }));
-        items.push_back(MenuItem::choice("Render scale", [this] {
-                return scaleChoice == 0 ? std::string("Auto") : percent(kScaleChoices[scaleChoice]);
-            }, [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
-        items.push_back(MenuItem::choice("View", [this] { return ViewLabel(); },
-            [this](int d) { CycleViewMode(d); }));
-        items.push_back(MenuItem::slider("Facets", [this] { return renderer.facet; }, [this](float v) { renderer.facet = v; }));
-        items.push_back(MenuItem::choice("Effects", [this] { return std::string(effectsOn ? "On" : "Off"); },
-            [this](int) { effectsOn = !effectsOn; }));
-        items.push_back(MenuItem::choice("Merge glow", [this] { return std::string(renderer.sameKindGlow ? "On" : "Off"); },
+        items.push_back(MenuItem::choice("Resolution", [this] { return ResolutionLabel(); },
+            [this](int d) { CycleIndex(scaleChoice, d, kScaleCount); ApplyRenderScale(); }));
+        items.push_back(MenuItem::choice("Merge effects", [=] { return onOff(effectsOn); }, [this](int) { effectsOn = !effectsOn; }));
+        items.push_back(MenuItem::choice("Same-fruit glow", [=] { return onOff(renderer.sameKindGlow); },
             [this](int) { renderer.sameKindGlow = !renderer.sameKindGlow; }));
-        items.push_back(MenuItem::choice("W-lane snap", [this] { return std::string(laneSnap ? "On" : "Off"); },
-            [this](int) { laneSnap = !laneSnap; }));
-        items.push_back(MenuItem::choice("W-depth strip", [this] { return std::string(showDepthStrip ? "On" : "Off"); },
-            [this](int) { showDepthStrip = !showDepthStrip; }));
+        items.push_back(MenuItem::header("4D"));
+        items.push_back(MenuItem::choice("View", [this] { return ViewLabel(); }, [this](int d) { CycleViewMode(d); }));
+        items.push_back(MenuItem::choice("W track", [=] { return onOff(showDepthStrip); }, [this](int) { showDepthStrip = !showDepthStrip; }));
+        items.push_back(MenuItem::choice("Snap drops to w lanes", [=] { return onOff(laneSnap); }, [this](int) { laneSnap = !laneSnap; }));
 #ifndef __EMSCRIPTEN__
+        items.push_back(MenuItem::header("Sound"));
         items.push_back(MenuItem::choice("Sound", [this] { return std::string(soundOn ? "On" : "Muted"); },
             [this](int) { soundOn = !soundOn; ApplyVolumeSettings(); }));
         items.push_back(MenuItem::slider("Music", [this] { return musicVolume; }, [this](float v) { musicVolume = v; ApplyVolumeSettings(); }));
-        items.push_back(MenuItem::slider("Effects", [this] { return sfxVolume; }, [this](float v) { sfxVolume = v; ApplyVolumeSettings(); }));
+        items.push_back(MenuItem::slider("Sound effects", [this] { return sfxVolume; }, [this](float v) { sfxVolume = v; ApplyVolumeSettings(); }));
 #endif
-        items.push_back(MenuItem::button("Controls", [this] { Open(Page::Controls); }));
-        items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
+        items.push_back(MenuItem::button("Back", [this] { ClosePage(); }).withIcon(ui::Icon::Back));
+        items.push_back(MenuItem::button("Controls", [this] { Open(Page::Controls); }).withIcon(ui::Icon::Keys).sameRow());
         menu.set(std::move(items), std::move(st));
+    }
+
+    // Every binding, grouped, keys drawn as keycaps, two per line.
+    static std::vector<MenuItem> ControlsItems() {
+        return {
+            MenuItem::header("Play"),
+            MenuItem::info("Click", "drop the fruit"),
+            MenuItem::info("Right drag", "orbit the camera").sameRow(),
+            MenuItem::info("Shift / Wheel", "zoom"),
+            MenuItem::info("Esc", "pause").sameRow(),
+            MenuItem::header("Turn into 4D"),
+            MenuItem::info("Wheel", "turn the slice through w"),
+            MenuItem::info("Middle drag", "turn freely into 4D").sameRow(),
+            MenuItem::info("A / D", "turn left-right into w"),
+            MenuItem::info("R / F", "turn up-down into w").sameRow(),
+            MenuItem::info("Q / E", "turn depth into w"),
+            MenuItem::info("W / S", "slide along w").sameRow(),
+            MenuItem::info("Z / C", "roll"),
+            MenuItem::info("H / Space", "back to the start slice").sameRow(),
+            MenuItem::header("View and extras"),
+            MenuItem::info("M", "Slice or 4D eye view"),
+            MenuItem::info("V", "show or hide the w track").sameRow(),
+            MenuItem::info("L", "snap drops to w lanes"),
+            MenuItem::info("P", "photo mode and replay").sameRow(),
+            MenuItem::info("G", "cycle quality"),
+            MenuItem::info("F3", "debug info").sameRow(),
+        };
     }
 
     void BuildControlsMenu() {
         MenuStyle st;
-        st.title = "CONTROLS";
-        st.width = 680.0f;
-        st.keyColumn = 230.0f;
-        st.hint = "Enter or Esc  back";
-        std::vector<MenuItem> items = {
-            MenuItem::info("Left click", "drop the fruit"),
-            MenuItem::info("Right drag / arrows", "orbit the camera"),
-            MenuItem::info("Middle drag", "turn into 4D (or Shift + right drag)"),
-            MenuItem::info("Wheel (slice)", "turn the slice through w"),
-            MenuItem::info("Wheel (4D eye)", "set the w of the drop"),
-            MenuItem::info("Shift + wheel", "zoom"),
-        };
-        for (const TurnBinding& b : kTurnBindings) {
-            std::string h = b.help;
-            size_t gap = h.find("  ");
-            items.push_back(MenuItem::info(h.substr(0, gap), h.substr(gap + 2)));
-        }
-        items.push_back(MenuItem::info("W / S", "move the slice along the 4th axis"));
-        items.push_back(MenuItem::info("H / Space", "back to the default slice"));
-        items.push_back(MenuItem::info("V", "toggle the bottom w strip"));
-        items.push_back(MenuItem::info("L", "snap drops to whole w lanes"));
-        items.push_back(MenuItem::info("P", "photo mode: replay the last 10 s, slice and 4D eye side by side"));
-        items.push_back(MenuItem::info("G / F3", "cycle quality / show timing"));
-        items.push_back(MenuItem::info("M", "change view: slice, 4D eye"));
-        items.push_back(MenuItem::info("Esc", "pause"));
-        items.push_back(MenuItem::button("Back", [this] { ClosePage(); }));
+        st.title = "Controls";
+        st.width = 860.0f;
+        st.keyColumn = 172.0f;
+        st.keys = {{"Esc", "back"}};
+        std::vector<MenuItem> items = ControlsItems();
+        items.push_back(MenuItem::button("Back", [this] { ClosePage(); }).withIcon(ui::Icon::Back));
         menu.set(std::move(items), std::move(st));
         menu.focus = int(menu.itemCount()) - 1;
     }
 
+    float dimShown = 0.0f;            // the menu backdrop dim, eased
+    float lastMenuTime = -1.0f;
     void RenderMenuScreen(const Camera4D& cam, float dim) {
         EnsureMenu();
-        renderer.dim = dim;
+        float dt = lastMenuTime < 0.0f ? 1.0f : std::clamp(time - lastMenuTime, 0.0f, 0.1f);
+        lastMenuTime = time;
+        ui::approach(dimShown, dim, dt, 6.0f);
+        renderer.dim = dimShown;
         RenderScene({}, cam);
         renderer.dim = 0.0f;
+        if (hideUI) return;
         BeginText();
-        menu.draw(*t_rend, float(Width), float(Height));
+        menu.draw(*t_rend, float(Width), float(Height), dt);
     }
 };
