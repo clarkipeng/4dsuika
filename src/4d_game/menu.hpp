@@ -1,32 +1,25 @@
 #pragma once
-// Menu widgets in the game's sunset low-poly style: a faceted panel with a
-// title, rows (button, choice, slider, read-only info) and a hint line.
-// Layout is computed from the window size every frame, so the panel scales
-// down to fit and nothing is clipped. Keyboard and mouse drive the same
-// focus. See TASTE.md: AA contrast, one set of colour tokens.
+// Menus in the glazed-ceramic system (ui_kit.hpp, docs/ui.md): a cream card
+// with a title, an optional custom header (scores, stats), rows (buttons,
+// choices, sliders, read-only key rows, section headers) and a footer of key
+// hints. Rows can share a line. The title screen ("hero") drops the card and
+// stands in a left column over the scene. Layout is computed from the window
+// every frame, so it scales to fit; keyboard and mouse drive one focus, which
+// slides between rows, and the card and rows ease in when a menu opens.
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
 
 #include "text_renderer.h"
-
-namespace ui {
-// Colour tokens. Text pairs below all reach WCAG AA (4.5:1) on the panel.
-const glm::vec3 kPanel(0.11f, 0.06f, 0.13f);   // dusk plum
-const glm::vec3 kCream(1.00f, 0.93f, 0.85f);   // main text (on panel ~15:1)
-const glm::vec3 kMuted(0.84f, 0.77f, 0.79f);   // secondary text (~10:1)
-const glm::vec3 kGold(1.00f, 0.76f, 0.32f);    // focus and accents, the w-axis gold
-const glm::vec3 kCoral(0.96f, 0.45f, 0.30f);
-const glm::vec3 kRose(0.85f, 0.33f, 0.45f);
-const glm::vec3 kInk(0.15f, 0.07f, 0.10f);     // text on gold (~10:1)
-}
+#include "ui_kit.hpp"
 
 struct MenuItem {
-    enum Kind { Button, Choice, Slider, Info };
+    enum Kind { Button, Choice, Slider, Info, Header };
     Kind kind = Button;
     std::string label;
     std::function<void()> activate;           // Button
@@ -34,7 +27,16 @@ struct MenuItem {
     std::function<void(int)> step;            // Choice: -1 or +1
     std::function<float()> get;               // Slider, 0..1
     std::function<void(float)> set;
-    bool focusable() const { return kind != Info; }
+    ui::Icon icon = ui::Icon::None;
+    bool primary = false;                     // gold button
+    bool joinRow = false;                     // shares the line of the item before it
+    std::string key;                          // shortcut shown as a keycap on the button
+    bool focusable() const { return kind == Button || kind == Choice || kind == Slider; }
+
+    MenuItem& withIcon(ui::Icon i) { icon = i; return *this; }
+    MenuItem& asPrimary() { primary = true; return *this; }
+    MenuItem& sameRow() { joinRow = true; return *this; }
+    MenuItem& withKey(std::string k) { key = std::move(k); return *this; }
 
     static MenuItem button(std::string label, std::function<void()> f) {
         MenuItem m; m.kind = Button; m.label = std::move(label); m.activate = std::move(f); return m;
@@ -50,16 +52,21 @@ struct MenuItem {
     static MenuItem info(std::string key, std::string text) {
         MenuItem m; m.kind = Info; m.label = std::move(key); m.value = [t = std::move(text)] { return t; }; return m;
     }
+    static MenuItem header(std::string text) { MenuItem m; m.kind = Header; m.label = std::move(text); return m; }
 };
 
 struct MenuStyle {
     std::string title, subtitle;
-    glm::vec3 titleColor = ui::kCream;
-    bool hero = false;             // big title, taller buttons (start screen)
-    float width = 560.0f;          // row width in design units
-    float keyColumn = 0.0f;        // Info rows: width of the key column
-    std::string hint = "Up / Down  choose     Left / Right  change     Enter  select     Esc  back";
-    std::function<std::string()> note;  // optional live line under the hint
+    std::string badge;                 // hero: gold tag after the title ("4D")
+    glm::vec3 titleColor = ui::kTerracotta;
+    bool hero = false;                 // title screen: no card, left column, big title
+    float width = 520.0f;              // row width in design units
+    float keyColumn = 0.0f;            // Info rows: width of the key column
+    std::vector<std::pair<std::string, std::string>> keys = {{"Enter", "select"}, {"Esc", "back"}};
+    std::function<std::string()> note; // optional live line in the footer
+    float headerHeight = 0.0f;         // custom block under the title (design units)
+    std::function<void(TextRenderer&, const ui::Rect&, float u, float alpha)> header;
+    std::vector<std::pair<std::string, std::string>> sceneChips;  // key chips at the bottom of the screen
 };
 
 struct MenuInput {
@@ -74,7 +81,10 @@ struct MenuInput {
 class Menu {
 public:
     int focus = 0;
+    // UI sounds: 0 focus moved, 1 activated, 2 value changed.
+    std::function<void(int)> onSound;
     size_t itemCount() const { return items_.size(); }
+    bool hovering() const { return hover_ >= 0; }
 
     void set(std::vector<MenuItem> items, MenuStyle style) {
         items_ = std::move(items);
@@ -82,260 +92,436 @@ public:
         focus = 0;
         while (focus < int(items_.size()) && !items_[focus].focusable()) ++focus;
         dragging_ = -1;
+        age_ = 0.0f;
+        hoverAnim_.assign(items_.size(), 0.0f);
+        pressAnim_.assign(items_.size(), 0.0f);
+        focusValid_ = false;
+        lines_.clear();
+        for (size_t i = 0; i < items_.size(); ++i) {
+            if (i == 0 || !items_[i].joinRow) lines_.push_back({});
+            lines_.back().push_back(int(i));
+        }
     }
 
     // Handles input for one frame. W, H are the window size in points.
     void update(TextRenderer& t, const MenuInput& in, float dt, float W, float H) {
+        (void)dt;
         layout(t, W, H);
         int n = int(items_.size());
         if (n == 0) return;
         if (focus < 0 || focus >= n) focus = 0;
+        const int before = focus;
 
-        if (in.up) move(-1);
-        if (in.down) move(+1);
+        if (in.up) moveLine(-1);
+        if (in.down) moveLine(+1);
 
         // Mouse: hovering moves focus; pressing acts on the row.
         bool moved = in.mouse != lastMouse_;
         lastMouse_ = in.mouse;
-        int hover = -1;
+        hover_ = -1;
         for (int i = 0; i < n; ++i)
-            if (items_[i].focusable() && rows_[i].has(in.mouse)) hover = i;
-        if (moved && hover >= 0) focus = hover;
+            if (items_[i].focusable() && rows_[i].has(in.mouse)) hover_ = i;
+        if (moved && hover_ >= 0) focus = hover_;
 
         if (!in.mouseDown) dragging_ = -1;
-        if (in.mousePressed && hover >= 0) {
-            focus = hover;
-            MenuItem& m = items_[hover];
-            if (m.kind == MenuItem::Button) run(m.activate);
-            else if (m.kind == MenuItem::Choice) { Rect z = valueZone(rows_[hover]); m.step(in.mouse.x >= z.x && in.mouse.x < z.x + 0.5f * z.w ? -1 : +1); }
-            else if (m.kind == MenuItem::Slider) dragging_ = hover;
+        bool acted = false;
+        if (in.mousePressed && hover_ >= 0) {
+            focus = hover_;
+            pressAnim_[hover_] = 1.0f;
+            MenuItem& m = items_[hover_];
+            if (m.kind == MenuItem::Button) { sound(1); run(m.activate); acted = true; }
+            else if (m.kind == MenuItem::Choice) {
+                ui::Rect z = valueZone(rows_[hover_]);
+                m.step(in.mouse.x >= z.x && in.mouse.x < z.x + 0.5f * z.w ? -1 : +1);
+                sound(2);
+            } else if (m.kind == MenuItem::Slider) dragging_ = hover_;
         }
+        if (acted) return;  // the action may have rebuilt this menu
         if (dragging_ >= 0) {
-            Rect tr = track(rows_[dragging_]);
+            ui::Rect tr = track(rows_[dragging_]);
             items_[dragging_].set(std::clamp((in.mouse.x - tr.x) / std::max(tr.w, 1.0f), 0.0f, 1.0f));
         }
 
         // Keyboard on the focused row.
         MenuItem& m = items_[focus];
         if (in.select) {
-            if (m.kind == MenuItem::Button) run(m.activate);
-            else if (m.kind == MenuItem::Choice) m.step(+1);
+            if (m.kind == MenuItem::Button) { pressAnim_[focus] = 1.0f; sound(1); run(m.activate); return; }
+            if (m.kind == MenuItem::Choice) { m.step(+1); sound(2); }
         }
-        if (in.horizontal != 0) apply(m, in.horizontal, true);
+        if (in.horizontal != 0) {
+            if (m.kind == MenuItem::Button) moveInLine(in.horizontal);
+            else { apply(m, in.horizontal); sound(2); }
+        }
         if (in.horizontalHeld != 0 && m.kind == MenuItem::Slider) {
             held_ += dt;
             if (held_ > 0.4f) {
                 repeat_ += dt;
-                while (repeat_ > 0.05f) { apply(m, in.horizontalHeld, false); repeat_ -= 0.05f; }
+                while (repeat_ > 0.05f) { apply(m, in.horizontalHeld); repeat_ -= 0.05f; }
             }
         } else {
             held_ = repeat_ = 0.0f;
         }
+        if (focus != before) sound(0);
+        for (int i = 0; i < n; ++i) {
+            ui::approach(hoverAnim_[i], i == hover_ ? 1.0f : 0.0f, dt, 18.0f);
+            pressAnim_[i] = std::max(0.0f, pressAnim_[i] - dt * 6.0f);
+        }
     }
 
-    void draw(TextRenderer& t, float W, float H) {
+    // dt advances the entrance and focus animations (drawing owns the clock,
+    // so menus animate even when no input is polled, as in headless captures).
+    void draw(TextRenderer& t, float W, float H, float dt) {
+        lastDraw_ = age_;
+        age_ += std::clamp(dt, 0.0f, 0.1f);
         layout(t, W, H);
         const float u = u_;
-        // Panel: a chamfered hexagon with a thin gold edge.
-        auto hex = [](const Rect& r, float c) {
-            return std::vector<glm::vec2>{{r.x + c, r.y}, {r.x + r.w, r.y}, {r.x + r.w, r.y + r.h - c},
-                                          {r.x + r.w - c, r.y + r.h}, {r.x, r.y + r.h}, {r.x, r.y + c}};
-        };
-        auto edge = [&](glm::vec2 a, glm::vec2 b, float th, glm::vec3 col, float alpha) {
-            glm::vec2 d = glm::normalize(b - a), nrm(-d.y, d.x);
-            t.FillPoly({a + nrm * th, b + nrm * th, b - nrm * th, a - nrm * th}, col, alpha);
-        };
-        auto outline = [&](const std::vector<glm::vec2>& p, float th, glm::vec3 col, float alpha) {
-            for (size_t i = 0; i < p.size(); ++i) edge(p[i], p[(i + 1) % p.size()], th, col, alpha);
-        };
-        auto panelPoly = hex(panel_, 22.0f * u);
-        t.FillPoly(panelPoly, ui::kPanel, style_.hero ? 0.74f : 0.88f);
-        outline(panelPoly, std::max(1.0f, 1.2f * u), ui::kGold, 0.55f);
+        const float enter = ui::easeOutCubic(age_ / 0.28f);
+        const float rise = (1.0f - ui::easeOutBack(age_ / 0.38f)) * 28.0f * u;
+        const bool hero = style_.hero;
+        ui::Rect card = panel_;
+        card.y += rise;
+        if (!hero) ui::glazePanel(t, card, u, enter, 26.0f * u);
 
-        // Title, then a strip of sunset facets under it.
-        float titleScale = (style_.hero ? 2.4f : 1.25f) * u;
-        float maxW = panel_.w - 2.0f * kPad * u;
-        titleScale = fit(t, style_.title, titleScale, maxW);
-        float tx = panel_.x + (panel_.w - t.GetTextWidth(style_.title, titleScale)) * 0.5f;
-        float ty = panel_.y + kPad * u;
-        t.RenderText(style_.title, tx + 2.0f * u, ty + 2.0f * u, titleScale, glm::vec3(0.0f));  // drop shadow
-        t.RenderText(style_.title, tx, ty, titleScale, style_.titleColor);
-        float stripY = ty + t.CapHeight(titleScale) + 14.0f * u;
-        facets(t, panel_.x + kPad * u, stripY, panel_.w - 2.0f * kPad * u, 8.0f * u);
+        // Title.
+        const float maxW = card.w - 2.0f * kPad * u;
+        float y = card.y + kPad * u;
+        {
+            FaceScope f(t, TextRenderer::Display);
+            float ts = fit(t, style_.title, titleScale() * u, maxW - badgeWidth(t, titleScale() * u));
+            float tw = t.GetTextWidth(style_.title, ts);
+            float bw = badgeWidth(t, ts);
+            float tx = hero ? card.x : card.x + (card.w - tw - bw) * 0.5f;
+            if (hero) ui::textOnScene(t, style_.title, tx, y, ts, ui::kCream, enter);
+            else t.RenderText(style_.title, tx, y, ts, style_.titleColor, enter);
+            if (!style_.badge.empty()) {
+                float bs = ts * 0.5f, cap = t.CapHeight(ts);
+                float bwid = t.GetTextWidth(style_.badge, bs) + 0.5f * cap;
+                ui::Rect b{tx + tw + 0.18f * cap, y - 0.04f * cap, bwid, cap * 0.78f};
+                float pop = ui::easeOutBack((age_ - 0.2f) / 0.35f);
+                t.Shape(UiShape::rect(b.x, b.y + 0.07f * cap, b.w, b.h, b.h * 0.3f).fill(ui::kGoldFoot, enter));
+                t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, b.h * 0.3f).grad(ui::kGoldTop, ui::kGoldBottom, enter * pop));
+                t.RenderText(style_.badge, b.x + 0.25f * cap, b.y + (b.h - t.CapHeight(bs)) * 0.5f, bs, ui::kInk, enter * pop);
+            }
+            y += t.CapHeight(ts);
+        }
         if (!style_.subtitle.empty()) {
-            float s = fit(t, style_.subtitle, 0.8f * u, maxW);
-            t.RenderText(style_.subtitle, panel_.x + (panel_.w - t.GetTextWidth(style_.subtitle, s)) * 0.5f,
-                         stripY + 20.0f * u, s, ui::kMuted);
+            y += 14.0f * u;
+            float s = fit(t, style_.subtitle, 0.78f * u, maxW);
+            float sx = hero ? card.x : card.x + (card.w - t.GetTextWidth(style_.subtitle, s)) * 0.5f;
+            if (hero) ui::textOnScene(t, style_.subtitle, sx, y, s, ui::kMuted, enter);
+            else t.RenderText(style_.subtitle, sx, y, s, ui::kClayDeep, enter);
+        }
+        if (style_.header && style_.headerHeight > 0.0f) {
+            ui::Rect hr{card.x + kPad * u, headerY_ + rise, card.w - 2.0f * kPad * u, style_.headerHeight * u};
+            style_.header(t, hr, u, ui::easeOutCubic((age_ - 0.06f) / 0.3f));
+        }
+
+        // Focus ring: slides to the focused row.
+        if (focus >= 0 && focus < int(items_.size()) && items_[focus].focusable()) {
+            ui::Rect target = rows_[focus];
+            if (!focusValid_) { focusRect_ = target; focusValid_ = true; }
+            float k = 1.0f - std::exp(-lastDt() * 20.0f);
+            focusRect_.x += (target.x - focusRect_.x) * k; focusRect_.y += (target.y - focusRect_.y) * k;
+            focusRect_.w += (target.w - focusRect_.w) * k; focusRect_.h += (target.h - focusRect_.h) * k;
         }
 
         // Rows.
-        for (size_t i = 0; i < items_.size(); ++i) drawRow(t, items_[i], rows_[i], int(i) == focus);
+        for (size_t i = 0; i < items_.size(); ++i) {
+            float ra = ui::easeOutCubic((age_ - 0.05f - 0.035f * float(i)) / 0.25f);
+            ui::Rect r = rows_[i];
+            r.y += rise + (1.0f - ra) * 14.0f * u;
+            drawRow(t, items_[i], r, int(i), ra * enter);
+        }
+        if (focusValid_ && focus >= 0 && focus < int(items_.size()) && items_[focus].focusable()) {
+            const MenuItem& m = items_[focus];
+            float g = 4.0f * u;
+            ui::Rect f = focusRect_;
+            f.y += rise;
+            float rad = m.kind == MenuItem::Button ? f.h * 0.5f + g : 14.0f * u + g;
+            float pulse = 0.75f + 0.25f * std::sin(age_ * 5.0f);
+            glm::vec3 col = hero ? ui::kGlaze : ui::kGoldFoot;
+            t.Shape(UiShape::rect(f.x - g, f.y - g, f.w + 2.0f * g, f.h + 2.0f * g + 4.0f * u, rad)
+                        .ring(2.5f * u).fill(col, enter * pulse));
+        }
 
-        // Hint lines at the bottom.
-        float hy = panel_.y + panel_.h - (kPad - 6.0f) * u - 20.0f * u * footerLines();
-        auto line = [&](const std::string& s, glm::vec3 c) {
+        // Footer: key hints and an optional live note.
+        float fy = footerY_ + rise;
+        if (!style_.keys.empty()) {
+            const float kh = 22.0f * u;
+            float total = 0.0f;
+            std::vector<float> kw;
+            FaceScope f(t, TextRenderer::Body);
+            float ls = 0.62f * u;
+            for (auto& k : style_.keys) total += keyWidth(t, k.first, kh) + 8.0f * u + t.GetTextWidth(k.second, ls) + 22.0f * u;
+            total -= 22.0f * u;
+            float x = hero ? card.x : card.x + (card.w - total) * 0.5f;
+            glm::vec3 lc = hero ? ui::kMuted : ui::kClayDeep;
+            for (auto& k : style_.keys) {
+                x += ui::keycap(t, k.first, x, fy, kh, enter * 0.9f, hero ? ui::kGlaze : ui::kInk, hero ? ui::kInk : ui::kGlaze) + 8.0f * u;
+                if (hero) ui::textOnScene(t, k.second, x, fy + (kh - t.CapHeight(ls)) * 0.5f, ls, lc, enter);
+                else t.RenderText(k.second, x, fy + (kh - t.CapHeight(ls)) * 0.5f, ls, lc, enter);
+                x += t.GetTextWidth(k.second, ls) + 22.0f * u;
+            }
+            fy += kh + 12.0f * u;
+        }
+        if (style_.note) {
+            std::string s = style_.note();
             float sc = fit(t, s, 0.62f * u, maxW);
-            t.RenderText(s, panel_.x + (panel_.w - t.GetTextWidth(s, sc)) * 0.5f, hy, sc, c);
-            hy += 20.0f * u;
-        };
-        line(style_.hint, ui::kMuted);
-        if (style_.note) line(style_.note(), ui::kGold);
+            float x = hero ? card.x : card.x + (card.w - t.GetTextWidth(s, sc)) * 0.5f;
+            if (hero) ui::textOnScene(t, s, x, fy, sc, ui::kMuted, enter);
+            else t.RenderText(s, x, fy, sc, ui::kClayDeep, enter);
+        }
+        if (!style_.sceneChips.empty()) {
+            float h = std::clamp(H * 0.036f, 26.0f, 54.0f);
+            ui::keyChipRow(t, style_.sceneChips, W * 0.5f, H - h - std::max(18.0f, H * 0.03f),
+                           h, ui::easeOutCubic((age_ - 0.3f) / 0.4f));
+        }
     }
 
 private:
-    struct Rect {
-        float x = 0, y = 0, w = 0, h = 0;
-        bool has(glm::vec2 p) const { return p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h; }
-    };
-    static constexpr float kPad = 34.0f;   // design units
-    static constexpr float kInner = 18.0f; // row padding
-    static constexpr float kZone = 250.0f; // choice / slider value zone
+    static constexpr float kPad = 36.0f;   // design units
+    static constexpr float kInner = 20.0f; // row padding
+    static constexpr float kZone = 230.0f; // choice / slider value zone
 
     std::vector<MenuItem> items_;
     MenuStyle style_;
-    std::vector<Rect> rows_;
-    Rect panel_;
+    std::vector<std::vector<int>> lines_;
+    std::vector<ui::Rect> rows_;
+    std::vector<float> hoverAnim_, pressAnim_;
+    ui::Rect panel_, focusRect_;
+    bool focusValid_ = false;
+    float headerY_ = 0.0f, footerY_ = 0.0f;
     float u_ = 1.0f;
+    float age_ = 0.0f, lastDraw_ = 0.0f;
     float held_ = 0.0f, repeat_ = 0.0f;
-    int dragging_ = -1;
+    int dragging_ = -1, hover_ = -1;
     glm::vec2 lastMouse_{-1.0f};
 
-    int footerLines() const { return style_.note ? 2 : 1; }
+    float lastDt() const { return std::clamp(age_ - lastDraw_, 0.0f, 0.1f); }
+    void sound(int k) { if (onSound) onSound(k); }
+    float titleScale() const { return style_.hero ? 3.4f : 1.5f; }
 
-    void move(int dir) {
-        int n = int(items_.size());
-        for (int k = 0; k < n; ++k) {
-            focus = (focus + dir + n) % n;
-            if (items_[focus].focusable()) return;
+    float badgeWidth(TextRenderer& t, float ts) const {
+        if (style_.badge.empty()) return 0.0f;
+        float cap = t.CapHeight(ts);
+        return t.GetTextWidth(style_.badge, ts * 0.5f) + 0.68f * cap;
+    }
+    static float keyWidth(TextRenderer& t, const std::string& k, float h) {
+        return ui::keycapWidth(t, k, h);
+    }
+
+    int lineOf(int item) const {
+        for (size_t l = 0; l < lines_.size(); ++l)
+            for (int i : lines_[l]) if (i == item) return int(l);
+        return 0;
+    }
+
+    void moveLine(int dir) {
+        int nl = int(lines_.size());
+        if (nl == 0) return;
+        int l = lineOf(focus);
+        float fx = rows_.empty() ? 0.0f : rows_[focus].centre().x;
+        for (int k = 0; k < nl; ++k) {
+            l = (l + dir + nl) % nl;
+            int best = -1;
+            float bd = 1e9f;
+            for (int i : lines_[l]) {
+                if (!items_[i].focusable()) continue;
+                float d = std::abs(rows_[i].centre().x - fx);
+                if (d < bd) { bd = d; best = i; }
+            }
+            if (best >= 0) { focus = best; return; }
         }
+    }
+
+    void moveInLine(int dir) {
+        const auto& line = lines_[lineOf(focus)];
+        int pos = int(std::find(line.begin(), line.end(), focus) - line.begin());
+        for (int p = pos + dir; p >= 0 && p < int(line.size()); p += dir)
+            if (items_[line[p]].focusable()) { focus = line[p]; return; }
     }
 
     // Copy first: the action may rebuild the menu and destroy itself.
     static void run(std::function<void()> f) { f(); }
 
-    static void apply(MenuItem& m, int dir, bool) {
+    static void apply(MenuItem& m, int dir) {
         if (m.kind == MenuItem::Choice) m.step(dir);
         else if (m.kind == MenuItem::Slider) m.set(std::clamp(m.get() + 0.05f * dir, 0.0f, 1.0f));
     }
 
-    static float fit(TextRenderer& t, const std::string& s, float scale, float maxW) {
-        float w = t.GetTextWidth(s, scale);
-        return w > maxW && w > 0.0f ? scale * maxW / w : scale;
+    static float fit(TextRenderer& t, const std::string& s, float scale, float maxW) { return ui::fit(t, s, scale, maxW); }
+
+    ui::Rect valueZone(const ui::Rect& r) const { return {r.x + r.w - (kInner * 0.5f + kZone) * u_, r.y, kZone * u_, r.h}; }
+    ui::Rect track(const ui::Rect& r) const {
+        ui::Rect z = valueZone(r);
+        return {z.x + 14.0f * u_, r.y, z.w - 84.0f * u_, r.h};
     }
 
-    Rect valueZone(const Rect& r) const { return {r.x + r.w - (kInner + kZone) * u_, r.y, kZone * u_, r.h}; }
-    Rect track(const Rect& r) const {
-        Rect z = valueZone(r);
-        return {z.x + 12.0f * u_, r.y, z.w - 80.0f * u_, r.h};
+    float rowHeight(const MenuItem& m) const {
+        switch (m.kind) {
+            case MenuItem::Info: return 34.0f;
+            case MenuItem::Header: return 36.0f;
+            case MenuItem::Button: return m.primary ? (style_.hero ? 70.0f : 60.0f) : (style_.hero ? 54.0f : 50.0f);
+            default: return 48.0f;
+        }
+    }
+    float rowGap(const MenuItem& m) const { return m.kind == MenuItem::Info ? 4.0f : m.kind == MenuItem::Header ? 2.0f : 12.0f; }
+    float lineHeight(const std::vector<int>& l) const {
+        float h = 0.0f;
+        for (int i : l) h = std::max(h, rowHeight(items_[i]));
+        return h;
+    }
+    float lineGap(const std::vector<int>& l) const {
+        float g = 0.0f;
+        for (int i : l) g = std::max(g, rowGap(items_[i]));
+        // Breathing room between a list of key rows and the buttons after it.
+        size_t li = size_t(&l - lines_.data());
+        if (li + 1 < lines_.size() && items_[l[0]].kind == MenuItem::Info && items_[lines_[li + 1][0]].kind == MenuItem::Button)
+            g += 18.0f;
+        return g;
     }
 
-    float rowHeight(const MenuItem& m) const { return (m.kind == MenuItem::Info ? 30.0f : style_.hero ? 56.0f : 48.0f); }
-    float rowGap(const MenuItem& m) const { return m.kind == MenuItem::Info ? 0.0f : 8.0f; }
-
-    // Breathing room where a read-only block ends and buttons begin.
-    float extraGap(size_t i) const {
-        return i > 0 && i < items_.size() && items_[i].kind != MenuItem::Info && items_[i - 1].kind == MenuItem::Info ? 12.0f : 0.0f;
-    }
-
-    // Design size of the panel, then the scale that fits it in the window.
+    // Design size of the card, then the scale that fits it in the window.
     void layout(TextRenderer& t, float W, float H) {
-        float titleScale = style_.hero ? 2.4f : 1.25f;
-        float titleW = t.GetTextWidth(style_.title, titleScale);
-        float titleBlock = t.CapHeight(titleScale) + 14.0f + 8.0f + (style_.subtitle.empty() ? 0.0f : 34.0f) + 22.0f;
+        float ts = titleScale();
+        float titleW, titleCap;
+        {
+            FaceScope f(t, TextRenderer::Display);
+            titleW = t.GetTextWidth(style_.title, ts) + badgeWidth(t, ts);
+            titleCap = t.CapHeight(ts);
+        }
+        float titleBlock = titleCap + (style_.subtitle.empty() ? 0.0f : 14.0f + t.CapHeight(0.78f)) + 26.0f;
+        float headerBlock = style_.headerHeight > 0.0f ? style_.headerHeight + 18.0f : 0.0f;
         float rowsH = 0.0f;
-        for (size_t i = 0; i < items_.size(); ++i) rowsH += rowHeight(items_[i]) + rowGap(items_[i]) + extraGap(i);
-        float footer = 14.0f + 20.0f * footerLines();
-        float Wd = std::max(style_.width, titleW) + 2.0f * kPad;
-        float Hd = kPad + titleBlock + rowsH + footer + kPad - 6.0f;
-        u_ = std::clamp(std::min(0.94f * W / Wd, 0.94f * H / Hd), 0.3f, 1.5f);
+        for (auto& l : lines_) rowsH += lineHeight(l) + lineGap(l);
+        float footer = (style_.keys.empty() ? 0.0f : 22.0f + 12.0f) + (style_.note ? 22.0f : 0.0f);
+        float Wd = std::max(style_.width, titleW) + (style_.hero ? 0.0f : 2.0f * kPad);
+        float Hd = kPad + titleBlock + headerBlock + rowsH + 8.0f + footer + kPad * 0.6f;
+        float roomH = style_.sceneChips.empty() ? H : H - std::clamp(H * 0.036f, 26.0f, 54.0f) - 40.0f;
+        u_ = std::clamp(std::min(0.92f * W / Wd, 0.9f * roomH / Hd), 0.3f, std::max(1.0f, H / 720.0f) * 1.05f);
         float u = u_;
-        panel_ = {(W - Wd * u) * 0.5f, (H - Hd * u) * 0.5f, Wd * u, Hd * u};
-        rows_.resize(items_.size());
-        float y = panel_.y + (kPad + titleBlock) * u;
+        float px = style_.hero ? std::max(W * 0.075f, 24.0f) : (W - Wd * u) * 0.5f;
+        if (style_.hero && px + Wd * u > W * 0.95f) px = (W - Wd * u) * 0.5f;
+        panel_ = {px, (roomH - Hd * u) * 0.5f, Wd * u, Hd * u};
+        headerY_ = panel_.y + (kPad + titleBlock) * u;
+        rows_.assign(items_.size(), {});
+        float y = headerY_ + headerBlock * u;
         float rw = style_.width * u;
-        y += extraGap(0) * u;
-        for (size_t i = 0; i < items_.size(); ++i) {
-            rows_[i] = {panel_.x + (panel_.w - rw) * 0.5f, y, rw, rowHeight(items_[i]) * u};
-            y += (rowHeight(items_[i]) + rowGap(items_[i])) * u;
-            if (i + 1 < items_.size()) y += extraGap(i + 1) * u;
+        float rx = style_.hero ? panel_.x : panel_.x + (panel_.w - rw) * 0.5f;
+        const float gap = 12.0f * u;
+        for (auto& l : lines_) {
+            float lh = lineHeight(l) * u;
+            float cw = (rw - gap * float(l.size() - 1)) / float(l.size());
+            for (size_t k = 0; k < l.size(); ++k) {
+                float h = rowHeight(items_[l[k]]) * u;
+                rows_[l[k]] = {rx + (cw + gap) * float(k), y + (lh - h) * 0.5f, cw, h};
+            }
+            y += lh + lineGap(l) * u;
         }
+        footerY_ = y + 8.0f * u;
     }
 
-    // Low-poly accent: alternating triangles in sunset colours.
-    void facets(TextRenderer& t, float x, float y, float w, float h) {
-        const glm::vec3 cols[] = {ui::kCoral, ui::kGold, ui::kRose, glm::vec3(0.98f, 0.60f, 0.30f)};
-        int n = std::max(8, int(w / (h * 2.2f)));
-        float d = w / n;
-        for (int i = 0; i < n; ++i) {
-            float x0 = x + i * d;
-            glm::vec3 c = cols[i % 4] * (0.75f + 0.25f * float((i * 7) % 3) / 2.0f);
-            t.FillPoly({{x0, y + h}, {x0 + d * 0.5f, y}, {x0 + d, y + h}}, c, 0.95f);
-            glm::vec3 c2 = cols[(i + 2) % 4] * 0.6f;
-            t.FillPoly({{x0 + d * 0.5f, y}, {x0 + d * 1.5f, y}, {x0 + d, y + h}}, c2, 0.0f + (i + 1 < n ? 0.9f : 0.0f));
-        }
-    }
-
-    static std::vector<glm::vec2> chamfer(const Rect& r, float c) {
-        return {{r.x + c, r.y}, {r.x + r.w, r.y}, {r.x + r.w, r.y + r.h - c},
-                {r.x + r.w - c, r.y + r.h}, {r.x, r.y + r.h}, {r.x, r.y + c}};
-    }
-
-    void drawRow(TextRenderer& t, const MenuItem& m, const Rect& r, bool focused) {
+    void drawRow(TextRenderer& t, const MenuItem& m, const ui::Rect& r, int index, float alpha) {
         const float u = u_;
-        float scale = (style_.hero ? 1.0f : 0.85f) * u;
-        float pad = kInner * u;
+        const float pad = kInner * u;
         auto centreY = [&](float sc) { return r.y + (r.h - t.CapHeight(sc)) * 0.5f; };
+        const bool hero = style_.hero;
+        const float hov = hoverAnim_[index], press = pressAnim_[index];
 
-        if (m.kind == MenuItem::Info) {
-            float sc = 0.68f * u;
-            float keyW = style_.keyColumn * u;
-            std::string text = m.value();
-            float s1 = fit(t, m.label, sc, keyW - pad);
-            float s2 = fit(t, text, sc, r.w - keyW - pad);
-            t.RenderText(m.label, r.x + pad, centreY(s1), s1, ui::kGold);
-            t.RenderText(text, r.x + keyW, centreY(s2), s2, ui::kCream);
+        if (m.kind == MenuItem::Header) {
+            FaceScope f(t, TextRenderer::Display);
+            float sc = 0.62f * u;
+            float ty = r.y + r.h - t.CapHeight(sc) - 8.0f * u;
+            t.RenderText(m.label, r.x + 4.0f * u, ty, sc, ui::kTerracotta, alpha);
+            float lx = r.x + 4.0f * u + t.GetTextWidth(m.label, sc) + 12.0f * u;
+            float ly = ty + t.CapHeight(sc) * 0.5f;
+            if (lx < r.x + r.w) t.Shape(UiShape::capsule({lx, ly}, {r.x + r.w - 4.0f * u, ly}, 0.8f * u).fill(ui::kClay, 0.6f * alpha));
             return;
         }
 
-        glm::vec3 fg = focused ? ui::kInk : ui::kCream;
-        auto poly = chamfer(r, 9.0f * u);
-        if (focused) {
-            t.FillPoly(poly, ui::kGold, 1.0f);
-        } else {
-            t.FillPoly(poly, glm::vec3(1.0f), 0.07f);
+        if (m.kind == MenuItem::Info) {
+            // Keys as keycaps ("A / D" becomes two caps), then the description.
+            float kh = std::min(r.h - 6.0f * u, 26.0f * u);
+            float x = r.x + 4.0f * u;
+            float keyW = style_.keyColumn * u;
+            std::string rest = m.label;
+            while (!rest.empty()) {
+                size_t sep = rest.find(" / ");
+                std::string tok = rest.substr(0, sep);
+                float w = keyWidth(t, tok, kh);
+                if (x + w > r.x + keyW - 6.0f * u && x > r.x + 4.0f * u) break;
+                ui::keycap(t, tok, x, r.y + (r.h - kh) * 0.5f - 1.0f * u, kh, alpha);
+                x += w + 6.0f * u;
+                if (sep == std::string::npos) break;
+                rest = rest.substr(sep + 3);
+            }
+            FaceScope f(t, TextRenderer::Body);
+            std::string text = m.value();
+            float s2 = fit(t, text, 0.68f * u, r.w - keyW - pad * 0.5f);
+            t.RenderText(text, r.x + keyW, centreY(s2), s2, ui::kInk, alpha);
+            return;
         }
 
         if (m.kind == MenuItem::Button) {
-            float s = fit(t, m.label, scale, r.w - 2.0f * pad);
-            t.RenderText(m.label, r.x + (r.w - t.GetTextWidth(m.label, s)) * 0.5f, centreY(s), s, fg);
+            ui::Tone tone = m.primary ? ui::Tone::Primary : (hero ? ui::Tone::Secondary : ui::Tone::Secondary);
+            ui::pill(t, r, u, tone, hov, press, alpha);
+            float sink = 4.0f * u * press;
+            FaceScope f(t, TextRenderer::Display);
+            float cap = r.h * (m.primary ? 0.34f : 0.31f);
+            float s = cap / std::max(t.CapHeight(1.0f), 1.0f);
+            float keyW = m.key.empty() ? 0.0f : keyWidth(t, m.key, r.h * 0.46f) + 10.0f * u;
+            float iconW = m.icon == ui::Icon::None ? 0.0f : cap * 1.5f + 8.0f * u;
+            s = fit(t, m.label, s, r.w - 2.0f * pad - iconW - keyW);
+            float lw = t.GetTextWidth(m.label, s);
+            float x = r.x + (r.w - (iconW + lw + keyW)) * 0.5f;
+            float cy = r.y + r.h * 0.5f + sink;
+            if (m.icon != ui::Icon::None) ui::icon(t, m.icon, {x + cap * 0.75f, cy}, cap * 1.5f, ui::kInk, alpha);
+            t.RenderText(m.label, x + iconW, cy - t.CapHeight(s) * 0.5f, s, ui::kInk, alpha);
+            if (!m.key.empty()) {
+                float kh = r.h * 0.46f;
+                ui::keycap(t, m.key, x + iconW + lw + 10.0f * u, cy - kh * 0.5f - 1.0f * u, kh, alpha * 0.85f);
+            }
             return;
         }
 
-        Rect z = valueZone(r);
-        float s = fit(t, m.label, scale, z.x - r.x - pad - 8.0f * u);
-        t.RenderText(m.label, r.x + pad, centreY(s), s, fg);
+        // Choice and slider rows: a light glaze strip, label left, control right.
+        const bool focused = index == focus;
+        t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, 14.0f * u)
+                    .fill(glm::vec3(1.0f), (0.35f + 0.35f * std::max(hov, focused ? 1.0f : 0.0f)) * alpha));
+        FaceScope f(t, TextRenderer::Body);
+        ui::Rect z = valueZone(r);
+        float s = fit(t, m.label, 0.8f * u, z.x - r.x - pad - 8.0f * u);
+        t.RenderText(m.label, r.x + pad, centreY(s), s, ui::kInk, alpha);
 
         if (m.kind == MenuItem::Choice) {
-            // "<  value  >" with triangle arrows.
-            float ah = 7.0f * u, cy = r.y + r.h * 0.5f;
-            t.FillPoly({{z.x + 2.0f * u, cy}, {z.x + 2.0f * u + ah, cy - ah}, {z.x + 2.0f * u + ah, cy + ah}}, fg, 1.0f);
-            float zr = z.x + z.w;
-            t.FillPoly({{zr - 2.0f * u, cy}, {zr - 2.0f * u - ah, cy - ah}, {zr - 2.0f * u - ah, cy + ah}}, fg, 1.0f);
+            float ih = r.h - 12.0f * u;
+            ui::Rect inset{z.x, r.y + 6.0f * u, z.w, ih};
+            t.Shape(UiShape::rect(inset.x, inset.y, inset.w, inset.h, ih * 0.5f).fill(ui::kGlaze2, alpha));
+            t.Shape(UiShape::rect(inset.x, inset.y, inset.w, inset.h, ih * 0.5f).ring(1.2f * u).fill(ui::kClay, 0.7f * alpha));
+            float cy = r.y + r.h * 0.5f, ic = ih * 0.7f;
+            ui::icon(t, ui::Icon::Back, {inset.x + ih * 0.5f, cy}, ic, ui::kClayDeep, alpha);
+            // Mirrored chevron for "next".
+            float k = std::max(1.2f, ic * 0.11f);
+            glm::vec2 c(inset.x + inset.w - ih * 0.5f, cy);
+            t.Shape(UiShape::capsule(c + glm::vec2(-0.10f, -0.28f) * ic, c + glm::vec2(0.16f, 0.0f) * ic, k).fill(ui::kClayDeep, alpha));
+            t.Shape(UiShape::capsule(c + glm::vec2(0.16f, 0.0f) * ic, c + glm::vec2(-0.10f, 0.28f) * ic, k).fill(ui::kClayDeep, alpha));
             std::string v = m.value();
-            float sv = fit(t, v, scale, z.w - 2.0f * (ah + 12.0f * u));
-            t.RenderText(v, z.x + (z.w - t.GetTextWidth(v, sv)) * 0.5f, centreY(sv), sv, fg);
+            FaceScope fd(t, TextRenderer::Display);
+            float sv = fit(t, v, 0.72f * u, inset.w - 2.0f * ih);
+            t.RenderText(v, inset.x + (inset.w - t.GetTextWidth(v, sv)) * 0.5f, centreY(sv), sv, ui::kInk, alpha);
         } else {
-            Rect tr = track(r);
-            float v = std::clamp(m.get(), 0.0f, 1.0f), cy = r.y + r.h * 0.5f, th = 4.0f * u;
-            t.FillPoly({{tr.x, cy - th}, {tr.x + tr.w, cy - th}, {tr.x + tr.w, cy + th}, {tr.x, cy + th}},
-                       fg, focused ? 0.28f : 0.22f);
+            ui::Rect tr = track(r);
+            float v = std::clamp(m.get(), 0.0f, 1.0f), cy = r.y + r.h * 0.5f, th = 5.0f * u;
+            t.Shape(UiShape::capsule({tr.x, cy}, {tr.x + tr.w, cy}, th).fill(ui::kClay, 0.45f * alpha));
             float kx = tr.x + tr.w * v;
-            t.FillPoly({{tr.x, cy - th}, {kx, cy - th}, {kx, cy + th}, {tr.x, cy + th}}, focused ? ui::kInk : ui::kGold, 1.0f);
-            float kr = 9.0f * u;  // diamond knob
-            t.FillPoly({{kx, cy - kr}, {kx + kr, cy}, {kx, cy + kr}, {kx - kr, cy}}, focused ? ui::kInk : ui::kCream, 1.0f);
+            if (v > 0.0f) t.Shape(UiShape::capsule({tr.x, cy}, {kx, cy}, th).grad(ui::kGoldTop, ui::kGoldBottom, alpha));
+            float kr = (10.0f + 2.0f * std::max(hov, focused ? 1.0f : 0.0f)) * u;
+            t.Shape(UiShape::circle({kx, cy + 2.5f * u}, kr).fill(ui::kClay, alpha));
+            t.Shape(UiShape::circle({kx, cy}, kr).grad(glm::vec3(1.0f), ui::kGlaze2, alpha));
             std::string p = m.value();
-            float sp = fit(t, p, 0.72f * u, 56.0f * u);
-            t.RenderText(p, z.x + z.w - t.GetTextWidth(p, sp), centreY(sp), sp, fg);
+            FaceScope fd(t, TextRenderer::Display);
+            float sp = fit(t, p, 0.7f * u, 58.0f * u);
+            t.RenderText(p, z.x + z.w - t.GetTextWidth(p, sp), centreY(sp), sp, ui::kInk, alpha);
         }
     }
 };

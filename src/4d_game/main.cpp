@@ -998,7 +998,10 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
         if (i % dropEvery == 0 && i / dropEvery < o.demo) dropDemoFruit(i / dropEvery);
         frame(FIXED_TIMESTEP);
     }
-    if (late) showMenuState(o.state);
+    if (late) {
+        showMenuState(o.state);
+        for (int i = 0; i < 45; ++i) frame(FIXED_TIMESTEP);  // let the menu's entrance finish
+    }
 
     if (o.bench > 0) {
         // Per frame: wall time with glFinish (the whole frame, robust when
@@ -1268,6 +1271,7 @@ int main(int argc, char* argv[])
         game.Init(window);
         game.LoadTutorialState();
         game.LoadView();
+        if (!opt.headless()) { game.bestFileOn = true; game.LoadBest(); }
         game.photoSaver = [](const std::string& path) { return savePng(path, game.FbWidth, game.FbHeight); };
 
 #ifndef __EMSCRIPTEN__
