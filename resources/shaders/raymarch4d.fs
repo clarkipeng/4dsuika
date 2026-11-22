@@ -20,7 +20,7 @@
 #endif
 
 #if PASS == 1
-layout(location = 0) out vec4 gGeom;   // t, kind, fruit lod, unused
+layout(location = 0) out vec4 gGeom;   // t, kind, fruit lod, cutaway
 layout(location = 1) out vec4 gNormal; // smooth normal
 #elif PASS == 4
 layout(location = 0) out vec4 out0;
@@ -572,7 +572,11 @@ struct Hit {
     float kind;
     float lod;      // fruit detail
     vec4 ns;        // smooth normal
+    float cut;      // 1: a fruit seen through the cutaway in the near wall
 };
+
+float gCutEdge = 0.0; // compose pass: 0..1 on the near wall's cut face
+
 
 // Ray through the centre of render-target pixel `px` (in pixels).
 vec4 rayDir(vec2 px) {
@@ -621,16 +625,19 @@ Hit traceScene(vec4 ro, vec4 rd) {
         h.t = tHit;
         h.kind = -float(fruit + 1);
         h.lod = fruitLodHit;
+        h.cut = tHit > hw.x ? 1.0 : 0.0;
         h.ns = fruitLodHit > 0.0 ? fruitWorldNormal(fruit, q, d, fruitLodHit) : normalize(p - c);
     } else if (hw.y > 0.0) {
         h.t = hw.x;
         h.kind = hw.y;
         h.lod = 0.0;
+        h.cut = 0.0;
         h.ns = worldNormal(ro + rd * hw.x, hw.z, hw.y, hd.y > 0.0);
     } else {
         h.t = FAR;
         h.kind = 0.0;
         h.lod = 0.0;
+        h.cut = 0.0;
         h.ns = vec4(0.0);
     }
     return h;
@@ -719,16 +726,24 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
                     wrapOf(h.kind), light);
         if (h.kind == MAT_BOWL) {
             vec3 radial = normalize(p.xzw);
-            float lip = 1.0 - smoothstep(0.018, 0.065 * (1.0 + 2.5 * uDanger), abs(p.y - bowlLipY(radial) + 0.027));
-            // Danger: the rim turns red and pulses as the pile nears it.
+            float lipD = abs(p.y - bowlLipY(radial) + 0.027);
+            float lip = 1.0 - smoothstep(0.018, 0.065 * (1.0 + 2.5 * uDanger), lipD);
+            // Lit rim: the rounded top of the lip catches the low sun and the
+            // sky as a crisp cream line, so the bowl's outline reads at a glance.
+            float crisp = 1.0 - smoothstep(0.012, 0.03, lipD);
+            float catchL = 0.8 + 0.5 * max(dot(n, uSunDir), 0.0);
+            col = mix(col, vec3(1.0, 0.88, 0.70) * catchL * 1.25, 0.7 * crisp);
+            // Danger: the rim turns red and pulses as the pile nears it. The
+            // only glow on the bowl is this rim band (a third of the old body glow).
             float alarm = uDanger * (0.55 + 0.45 * sin(uTime * 7.0));
             col += mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.10, 0.05), uDanger) * ((0.075 + 0.9 * alarm) * lip);
+            col = mix(col, vec3(0.98, 0.86, 0.68) * 0.9, 0.85 * gCutEdge);
         }
     }
 
     // Sunset fog. The sky (noise clouds, not cheap) is evaluated once, and
     // only where it shows.
-    float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.018);
+    float fog = dist >= FAR ? 1.0 : 1.0 - exp(-max(dist - uFogStart, 0.0) * 0.012);
     if (fog > 0.002) col = mix(col, background(px, rd), fog);
 
     col = drawHints(col, ro, rd, dist);
@@ -757,8 +772,24 @@ Hit readGeometry(ivec2 texel) {
     h.t = g.x;
     h.kind = g.y;
     h.lod = g.z;
+    h.cut = g.w;
     h.ns = texelFetch(uNormal, texel, 0);
     return h;
+}
+
+// Clean cutaway edge: a near-wall pixel next to a fruit seen through the
+// cutaway is the cut face of the wall, drawn as a thin lit line (about 2 px at
+// 1080p) so the opening reads as cut into the wall, not a fruit pasted on it.
+float cutEdge(ivec2 texel) {
+    int r = max(1, int(uResolution.y / 540.0 + 0.5));
+    ivec2 hi = ivec2(uResolution) - 1;
+    float e = 0.0;
+    for (int y = -r; y <= r; ++y)
+        for (int x = -r; x <= r; ++x) {
+            vec4 g = texelFetch(uGeom, clamp(texel + ivec2(x, y), ivec2(0), hi), 0);
+            if (g.w > 0.5) e = max(e, 1.0 - length(vec2(x, y)) / float(r + 1));
+        }
+    return e;
 }
 
 // Lighting for full-resolution pixel `texel` (depth t) from the
@@ -909,7 +940,7 @@ void main() {
     vec4 ro = uCameraPos;
 #if PASS == 1
     Hit h = traceScene(ro, rayDir(px));
-    gGeom = vec4(h.t, h.kind, h.lod, 0.0);
+    gGeom = vec4(h.t, h.kind, h.lod, h.cut);
     gNormal = h.ns;
 #elif PASS == 2
     // Each half-resolution texel lights the top-left pixel of its 2x2 block.
@@ -928,6 +959,7 @@ void main() {
     ivec2 texel = ivec2(px);
     Hit h = readGeometry(texel);
     vec2 light = h.kind == 0.0 ? vec2(1.0) : upsampleLight(texel, h.t);
+    gCutEdge = h.kind == MAT_BOWL ? cutEdge(texel) : 0.0;
     fragColor = vec4(compose(px, ro, rayDir(px), h, light), 1.0);
 #else
     vec4 rd = rayDir(px);

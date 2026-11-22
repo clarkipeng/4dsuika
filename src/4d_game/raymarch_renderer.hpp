@@ -529,7 +529,7 @@ private:
         glUniform1f(loc(p, "uTime"), time);
         glUniform4fv(loc(p, "uSunDir"), 1, glm::value_ptr(sunDir));
         glUniform1f(loc(p, "uFacet"), facet);
-        glUniform1f(loc(p, "uFogStart"), cam.distance + 12.0f);
+        glUniform1f(loc(p, "uFogStart"), cam.distance + 20.0f);
         glUniform1f(loc(p, "uNearCut"), std::clamp(cam.distance - 7.0f, 0.0f, 5.0f));
         uploadFruit(p, pos, basis[3]);
         uploadEffects(p);
