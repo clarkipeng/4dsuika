@@ -424,7 +424,7 @@ struct MouseScript {
                 const bool press = e.act == "down";
                 game.heldButtons = press ? (game.heldButtons | bit) : (game.heldButtons & ~bit);
                 game.state.onMouseButton(button, press ? GLFW_PRESS : GLFW_RELEASE, game.state.m_xpos, game.state.m_ypos, mods);
-                if (press && button == GLFW_MOUSE_BUTTON_LEFT && !game.HudClick(glm::vec2(game.state.m_xpos, game.state.m_ypos))) game.DropFruit();
+                if (press && game.State == GAME_ACTIVE && button == GLFW_MOUSE_BUTTON_LEFT && !game.HudClick(glm::vec2(game.state.m_xpos, game.state.m_ypos))) game.DropFruit();
             } else if (e.act == "scroll") {
                 game.OnScroll(e.a, mods & GLFW_MOD_SHIFT, mods & GLFW_MOD_CONTROL);
             } else if (e.act == "mods") {
@@ -1311,9 +1311,13 @@ int main(int argc, char* argv[])
         float fixedUpdateAccumulator = 0.0f;
         float lastFrame = glfwGetTime();
         if (!opt.record.empty()) live.toggle = true;  // --record starts at once
+        GLFWcursor* handCursor = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
+        bool handShown = false;
         while (!glfwWindowShouldClose(window))
         {
             runInteractiveFrame(window, fixedUpdateAccumulator, lastFrame, true);
+            const bool hand = game.WantsHandCursor();
+            if (hand != handShown) { glfwSetCursor(window, hand ? handCursor : nullptr); handShown = hand; }
         }
         live.rec.stop();
         quitNow(0);

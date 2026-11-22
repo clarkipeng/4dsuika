@@ -36,6 +36,7 @@
 #include "state_helper.hpp"
 #include "menu.hpp"
 #include "fruit.hpp"
+#include "synth.hpp"
 
 enum GameState {
     GAME_ACTIVE,
@@ -86,6 +87,10 @@ public:
     Mix_Chunk* loseSound = nullptr;
     Mix_Chunk* placeSound = nullptr;
     Mix_Music* themeMusic = nullptr;
+    Mix_Chunk* uiSounds[3] = {};      // synth.hpp: focus, press, value
+    Mix_Chunk* mergeChimes[12] = {};  // one marimba note per fruit
+    Mix_Chunk* bestSound = nullptr;
+    float bestSoundIn = -1.0f;        // seconds until the new-best arpeggio (after the lose sound)
     bool sdlReady = false;
     bool audioReady = false;
     bool audioMuted = false;
@@ -206,6 +211,9 @@ public:
         if (loseSound) Mix_FreeChunk(loseSound);
         if (placeSound) Mix_FreeChunk(placeSound);
         if (themeMusic) Mix_FreeMusic(themeMusic);
+        for (Mix_Chunk* c : uiSounds) if (c) Mix_FreeChunk(c);
+        for (Mix_Chunk* c : mergeChimes) if (c) Mix_FreeChunk(c);
+        if (bestSound) Mix_FreeChunk(bestSound);
         if (audioReady) Mix_CloseAudio();
         if (sdlReady) SDL_Quit();
 #endif
@@ -278,6 +286,13 @@ public:
             if (!placeSound) std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
             themeMusic = Mix_LoadMUS(FileSystem::getPath("resources/audio/theme.wav").c_str());
             if (!themeMusic) std::cerr << "Mix_LoadMUS error: " << Mix_GetError() << std::endl;
+            Mix_AllocateChannels(24);
+            for (int i = 0; i < 3; ++i) uiSounds[i] = synth::uiSound(i);
+            for (int i = 0; i < 12; ++i) mergeChimes[i] = synth::mergeChime(i);
+            bestSound = synth::newBest();
+            if (!uiSounds[1] || !mergeChimes[0] || !bestSound) std::cerr << "Warning: synth sounds failed: " << Mix_GetError() << std::endl;
+            else if (logEvents) std::cerr << "EV synth sounds ready\n";
+            ApplyVolumeSettings();
         }
 #endif
 
@@ -420,8 +435,31 @@ public:
         if (!f.empty()) std::ofstream(f) << high_score << "\n";
     }
 
+    void PlaySfx(Mix_Chunk* c) {
+#ifndef __EMSCRIPTEN__
+        if (audioReady && !audioMuted && soundOn && c) Mix_PlayChannel(-1, c, 0);
+#else
+        (void)c;
+#endif
+    }
     // UI feedback sounds: 0 focus moved, 1 pressed, 2 value changed.
-    void UiSound(int) {}
+    void UiSound(int k) {
+#ifndef __EMSCRIPTEN__
+        if (k >= 0 && k < 3) PlaySfx(uiSounds[k]);
+#else
+        (void)k;
+#endif
+    }
+    // One chime per frame for the biggest fruit merged; a running combo
+    // climbs the ladder a step per merge (up to three), so chains rise.
+    void MergeChime(int fruit, int comboCount) {
+#ifndef __EMSCRIPTEN__
+        int i = std::clamp(fruit - std::min(std::max(comboCount - 1, 0), 3), 0, 11);
+        PlaySfx(mergeChimes[i]);
+#else
+        (void)fruit; (void)comboCount;
+#endif
+    }
 
     void UpdateMenuInput(float dt) {
         EnsureMenu();
@@ -434,7 +472,7 @@ public:
         if (keyPressedOnce(GLFW_KEY_LEFT) || keyPressedOnce(GLFW_KEY_A)) in.horizontal = -1;
         if (keyPressedOnce(GLFW_KEY_RIGHT) || keyPressedOnce(GLFW_KEY_D)) in.horizontal = +1;
         in.mouse = glm::vec2(state.m_xpos, state.m_ypos);
-        in.mouseDown = window && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        in.mouseDown = (heldButtons & 1) || (window && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);  // heldButtons: also the scripted mouse
         in.mousePressed = in.mouseDown && !mouseWasDown;
         mouseWasDown = in.mouseDown;
         menu.update(*t_rend, in, dt, float(Width), float(Height));
@@ -451,6 +489,9 @@ public:
         if (mergeSound) Mix_VolumeChunk(mergeSound, sfx_volume_sdl);
         if (loseSound)  Mix_VolumeChunk(loseSound, sfx_volume_sdl);
         if (placeSound) Mix_VolumeChunk(placeSound, sfx_volume_sdl);
+        for (Mix_Chunk* c : uiSounds) if (c) Mix_VolumeChunk(c, sfx_volume_sdl);
+        for (Mix_Chunk* c : mergeChimes) if (c) Mix_VolumeChunk(c, sfx_volume_sdl);
+        if (bestSound) Mix_VolumeChunk(bestSound, sfx_volume_sdl);
 #endif
     }
 
@@ -470,6 +511,11 @@ public:
         Width = state.windowWidth;
         Height = state.windowHeight;
         Sound();
+        if (bestSoundIn > 0.0f && (bestSoundIn -= dt) <= 0.0f) {
+#ifndef __EMSCRIPTEN__
+            PlaySfx(bestSound);
+#endif
+        }
 
         switch (State)
         {
@@ -510,7 +556,8 @@ public:
             if (physics_solver->objects[i].position.y < -3) {
                 if (total_points > high_score) { high_score = total_points; SaveBest(); }
 #ifndef __EMSCRIPTEN__
-                if (State == GAME_ACTIVE && loseSound != nullptr) Mix_PlayChannel(-1, loseSound, 0);
+                if (State == GAME_ACTIVE) PlaySfx(loseSound);
+                if (State == GAME_ACTIVE && total_points > bestAtStart && total_points > 0) bestSoundIn = 1.1f;
 #endif
                 if (logEvents && State == GAME_ACTIVE) fprintf(stderr, "EV t=%.2f gameover\n", time);
                 State = GAME_OVER;
@@ -703,12 +750,16 @@ public:
     // to the rim.
     void UpdateEffects(float dt) {
         if (!effectsOn) {
-            for (const auto& m : physics_solver->takeMerges()) { ++statMerges; statBiggest = std::max(statBiggest, int(m.fruit)); }
+            int biggest = -1;
+            for (const auto& m : physics_solver->takeMerges()) { ++statMerges; statBiggest = std::max(statBiggest, int(m.fruit)); biggest = std::max(biggest, int(m.fruit)); }
+            if (biggest >= 0) MergeChime(biggest, 1);
             bursts.clear(); combo = 0; danger = 0.0f;
             return;
         }
+        int chime = -1;
         for (const auto& m : physics_solver->takeMerges()) {
             combo = comboTimer > 0.0f ? combo + 1 : 1;
+            chime = std::max(chime, int(m.fruit));
             ++statMerges;
             statBestCombo = std::max(statBestCombo, combo);
             statBiggest = std::max(statBiggest, int(m.fruit));
@@ -718,6 +769,7 @@ public:
             bursts.push_back({m.position, m.radius, m.fruit, 0.0f, std::min(1.0f + 0.4f * float(combo - 1), 2.6f)});
             if (bursts.size() > RaymarchRenderer::kMaxBursts) bursts.erase(bursts.begin());
         }
+        if (chime >= 0) MergeChime(chime, combo);
         for (auto& b : bursts) b.progress += dt / kBurstSeconds;
         bursts.erase(std::remove_if(bursts.begin(), bursts.end(), [](const BurstInstance& b) { return b.progress >= 1.0f; }),
                      bursts.end());
@@ -971,7 +1023,7 @@ public:
     // Glazed-ceramic HUD (docs/ui.md): score and next-drop cards at the top,
     // icon buttons under the next card, the slice dial and w track along the
     // bottom. Debug read-outs and the axis gizmo only with F3.
-    enum HudId { HudNone = -1, HudView = 0, HudHelp, HudPause, HudHome, kHudButtons };
+    enum HudId { HudNone = -1, HudView = 0, HudHelp, HudPause, HudHome, HudSkip, kHudButtons };
     ui::Rect hudRect[kHudButtons];
     bool hudVisible[kHudButtons] = {};
     float hudHover[kHudButtons] = {}, hudPress[kHudButtons] = {};
@@ -997,6 +1049,7 @@ public:
             case HudHelp: OpenControlsFromGame(); break;
             case HudPause: State = GAME_PAUSED; break;
             case HudHome: homing = true; break;
+            case HudSkip: EndTutorial(); break;
         }
         return true;
     }
@@ -1025,6 +1078,7 @@ public:
         RenderDepthStrip(aim);
         RenderSliceDial(dt);
         RenderStarterChips();
+        hudVisible[HudSkip] = false;   // RenderTutorial shows it while the coach is up
         RenderTutorial();
         if (!caption.empty()) {
             const float u = UiScale();
@@ -1232,6 +1286,13 @@ public:
         t.RenderText(buf, x + 12.0f * u, y + (h - t.CapHeight(s)) * 0.5f, s, ui::kCream);
     }
 
+    // Hand cursor over anything clickable in play (main.cpp sets it).
+    bool WantsHandCursor() const {
+        if (State != GAME_ACTIVE) return menu.hovering();
+        if (photo || hideUI) return false;
+        return HudButtonAt(glm::vec2(state.m_xpos, state.m_ypos)) != HudNone;
+    }
+
     // Coach panel for the onboarding steps, above the w track.
     void RenderTutorial() {
         if (!tutorialActive || sheetMode) return;
@@ -1241,7 +1302,7 @@ public:
             {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
             {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
             {"Everything here is a slice of a 4D world.", "Scroll the wheel, middle-drag, or hold A or D to turn the slice."},
-            {"Fruit off the slice show as rings; the track below places every fruit in w.", "Press H or Space to come back to the default slice."},
+            {"Fruit just off the slice show as dotted rings; the track below places every fruit in w.", "Press H or Space to come back to the default slice."},
         };
         const int s = std::min(tutorialStep, kTutorialSteps - 1);
         const float u = UiScale();
@@ -1267,11 +1328,17 @@ public:
                 float ls = ui::fit(t, lines[s][i], 0.62f * u, r.w - 2.0f * pad);
                 t.RenderText(lines[s][i], r.x + pad, r.y + 58.0f * u + 28.0f * u * float(i), ls, i == 0 ? ui::kInk : ui::kClayDeep);
             }
-            float kh = 22.0f * u, ks = 0.44f * u;
+            // "F1 skip" is also a button.
+            float kh = 24.0f * u, ks = 0.5f * u;
             float lw = t.GetTextWidth("skip", ks);
             float kx = r.x + r.w - pad - lw - 8.0f * u - ui::keycapWidth(t, "F1", kh);
-            ui::keycap(t, "F1", kx, r.y + r.h - kh - 14.0f * u, kh);
-            t.RenderText("skip", r.x + r.w - pad - lw, r.y + r.h - 14.0f * u - kh * 0.5f - t.CapHeight(ks) * 0.5f, ks, ui::kClayDeep);
+            float ky = r.y + r.h - kh - 14.0f * u;
+            hudRect[HudSkip] = {kx - 10.0f * u, ky - 7.0f * u, r.x + r.w - pad + 10.0f * u - (kx - 10.0f * u), kh + 14.0f * u};
+            hudVisible[HudSkip] = true;
+            const float hv = hudHover[HudSkip];
+            if (hv > 0.01f) t.Shape(UiShape::rect(hudRect[HudSkip].x, hudRect[HudSkip].y, hudRect[HudSkip].w, hudRect[HudSkip].h, hudRect[HudSkip].h * 0.5f).fill(ui::kClay, 0.25f * hv));
+            ui::keycap(t, "F1", kx, ky, kh);
+            t.RenderText("skip", r.x + r.w - pad - lw, ky + kh * 0.5f - t.CapHeight(ks) * 0.5f, ks, glm::mix(ui::kClayDeep, ui::kInk, hv));
         }
     }
 
