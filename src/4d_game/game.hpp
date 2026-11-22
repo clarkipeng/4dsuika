@@ -1704,6 +1704,11 @@ public:
             MenuItem::info("P", "photo mode and replay").sameRow(),
             MenuItem::info("G", "cycle quality"),
             MenuItem::info("F3", "debug info").sameRow(),
+            MenuItem::header("What you see"),
+            MenuItem::info("", "solid outline: your next fruit").withSwatch(1),
+            MenuItem::info("", "dots: a fruit just off your slice").withSwatch(2).sameRow(),
+            MenuItem::info("", "band: a fruit your slice cuts").withSwatch(3),
+            MenuItem::info("", "band colour: -w, on slice, +w").withSwatch(4).sameRow(),
         };
     }
 

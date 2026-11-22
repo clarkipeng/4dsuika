@@ -490,16 +490,25 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
         float tc = dot(c - ro, rd);
         if (tc <= 0.0) continue;
         float miss = length(c - ro - rd * tc);
-        float width = max(1.5 * pixel * tc, 0.02 * r);
-        float rim = (miss - r) / width;
-        float ring = exp(-rim * rim);
+        // A ring of round dots (never a solid line, which is the held fruit's
+        // ghost outline): dots about 9 px across, one every ~20 px, plus a
+        // whisper of fill.
+        float dotR = max(4.5 * pixel * tc, 0.03 * r);
+        float nDots = clamp(floor(6.2831853 * r / (20.0 * pixel * tc)), 8.0, 72.0);
         vec4 delta = ro + rd * tc - c;
         vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
-        if (ring > 0.001) ring *= smoothstep(-0.15, 0.25, cos(12.0 * atan(plane.y, plane.x + 1e-6)));
-        float fill = 0.08 * (1.0 - smoothstep(r - width, r, miss));
-        float occluded = tc - r > sceneDist ? 0.35 : 1.0;
-        float a = d.w * occluded * (0.95 * ring + fill) * uCues;
-        col = mix(col, depthColor(d.z), clamp(a, 0.0, 0.85));
+        float ang = atan(plane.y, plane.x + 1e-6);
+        float cell = fract(ang * nDots / 6.2831853) - 0.5;
+        vec2 q = vec2(cell * 6.2831853 / nDots * r, miss - r);
+        float dotD = length(q) / dotR;
+        float ring = 1.0 - smoothstep(0.75, 1.0, dotD);
+        float halo = 0.5 * exp(-dotD * dotD * 0.6);
+        float fill = 0.035 * (1.0 - smoothstep(r - dotR, r, miss));
+        float occluded = tc - r > sceneDist ? 0.6 : 1.0;
+        float k = d.w * occluded * uCues;
+        vec3 tint = depthColor(d.z);
+        col = mix(col, tint * 0.35, clamp(k * halo * 0.6, 0.0, 0.6));        // dark halo: reads on light fruit
+        col = mix(col, mix(tint, vec3(1.0), 0.25), clamp(k * (ring + fill) * 1.2, 0.0, 0.95));
     }
     return col;
 }
@@ -557,11 +566,18 @@ vec3 drawDropGhost(vec3 col, vec4 ro, vec4 rd, float dist, vec4 center, float al
     if (t <= 0.0) return col;
     vec4 ns = lod > 0.0 ? normalize(transpose(uPreviewWorldToLocal) * fruitLocalNormal(lro + lrd * t, d, lod))
                         : normalize(ro + rd * t - center);
-    float rim = pow(1.0 - abs(dot(ns, rd)), 2.0);
+    float facing = abs(dot(ns, rd));
+    float rim = pow(1.0 - facing, 2.0);
     float shade = 0.75 + 0.25 * dot(ns.xyz, normalize(vec3(0.4, 0.8, 0.3)));
-    vec3 c = fruitBaseColor(uPreviewData.y) * 1.15 * shade;
-    c = mix(c, vec3(1.0, 0.97, 0.9), 0.55 * rim);
-    return mix(col, c, alpha * (0.55 + 0.45 * rim) + 0.35 * rim);
+    vec3 c = fruitBaseColor(uPreviewData.y) * 1.3 * shade;
+    c = mix(c, vec3(1.0, 0.97, 0.9), 0.3 * rim);
+    vec3 body = mix(col, c, alpha * (0.6 + 0.3 * rim));
+    // A crisp cream silhouette about 2.5 px wide: the held fruit's outline is
+    // solid, the off-slice hints are dotted, so the two never read alike.
+    float radPx = d.x / (pixel * t);
+    float k = clamp(sqrt(7.0 / max(radPx, 1.0)), 0.05, 0.9);
+    float line = 1.0 - smoothstep(0.55 * k, k, facing);
+    return mix(body, vec3(1.0, 0.96, 0.86), line * 0.92);
 }
 
 // ---------------------------------------------------------------- passes
