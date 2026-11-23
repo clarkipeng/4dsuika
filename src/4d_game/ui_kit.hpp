@@ -1,7 +1,8 @@
 #pragma once
-// The game's one visual system ("glazed ceramic", docs/ui.md): colours taken
-// from the scene, cream glaze panels like the bowl with a clay foot shadow,
-// sun-gold primary buttons, Fredoka type, line icons, and easing helpers so
+// The game's one visual system ("sunset facets", docs/ui.md): colours taken
+// from the scene, dark translucent plum panels with a thin gold edge and
+// chamfered corners like the low-poly island, sun-gold primary buttons, the
+// sunset triangle ribbon, Chakra Petch type, line icons, and easing helpers so
 // every state change moves. Everything draws through TextRenderer::Shape
 // (antialiased SDF shapes) and RenderText.
 #include <algorithm>
@@ -17,13 +18,19 @@
 namespace ui {
 inline glm::vec3 hex(unsigned v) { return glm::vec3((v >> 16) & 255, (v >> 8) & 255, v & 255) / 255.0f; }
 
-// Colour tokens. Text pairs reach WCAG AA (4.5:1) on the surface they name.
-const glm::vec3 kGlaze = hex(0xfbf3e8);      // panel top (the bowl's glaze)
-const glm::vec3 kGlaze2 = hex(0xefe0cd);     // panel bottom, secondary buttons
-const glm::vec3 kClay = hex(0xc99a7d);       // the foot under panels and buttons
-const glm::vec3 kClayDeep = hex(0x8a5a48);   // secondary text on glaze (5.3:1)
-const glm::vec3 kTerracotta = hex(0xb0634c); // titles on glaze (4.6:1)
-const glm::vec3 kInk = hex(0x3a2530);        // body text on glaze and gold (12:1 / 9:1)
+// Colour tokens. Text pairs reach WCAG AA (4.5:1) on the surface they name
+// (panels are drawn at kPanelAlpha over the scene; ratios are for the panel
+// over the brightest sky it sits on).
+const glm::vec3 kGlaze = hex(0x3e2537);      // panel top (dusk plum)
+const glm::vec3 kGlaze2 = hex(0x29172a);     // panel bottom, secondary buttons
+const glm::vec3 kClay = hex(0x8a6577);       // separators, tracks, idle dots on panels
+const glm::vec3 kFoot = hex(0x160a12);       // the foot under buttons
+const glm::vec3 kClayDeep = hex(0xd9bba8);   // secondary text on panels (6:1)
+const glm::vec3 kTerracotta = hex(0xffc24a); // titles on panels: sun gold (7:1)
+const glm::vec3 kInk = hex(0xfff3e3);        // body text on panels (10:1)
+const glm::vec3 kOnGold = hex(0x3a2530);     // text and icons on gold (7:1)
+const glm::vec3 kEdge = hex(0xffc24a);       // the thin gold edge on panels
+const float kPanelAlpha = 0.88f;
 const glm::vec3 kGoldTop = hex(0xffcf6a);    // primary button gradient
 const glm::vec3 kGoldBottom = hex(0xf5a83f);
 const glm::vec3 kGoldFoot = hex(0xc06a2e);
@@ -90,13 +97,26 @@ inline void softShadow(TextRenderer& t, const Rect& r, float radius, float u, fl
     t.Shape(UiShape::rect(r.x + 2.0f * u, r.y + 10.0f * u, r.w - 4.0f * u, r.h, radius).fill(kShadow, alpha).soft(26.0f * u));
 }
 
-// A glazed card: soft shadow, clay foot, cream glaze with a light rim.
+// A panel: dusk plum, translucent so the sunset shows through, with
+// chamfered corners (the shape shader cuts them) and a thin gold edge.
 inline void glazePanel(TextRenderer& t, const Rect& r, float u, float alpha = 1.0f, float radius = -1.0f) {
     if (radius < 0.0f) radius = 22.0f * u;
-    softShadow(t, r, radius, u, 0.38f * alpha);
-    t.Shape(UiShape::rect(r.x, r.y + 5.0f * u, r.w, r.h, radius).fill(kClay, alpha));
-    t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, radius).grad(kGlaze, kGlaze2, alpha));
-    t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, radius).ring(1.5f * u).fill(glm::vec3(1.0f), 0.55f * alpha));
+    softShadow(t, r, radius, u, 0.30f * alpha);
+    t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, radius).grad(kGlaze, kGlaze2, kPanelAlpha * alpha));
+    t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, radius).ring(std::max(1.0f, 1.3f * u)).fill(kEdge, 0.6f * alpha));
+}
+
+// Low-poly accent from the scene: a strip of alternating sunset triangles.
+inline void facetRibbon(TextRenderer& t, float x, float y, float w, float h, float alpha = 1.0f) {
+    const glm::vec3 cols[] = {kCoral, kGold, kRose, hex(0xfa994d)};
+    int n = std::max(8, int(w / (h * 2.2f)));
+    float d = w / float(n);
+    for (int i = 0; i < n; ++i) {
+        float x0 = x + float(i) * d;
+        glm::vec3 c = cols[i % 4] * (0.75f + 0.25f * float((i * 7) % 3) / 2.0f);
+        t.Shape(UiShape::tri({x0, y + h}, {x0 + d * 0.5f, y}, {x0 + d, y + h}).fill(c, 0.95f * alpha));
+        if (i + 1 < n) t.Shape(UiShape::tri({x0 + d * 0.5f, y}, {x0 + d * 1.5f, y}, {x0 + d, y + h}).fill(cols[(i + 2) % 4] * 0.6f, 0.9f * alpha));
+    }
 }
 
 enum class Tone { Primary, Secondary, Ghost, Dark };
@@ -110,20 +130,23 @@ inline void pill(TextRenderer& t, const Rect& r, float u, Tone tone, float hover
     glm::vec3 top, bottom, footCol;
     switch (tone) {
         case Tone::Primary: top = kGoldTop; bottom = kGoldBottom; footCol = kGoldFoot; break;
-        case Tone::Secondary: top = kGlaze; bottom = kGlaze2; footCol = kClay; break;
-        case Tone::Dark: top = hex(0x4a3340); bottom = kInk; footCol = hex(0x1e1218); break;
-        default: top = bottom = glm::vec3(1.0f); footCol = kClay; break;
+        case Tone::Secondary: top = hex(0x4a2c40); bottom = hex(0x331c2e); footCol = kFoot; break;
+        case Tone::Dark: top = hex(0x2e1a28); bottom = hex(0x1e1018); footCol = kFoot; break;
+        default: top = bottom = glm::vec3(1.0f); footCol = kFoot; break;
     }
     if (tone == Tone::Ghost) {
-        t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).fill(kGlaze, (0.10f + 0.12f * hover) * alpha));
-        t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).ring(1.5f * u).fill(kGlaze, (0.45f + 0.3f * hover) * alpha));
+        t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).fill(kGlaze, (0.55f + 0.2f * hover) * alpha));
+        t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).ring(1.3f * u).fill(kEdge, (0.45f + 0.3f * hover) * alpha));
         return;
     }
     t.Shape(UiShape::rect(r.x + 1.0f * u, r.y + 6.0f * u, r.w - 2.0f * u, r.h, rad).fill(kShadow, 0.22f * alpha).soft(10.0f * u));
     t.Shape(UiShape::rect(b.x, b.y + foot, b.w, b.h, rad).fill(footCol, alpha));
-    t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).grad(glm::mix(top, glm::vec3(1.0f), 0.18f * hover), bottom, alpha));
-    t.Shape(UiShape::rect(b.x + rad * 0.5f, b.y + 2.0f * u, b.w - rad, b.h * 0.34f, b.h * 0.17f)
-                .fill(glm::vec3(1.0f), (tone == Tone::Primary ? 0.28f : 0.45f) * alpha));
+    const bool solid = tone == Tone::Primary;
+    t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).grad(glm::mix(top, solid ? glm::vec3(1.0f) : hex(0x6a3f58), 0.18f * hover + (solid ? 0.0f : 0.25f * hover)),
+                                                        bottom, (solid ? 1.0f : kPanelAlpha + (1.0f - kPanelAlpha) * hover) * alpha));
+    // A lit facet across the upper half, like the scene's flat-shaded faces.
+    t.Shape(UiShape::tri({b.x + rad * 0.5f, b.y}, {b.x + b.w, b.y}, {b.x + b.w, b.y + b.h * 0.5f}).fill(glm::vec3(1.0f), (solid ? 0.14f : 0.05f) * alpha));
+    t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, rad).ring(std::max(1.0f, 1.2f * u)).fill(solid ? hex(0xffe3a0) : kEdge, (solid ? 0.6f : 0.30f + 0.45f * hover) * alpha));
 }
 
 // Text scale and width of a keycap of height h.
@@ -151,7 +174,7 @@ inline void cueSwatch(TextRenderer& t, int kind, glm::vec2 c, float r, float u, 
     } else if (kind == 3) {
         t.Shape(UiShape::circle(c, r).fill(glm::vec3(0.55f, 0.66f, 0.22f), alpha));
         t.Shape(UiShape::circle(c, r).ring(3.4f * u).fill(gold, alpha));
-        t.Shape(UiShape::circle(c, r - 3.4f * u).ring(1.0f * u).fill(kInk, 0.5f * alpha));
+        t.Shape(UiShape::circle(c, r - 3.4f * u).ring(1.0f * u).fill(kOnGold, 0.5f * alpha));
     } else {
         const glm::vec3 cols[3] = {coral, gold, sky};
         for (int i = 0; i < 3; ++i)
@@ -166,7 +189,7 @@ inline float keycapWidth(TextRenderer& t, const std::string& key, float h) {
 
 // A keyboard key: small dark rounded square with the key's name. Returns its width.
 inline float keycap(TextRenderer& t, const std::string& key, float x, float y, float h, float alpha = 1.0f,
-                    glm::vec3 bg = kInk, glm::vec3 fg = kGlaze) {
+                    glm::vec3 bg = kInk, glm::vec3 fg = kOnGold) {
     FaceScope f(t, TextRenderer::Display);
     float s = keycapScale(t, h);
     float tw = t.GetTextWidth(key, s);
@@ -281,10 +304,11 @@ inline void iconButton(TextRenderer& t, glm::vec2 c, float r, Icon ic, float u, 
     const float foot = 3.0f * u * (1.0f - press);
     glm::vec2 b = c + glm::vec2(0.0f, 3.0f * u - foot);
     t.Shape(UiShape::circle(c + glm::vec2(0.0f, 5.0f * u), r).fill(kShadow, 0.25f * alpha).soft(9.0f * u));
-    t.Shape(UiShape::circle(b + glm::vec2(0.0f, foot), r).fill(active ? kGoldFoot : kClay, alpha));
-    t.Shape(UiShape::circle(b, r).grad(glm::mix(active ? kGoldTop : kGlaze, glm::vec3(1.0f), 0.25f * hover),
-                                       active ? kGoldBottom : kGlaze2, alpha));
-    icon(t, ic, b, r * 1.15f, kInk, alpha);
+    t.Shape(UiShape::circle(b + glm::vec2(0.0f, foot), r).fill(active ? kGoldFoot : kFoot, alpha));
+    t.Shape(UiShape::circle(b, r).grad(glm::mix(active ? kGoldTop : hex(0x4a2c40), active ? glm::vec3(1.0f) : hex(0x6a3f58), 0.3f * hover),
+                                       active ? kGoldBottom : hex(0x331c2e), (active ? 1.0f : kPanelAlpha) * alpha));
+    t.Shape(UiShape::circle(b, r).ring(std::max(1.0f, 1.2f * u)).fill(kEdge, (active ? 0.0f : 0.35f + 0.4f * hover) * alpha));
+    icon(t, ic, b, r * 1.15f, active ? kOnGold : kInk, alpha);
 }
 
 // A key hint chip on the scene: [key] label. Returns its width (draw=false to measure).
@@ -297,8 +321,8 @@ inline float keyChip(TextRenderer& t, const std::string& key, const std::string&
     float lw = t.GetTextWidth(label, s);
     float w = h * 0.16f + kw + h * 0.24f + lw + h * 0.36f;
     if (!draw) return w;
-    t.Shape(UiShape::rect(x, y, w, h, h * 0.5f).fill(kShadow, 0.6f * alpha));
-    keycap(t, key, x + h * 0.16f, y + (h - kh) * 0.5f - h * 0.03f, kh, alpha, kGlaze, kInk);
+    t.Shape(UiShape::rect(x, y, w, h, h * 0.4f).fill(kGlaze2, 0.78f * alpha));
+    keycap(t, key, x + h * 0.16f, y + (h - kh) * 0.5f - h * 0.03f, kh, alpha, kCream, kOnGold);
     t.RenderText(label, x + h * 0.16f + kw + h * 0.24f, y + (h - t.CapHeight(s)) * 0.5f, s, kCream, alpha);
     return w;
 }

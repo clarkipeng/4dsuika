@@ -41,7 +41,19 @@ void main()
     vec2 p = vPos;
     float d;
     if (uMode == 0) {
-        d = sdRoundRect(p, uA, uB, uRadius);
+        // Faceted like the low-poly scene: rects that are not circles cut
+        // their top-left and bottom-right corners (a chamfer of uRadius) and
+        // keep the other two nearly square. Circles stay round.
+        bool isCircle = abs(uB.x - uB.y) < 0.5 && uRadius >= uB.x - 0.5;
+        if (isCircle) {
+            d = sdRoundRect(p, uA, uB, uRadius);
+        } else {
+            float m = min(uB.x, uB.y);
+            float cut = min(uRadius, 0.5 * m);
+            d = sdRoundRect(p, uA, uB, min(cut * 0.18, m));
+            vec2 q = p - uA;
+            if (q.x * q.y > 0.0) d = max(d, (abs(q.x) + abs(q.y) - (uB.x + uB.y - cut)) * 0.70710678);
+        }
         if (uBorder > 0.0) d = abs(d + uBorder * 0.5) - uBorder * 0.5;
     } else if (uMode == 1) {
         d = sdCapsule(p, uA, uB, uRadius);

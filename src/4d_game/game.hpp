@@ -263,10 +263,11 @@ public:
         t_rend = new TextRenderer(text_shader);
         t_rend->SetShapeShader(shape_shader);
         try {
-            // Fredoka (OFL): semi-bold for body text, bold for titles, numbers and buttons.
+            // Chakra Petch (OFL): its cut-corner letters match the chamfered panels and the
+            // faceted scene. Semi-bold for body text, bold for titles, numbers and buttons.
             // Baked large and mipmapped so the HUD stays crisp from 720p to 4K.
-            t_rend->LoadFace(TextRenderer::Body, FileSystem::getPath("resources/fonts/Fredoka-SemiBold.ttf"), 64);
-            t_rend->LoadFace(TextRenderer::Display, FileSystem::getPath("resources/fonts/Fredoka-Bold.ttf"), 128);
+            t_rend->LoadFace(TextRenderer::Body, FileSystem::getPath("resources/fonts/ChakraPetch-SemiBold.ttf"), 64);
+            t_rend->LoadFace(TextRenderer::Display, FileSystem::getPath("resources/fonts/ChakraPetch-Bold.ttf"), 128);
         } catch (const std::exception& e) {
             std::cerr << "Failed to load font: " << e.what() << std::endl;
         }
@@ -1108,12 +1109,12 @@ public:
             std::string b = "best " + ui::thousands(best);
             float bs = 0.48f * u;
             t.RenderText(b, r.x + r.w - 20.0f * u - t.GetTextWidth(b, bs), r.y + 16.0f * u, bs,
-                         pts > 0 && pts >= high_score && high_score > 0 ? ui::kGoldFoot : ui::kClayDeep);
+                         pts > 0 && pts >= high_score && high_score > 0 ? ui::kGold : ui::kClayDeep);
         }
         std::string s = ui::thousands((long long)std::lround(scoreShown));
         float vs = ui::fit(t, s, 1.75f * u, r.w - 40.0f * u) * (1.0f + 0.12f * ui::easeOutCubic(scorePop));
         float cap = t.CapHeight(vs);
-        t.RenderText(s, r.x + 20.0f * u, r.y + r.h - 18.0f * u - cap, vs, glm::mix(ui::kInk, ui::kGoldFoot, scorePop * 0.6f));
+        t.RenderText(s, r.x + 20.0f * u, r.y + r.h - 18.0f * u - cap, vs, glm::mix(ui::kInk, ui::kGold, scorePop * 0.8f));
     }
 
     void RenderNextCard() {
@@ -1151,7 +1152,7 @@ public:
             float s = 0.46f * u, h = 26.0f * u, w = t.GetTextWidth(tag, s) + 24.0f * u;
             ui::Rect g{r.x, r.y + r.h + 12.0f * u, w, h};
             t.Shape(UiShape::rect(g.x, g.y, g.w, g.h, h * 0.5f).grad(ui::kGoldTop, ui::kGoldBottom));
-            t.RenderText(tag, g.x + 12.0f * u, g.y + (h - t.CapHeight(s)) * 0.5f, s, ui::kInk);
+            t.RenderText(tag, g.x + 12.0f * u, g.y + (h - t.CapHeight(s)) * 0.5f, s, ui::kOnGold);
         }
     }
 
@@ -1235,7 +1236,8 @@ public:
         const float u = UiScale(), m = HudMargin();
         const float size = DepthStripHeight();
         ui::Rect r{m, Height - m - size, size, size};
-        t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, 20.0f * u).fill(ui::kShadow, 0.58f));
+        t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, 20.0f * u).fill(ui::kGlaze2, 0.72f));
+        t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, 20.0f * u).ring(std::max(1.0f, 1.2f * u)).fill(ui::kEdge, 0.35f));
         const float tilt = glm::degrees(state.cam.tilt());
         const float off = state.cam.offset;
         glm::vec2 c(r.x + r.w * 0.5f, r.y + r.h * 0.46f);
@@ -1366,7 +1368,8 @@ public:
         const float pad = std::min(54.0f * u, w * 0.12f);
         auto screenX = [&](float d) { return x + w * 0.5f + d / span * (w * 0.5f - pad); };
 
-        t.Shape(UiShape::rect(x, y, w, h, 20.0f * u).fill(ui::kShadow, 0.58f));
+        t.Shape(UiShape::rect(x, y, w, h, 20.0f * u).fill(ui::kGlaze2, 0.72f));
+        t.Shape(UiShape::rect(x, y, w, h, 20.0f * u).ring(std::max(1.0f, 1.2f * u)).fill(ui::kEdge, 0.35f));
         const float top = y + 30.0f * u, rail = y + h - 16.0f * u;
         {   // legend
             FaceScope f(t, TextRenderer::Body);
@@ -1443,7 +1446,7 @@ public:
                 float s = 0.62f * u, h = 40.0f * u, w = t.GetTextWidth(warn, s) + 40.0f * u;
                 float k = 1.0f + 0.04f * pulse;
                 ui::Rect r{(Width - w * k) * 0.5f, m + 4.0f * u, w * k, h * k};
-                t.Shape(UiShape::rect(r.x, r.y + 4.0f * u, r.w, r.h, r.h * 0.5f).fill(ui::kClayDeep));
+                t.Shape(UiShape::rect(r.x, r.y + 4.0f * u, r.w, r.h, r.h * 0.5f).fill(ui::kFoot));
                 t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, r.h * 0.5f).grad(glm::mix(ui::kDanger, glm::vec3(1.0f), 0.2f), ui::kDanger));
                 ui::textCentered(t, warn, Width * 0.5f, r.y + (r.h - t.CapHeight(s * k)) * 0.5f, s * k, ui::kCream);
             }
@@ -1461,8 +1464,8 @@ public:
             float a = comboShown;
             t.Shape(UiShape::rect(r.x, r.y + 4.0f * u, r.w, r.h, r.h * 0.5f).fill(ui::kGoldFoot, a));
             t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, r.h * 0.5f).grad(ui::kGoldTop, ui::kGoldBottom, a));
-            t.Shape(UiShape::rect(r.x + r.h * 0.3f, r.y + 3.0f * u, r.w - r.h * 0.6f, r.h * 0.3f, r.h * 0.15f).fill(glm::vec3(1.0f), 0.3f * a));
-            t.RenderText(text, r.x + 16.0f * u * pop, r.y + (r.h - t.CapHeight(s)) * 0.5f, s, ui::kInk, a);
+            t.Shape(UiShape::tri({r.x + r.h * 0.25f, r.y}, {r.x + r.w, r.y}, {r.x + r.w, r.y + r.h * 0.5f}).fill(glm::vec3(1.0f), 0.14f * a));
+            t.RenderText(text, r.x + 16.0f * u * pop, r.y + (r.h - t.CapHeight(s)) * 0.5f, s, ui::kOnGold, a);
         } else if (showCombo) {
             lastCombo = combo;
         }
@@ -1618,7 +1621,7 @@ public:
             ui::textCentered(t, ui::thousands(value), cx, r.y + t.CapHeight(ls) + 12.0f * u, vs, col, alpha);
         };
         block(r.x + half * 0.5f, "SCORE", total_points, ui::kInk);
-        block(r.x + half * 1.5f, "BEST", std::max(high_score, total_points), newBest ? ui::kGoldFoot : ui::kClayDeep);
+        block(r.x + half * 1.5f, "BEST", std::max(high_score, total_points), newBest ? ui::kGold : ui::kClayDeep);
         t.Shape(UiShape::capsule({r.x + half, r.y + 4.0f * u}, {r.x + half, r.y + r.h - 6.0f * u}, 0.8f * u).fill(ui::kClay, 0.6f * alpha));
     }
 
@@ -1662,11 +1665,12 @@ public:
             if (newBest) {
                 t.Shape(UiShape::rect(br.x, br.y + 3.0f * u, br.w, br.h, bh * 0.5f).fill(ui::kGoldFoot, alpha));
                 t.Shape(UiShape::rect(br.x, br.y, br.w, br.h, bh * 0.5f).grad(ui::kGoldTop, ui::kGoldBottom, alpha));
-                ui::icon(t, ui::Icon::Star, {br.x + 14.0f * u + iconW * 0.4f, br.y + bh * 0.5f}, bh * 0.75f, ui::kInk, alpha * pop);
+                ui::icon(t, ui::Icon::Star, {br.x + 14.0f * u + iconW * 0.4f, br.y + bh * 0.5f}, bh * 0.75f, ui::kOnGold, alpha * pop);
             } else {
                 t.Shape(UiShape::rect(br.x, br.y, br.w, br.h, bh * 0.5f).fill(ui::kGlaze2, alpha));
+                t.Shape(UiShape::rect(br.x, br.y, br.w, br.h, bh * 0.5f).ring(std::max(1.0f, 1.2f * u)).fill(ui::kEdge, 0.4f * alpha));
             }
-            t.RenderText(b, br.x + 14.0f * u + iconW, br.y + (bh - t.CapHeight(bs)) * 0.5f, bs, ui::kInk, alpha * pop);
+            t.RenderText(b, br.x + 14.0f * u + iconW, br.y + (bh - t.CapHeight(bs)) * 0.5f, bs, newBest ? ui::kOnGold : ui::kInk, alpha * pop);
             y += bh + 22.0f * u;
         }
         // Stats: biggest fruit (drawn), merges, best combo.

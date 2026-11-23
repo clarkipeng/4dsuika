@@ -182,7 +182,12 @@ public:
         const bool hero = style_.hero;
         ui::Rect card = panel_;
         card.y += rise;
-        if (!hero) ui::glazePanel(t, card, u, enter, 26.0f * u);
+        if (hero) {
+            const float p = 30.0f * u;
+            ui::glazePanel(t, {card.x - p, card.y - p * 0.8f, card.w + 2.0f * p, card.h + p * 0.1f}, u, enter, 30.0f * u);
+        } else {
+            ui::glazePanel(t, card, u, enter, 26.0f * u);
+        }
 
         // Title.
         const float maxW = card.w - 2.0f * kPad * u;
@@ -202,9 +207,13 @@ public:
                 float pop = ui::easeOutBack((age_ - 0.2f) / 0.35f);
                 t.Shape(UiShape::rect(b.x, b.y + 0.07f * cap, b.w, b.h, b.h * 0.3f).fill(ui::kGoldFoot, enter));
                 t.Shape(UiShape::rect(b.x, b.y, b.w, b.h, b.h * 0.3f).grad(ui::kGoldTop, ui::kGoldBottom, enter * pop));
-                t.RenderText(style_.badge, b.x + 0.25f * cap, b.y + (b.h - t.CapHeight(bs)) * 0.5f, bs, ui::kInk, enter * pop);
+                t.RenderText(style_.badge, b.x + 0.25f * cap, b.y + (b.h - t.CapHeight(bs)) * 0.5f, bs, ui::kOnGold, enter * pop);
             }
             y += t.CapHeight(ts);
+            // The sunset ribbon under the title, unrolling as the menu enters.
+            float rw = hero ? card.w : maxW, rx = hero ? card.x : card.x + kPad * u;
+            ui::facetRibbon(t, rx, y + 12.0f * u, rw * ui::easeOutCubic((age_ - 0.08f) / 0.4f), (hero ? 10.0f : 8.0f) * u, enter);
+            y += kRibbon * u;
         }
         if (!style_.subtitle.empty()) {
             y += 14.0f * u;
@@ -241,7 +250,7 @@ public:
             f.y += rise;
             float rad = m.kind == MenuItem::Button ? f.h * 0.5f + g : 14.0f * u + g;
             float pulse = 0.75f + 0.25f * std::sin(age_ * 5.0f);
-            glm::vec3 col = hero ? ui::kGlaze : ui::kGoldFoot;
+            glm::vec3 col = ui::kEdge;
             t.Shape(UiShape::rect(f.x - g, f.y - g, f.w + 2.0f * g, f.h + 2.0f * g + 4.0f * u, rad)
                         .ring(2.5f * u).fill(col, enter * pulse));
         }
@@ -259,7 +268,7 @@ public:
             float x = hero ? card.x : card.x + (card.w - total) * 0.5f;
             glm::vec3 lc = hero ? ui::kMuted : ui::kClayDeep;
             for (auto& k : style_.keys) {
-                x += ui::keycap(t, k.first, x, fy, kh, enter * 0.9f, hero ? ui::kGlaze : ui::kInk, hero ? ui::kInk : ui::kGlaze) + 8.0f * u;
+                x += ui::keycap(t, k.first, x, fy, kh, enter * 0.9f, ui::kCream, ui::kOnGold) + 8.0f * u;
                 if (hero) ui::textOnScene(t, k.second, x, fy + (kh - t.CapHeight(ls)) * 0.5f, ls, lc, enter);
                 else t.RenderText(k.second, x, fy + (kh - t.CapHeight(ls)) * 0.5f, ls, lc, enter);
                 x += t.GetTextWidth(k.second, ls) + 22.0f * u;
@@ -301,6 +310,7 @@ private:
 
     float lastDt() const { return std::clamp(age_ - lastDraw_, 0.0f, 0.1f); }
     void sound(int k) { if (onSound) onSound(k); }
+    static constexpr float kRibbon = 26.0f;  // room for the facet ribbon under the title
     float titleScale() const { return style_.hero ? 3.4f : 1.5f; }
 
     float badgeWidth(TextRenderer& t, float ts) const {
@@ -392,7 +402,7 @@ private:
             titleW = t.GetTextWidth(style_.title, ts) + badgeWidth(t, ts);
             titleCap = t.CapHeight(ts);
         }
-        float titleBlock = titleCap + (style_.subtitle.empty() ? 0.0f : 14.0f + t.CapHeight(0.78f)) + 26.0f;
+        float titleBlock = titleCap + kRibbon + (style_.subtitle.empty() ? 0.0f : 14.0f + t.CapHeight(0.78f)) + 26.0f;
         float headerBlock = style_.headerHeight > 0.0f ? style_.headerHeight + 18.0f : 0.0f;
         float rowsH = 0.0f;
         for (auto& l : lines_) rowsH += lineHeight(l) + lineGap(l);
@@ -478,8 +488,9 @@ private:
             float lw = t.GetTextWidth(m.label, s);
             float x = r.x + (r.w - (iconW + lw + keyW)) * 0.5f;
             float cy = r.y + r.h * 0.5f + sink;
-            if (m.icon != ui::Icon::None) ui::icon(t, m.icon, {x + cap * 0.75f, cy}, cap * 1.5f, ui::kInk, alpha);
-            t.RenderText(m.label, x + iconW, cy - t.CapHeight(s) * 0.5f, s, ui::kInk, alpha);
+            const glm::vec3 fg = m.primary ? ui::kOnGold : ui::kInk;
+            if (m.icon != ui::Icon::None) ui::icon(t, m.icon, {x + cap * 0.75f, cy}, cap * 1.5f, fg, alpha);
+            t.RenderText(m.label, x + iconW, cy - t.CapHeight(s) * 0.5f, s, fg, alpha);
             if (!m.key.empty()) {
                 float kh = r.h * 0.46f;
                 ui::keycap(t, m.key, x + iconW + lw + 10.0f * u, cy - kh * 0.5f - 1.0f * u, kh, alpha * 0.85f);
@@ -487,10 +498,10 @@ private:
             return;
         }
 
-        // Choice and slider rows: a light glaze strip, label left, control right.
+        // Choice and slider rows: a faint light strip (brighter when focused), label left, control right.
         const bool focused = index == focus;
         t.Shape(UiShape::rect(r.x, r.y, r.w, r.h, 14.0f * u)
-                    .fill(glm::vec3(1.0f), (0.35f + 0.35f * std::max(hov, focused ? 1.0f : 0.0f)) * alpha));
+                    .fill(glm::vec3(1.0f), (0.06f + 0.08f * std::max(hov, focused ? 1.0f : 0.0f)) * alpha));
         FaceScope f(t, TextRenderer::Body);
         ui::Rect z = valueZone(r);
         float s = fit(t, m.label, 0.8f * u, z.x - r.x - pad - 8.0f * u);
@@ -500,7 +511,7 @@ private:
             float ih = r.h - 12.0f * u;
             ui::Rect inset{z.x, r.y + 6.0f * u, z.w, ih};
             t.Shape(UiShape::rect(inset.x, inset.y, inset.w, inset.h, ih * 0.5f).fill(ui::kGlaze2, alpha));
-            t.Shape(UiShape::rect(inset.x, inset.y, inset.w, inset.h, ih * 0.5f).ring(1.2f * u).fill(ui::kClay, 0.7f * alpha));
+            t.Shape(UiShape::rect(inset.x, inset.y, inset.w, inset.h, ih * 0.5f).ring(1.2f * u).fill(ui::kClay, 0.8f * alpha));
             float cy = r.y + r.h * 0.5f, ic = ih * 0.7f;
             ui::icon(t, ui::Icon::Back, {inset.x + ih * 0.5f, cy}, ic, ui::kClayDeep, alpha);
             // Mirrored chevron for "next".
@@ -520,7 +531,7 @@ private:
             if (v > 0.0f) t.Shape(UiShape::capsule({tr.x, cy}, {kx, cy}, th).grad(ui::kGoldTop, ui::kGoldBottom, alpha));
             float kr = (10.0f + 2.0f * std::max(hov, focused ? 1.0f : 0.0f)) * u;
             t.Shape(UiShape::circle({kx, cy + 2.5f * u}, kr).fill(ui::kClay, alpha));
-            t.Shape(UiShape::circle({kx, cy}, kr).grad(glm::vec3(1.0f), ui::kGlaze2, alpha));
+            t.Shape(UiShape::circle({kx, cy}, kr).grad(glm::vec3(1.0f), ui::kMuted, alpha));
             std::string p = m.value();
             FaceScope fd(t, TextRenderer::Display);
             float sp = fit(t, p, 0.7f * u, 58.0f * u);
