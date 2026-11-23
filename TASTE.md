@@ -8,3 +8,9 @@ Read `~/.agentworld/lab/taste.md` first; this file refines it for this repo.
 - Smooth on a laptop: 60 fps at 1080p on an Apple Silicon Mac, with a quality setting for slower machines.
 - Small, readable code. One renderer, one physics path, no copies of old versions (`game copy.hpp` style files are deleted, not kept).
 - Show, don't tell: every PR that changes what you see includes screenshots or a short capture.
+- No tag or itch upload without the PI's word.
+- Slice is the default view.
+- Draw the drop ghost from the real fruit geometry.
+- Keep the v1.0 in-theme UI language.
+- Nothing shows through the bowl that shouldn't.
+- Put a before/after on the wall for every visual change.
