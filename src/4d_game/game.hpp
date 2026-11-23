@@ -1254,8 +1254,8 @@ public:
             char buf[32];
             if (std::abs(off) >= 0.005f) snprintf(buf, sizeof buf, "w %+.1f", off);
             else snprintf(buf, sizeof buf, "slice turn");
-            float s = ui::fit(t, buf, 0.42f * u, r.w - 12.0f * u);
-            ui::textCentered(t, buf, c.x, r.y + r.h - 8.0f * u - t.CapHeight(s), s, ui::kMuted);
+            float s = ui::fit(t, buf, 0.5f * u, r.w - 10.0f * u);
+            ui::textCentered(t, buf, c.x, r.y + r.h - 7.0f * u - t.CapHeight(s), s, ui::kCream, 0.8f);
         }
         const bool away = tilt > 1.0f || std::abs(off) > 0.01f;
         ui::approach(homeShown, away ? 1.0f : 0.0f, dt, 10.0f);
@@ -1370,10 +1370,10 @@ public:
         const float top = y + 30.0f * u, rail = y + h - 16.0f * u;
         {   // legend
             FaceScope f(t, TextRenderer::Body);
-            float s = 0.42f * u;
-            t.RenderText("w track: where each fruit sits in the 4th dimension", x + 16.0f * u, y + 10.0f * u, s, ui::kMuted, 0.9f);
+            float s = 0.5f * u;
+            t.RenderText("w track: where each fruit sits in the 4th dimension", x + 16.0f * u, y + 9.0f * u, s, ui::kCream, 0.85f);
             const std::string r = "faded = off your slice";
-            t.RenderText(r, x + w - 16.0f * u - t.GetTextWidth(r, s), y + 10.0f * u, s, ui::kMuted, 0.6f);
+            t.RenderText(r, x + w - 16.0f * u - t.GetTextWidth(r, s), y + 9.0f * u, s, ui::kCream, 0.6f);
         }
         // Rail, coloured from coral (-w) through gold (the slice) to sky (+w).
         const int seg = 40;
@@ -1653,7 +1653,7 @@ public:
         ui::textCentered(t, score, cx, y, ss, ui::kInk, alpha);
         y += t.CapHeight(ss) + 14.0f * u;
         {   // new best badge, or the best to beat
-            std::string b = newBest ? "New best!" : "Best  " + ui::thousands(high_score);
+            std::string b = newBest ? "New best!" : high_score > 0 ? "Best  " + ui::thousands(high_score) : "First game";
             float bs = 0.56f * u, bh = 30.0f * u;
             float iconW = newBest ? bh * 0.8f : 0.0f;
             float bw = t.GetTextWidth(b, bs) + iconW + 28.0f * u;
