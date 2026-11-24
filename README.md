@@ -4,7 +4,7 @@
 
 This repository was originally forked from the LearnOpenGL [github repo](https://github.com/JoeyDeVries/LearnOpenGL). The current renderer is a fullscreen 4D raymarched SDF scene.
 
-The itch.io page is [here](https://werus23.itch.io/4d-suika).
+The itch.io page is [here](https://werus23.itch.io/4d-suika); it plays in the browser too (`make web`, see `docs/web.md`).
 
 # Demo & screenshots
 

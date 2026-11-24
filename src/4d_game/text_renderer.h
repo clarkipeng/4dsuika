@@ -11,10 +11,8 @@
 #include <vector>
 #include <string>
 #include <iostream>
-#ifndef __EMSCRIPTEN__
 #include <ft2build.h>
 #include FT_FREETYPE_H
-#endif
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>

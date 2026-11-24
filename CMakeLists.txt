@@ -162,18 +162,26 @@ target_link_libraries(4d_game PRIVATE
 )
 
 if(EMSCRIPTEN)
+    # Browser build (make web): the same code as desktop, with Emscripten's
+    # ports of GLFW, SDL2_mixer and FreeType. WebGL2 is GLES 3.0.
+    set(SUIKA_WEB_PORTS "-sUSE_SDL=2" "-sUSE_SDL_MIXER=2" "-sSDL2_MIXER_FORMATS=[\"ogg\"]" "-sUSE_FREETYPE=1")
+    target_compile_options(4d_game PRIVATE ${SUIKA_WEB_PORTS})
     target_link_options(4d_game PRIVATE
+        ${SUIKA_WEB_PORTS}
         "-sUSE_GLFW=3"
-        "-sFULL_ES3=1"
         "-sMIN_WEBGL_VERSION=2"
         "-sMAX_WEBGL_VERSION=2"
         "-sALLOW_MEMORY_GROWTH=1"
+        "-sINITIAL_MEMORY=128MB"
+        "-sENVIRONMENT=web"
+        "-lidbfs.js"
         "--preload-file" "${CMAKE_SOURCE_DIR}/resources@resources"
         "--shell-file" "${CMAKE_SOURCE_DIR}/web_template.html"
     )
     set_target_properties(4d_game PROPERTIES
-        OUTPUT_NAME "4DGame_Web"
+        OUTPUT_NAME "index"
         SUFFIX ".html"
+        LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web_template.html"
     )
 else()
     target_link_libraries(4d_game PRIVATE

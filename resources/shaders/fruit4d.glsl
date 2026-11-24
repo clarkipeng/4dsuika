@@ -15,7 +15,8 @@
 //
 //   FRUIT_BOUND          fruitSDF stays inside the glome |q| = FRUIT_BOUND * r
 //   float fruitSDF(vec4 q, float r, float type, float lod)
-//   vec3  fruitAlbedo(vec4 q, vec4 n, float r, float type, float seed, float lod)   linear RGB; n is local
+//   vec2  fruitSDFPart(vec4 q, float r, float type, float lod)   distance and the part there (FRUIT_SKIN ...)
+//   vec3  fruitAlbedo(vec4 q, vec4 n, float r, float type, float part, float lod)   linear RGB; n is local
 //   vec3  fruitBaseColor(float type)   one colour per fruit, for hints and the drop preview
 //   float fruitGloss(float type)       specular strength 0..1 for the skin
 //
@@ -368,9 +369,14 @@ float fruitSDF(vec4 q, float r, float type, float lod) {
     return fruitShape(q / r, type, lod >= 0.35).x * r;
 }
 
-vec3 fruitAlbedo(vec4 q, vec4 n, float r, float type, float seed, float lod) {
+vec2 fruitSDFPart(vec4 q, float r, float type, float lod) {
+    vec2 s = fruitShape(q / r, type, lod >= 0.35);
+    return vec2(s.x * r, s.y);
+}
+
+// part: from fruitSDFPart at the hit, so colouring costs no shape evaluation.
+vec3 fruitAlbedo(vec4 q, vec4 n, float r, float type, float part, float lod) {
     q /= r;
-    float part = fruitShape(q, type, lod >= 0.35).y;
     int t = int(type + 0.5);
     vec3 c;
     if (part == FRUIT_STEM) c = (t == 2 || t == 0 || t == 10) ? vec3(0.32, 0.45, 0.14) : vec3(0.36, 0.22, 0.10);

@@ -2,7 +2,6 @@
 // Small procedural sounds (UI ticks, merge chimes, the new-best arpeggio),
 // built once at start as 16-bit mono WAVs in memory and handed to SDL_mixer,
 // which converts them to the device format. No extra asset files.
-#ifndef __EMSCRIPTEN__
 #include <SDL.h>
 #include <SDL_mixer.h>
 #include <cmath>
@@ -78,4 +77,3 @@ inline Mix_Chunk* newBest() {
 }
 
 } // namespace synth
-#endif

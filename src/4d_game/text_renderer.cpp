@@ -33,90 +33,6 @@ static uint32_t nextCodepoint(const std::string& s, size_t& i) {
     return cp;
 }
 
-#ifdef __EMSCRIPTEN__
-#include <array>
-#include <cctype>
-#include <vector>
-
-namespace {
-using GlyphRows = std::array<const char*, 7>;
-
-GlyphRows glyphRows(char c)
-{
-    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    switch (c) {
-    case 'A': return { " ### ", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
-    case 'B': return { "#### ", "#   #", "#   #", "#### ", "#   #", "#   #", "#### " };
-    case 'C': return { " ####", "#    ", "#    ", "#    ", "#    ", "#    ", " ####" };
-    case 'D': return { "#### ", "#   #", "#   #", "#   #", "#   #", "#   #", "#### " };
-    case 'E': return { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#####" };
-    case 'F': return { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#    " };
-    case 'G': return { " ####", "#    ", "#    ", "#  ##", "#   #", "#   #", " ####" };
-    case 'H': return { "#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
-    case 'I': return { "#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "#####" };
-    case 'J': return { "#####", "   # ", "   # ", "   # ", "   # ", "#  # ", " ##  " };
-    case 'K': return { "#   #", "#  # ", "# #  ", "##   ", "# #  ", "#  # ", "#   #" };
-    case 'L': return { "#    ", "#    ", "#    ", "#    ", "#    ", "#    ", "#####" };
-    case 'M': return { "#   #", "## ##", "# # #", "#   #", "#   #", "#   #", "#   #" };
-    case 'N': return { "#   #", "##  #", "# # #", "#  ##", "#   #", "#   #", "#   #" };
-    case 'O': return { " ### ", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
-    case 'P': return { "#### ", "#   #", "#   #", "#### ", "#    ", "#    ", "#    " };
-    case 'Q': return { " ### ", "#   #", "#   #", "#   #", "# # #", "#  # ", " ## #" };
-    case 'R': return { "#### ", "#   #", "#   #", "#### ", "# #  ", "#  # ", "#   #" };
-    case 'S': return { " ####", "#    ", "#    ", " ### ", "    #", "    #", "#### " };
-    case 'T': return { "#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  " };
-    case 'U': return { "#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
-    case 'V': return { "#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  " };
-    case 'W': return { "#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #" };
-    case 'X': return { "#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #" };
-    case 'Y': return { "#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  " };
-    case 'Z': return { "#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####" };
-    case '0': return { " ### ", "#   #", "#  ##", "# # #", "##  #", "#   #", " ### " };
-    case '1': return { "  #  ", " ##  ", "# #  ", "  #  ", "  #  ", "  #  ", "#####" };
-    case '2': return { " ### ", "#   #", "    #", "   # ", "  #  ", " #   ", "#####" };
-    case '3': return { "#### ", "    #", "    #", " ### ", "    #", "    #", "#### " };
-    case '4': return { "#   #", "#   #", "#   #", "#####", "    #", "    #", "    #" };
-    case '5': return { "#####", "#    ", "#    ", "#### ", "    #", "    #", "#### " };
-    case '6': return { " ### ", "#    ", "#    ", "#### ", "#   #", "#   #", " ### " };
-    case '7': return { "#####", "    #", "   # ", "  #  ", " #   ", " #   ", " #   " };
-    case '8': return { " ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### " };
-    case '9': return { " ### ", "#   #", "#   #", " ####", "    #", "    #", " ### " };
-    case '/': return { "    #", "   # ", "   # ", "  #  ", " #   ", " #   ", "#    " };
-    case '(': return { "   ##", "  #  ", " #   ", " #   ", " #   ", "  #  ", "   ##" };
-    case ')': return { "##   ", "  #  ", "   # ", "   # ", "   # ", "  #  ", "##   " };
-    case '[': return { "#####", "#    ", "#    ", "#    ", "#    ", "#    ", "#####" };
-    case ']': return { "#####", "    #", "    #", "    #", "    #", "    #", "#####" };
-    case '=': return { "     ", "     ", "#####", "     ", "#####", "     ", "     " };
-    case '.': return { "     ", "     ", "     ", "     ", "     ", " ##  ", " ##  " };
-    case ',': return { "     ", "     ", "     ", "     ", " ##  ", " ##  ", " #   " };
-    case '-': return { "     ", "     ", "     ", "#####", "     ", "     ", "     " };
-    case '+': return { "     ", "  #  ", "  #  ", "#####", "  #  ", "  #  ", "     " };
-    case ':': return { "     ", " ##  ", " ##  ", "     ", " ##  ", " ##  ", "     " };
-    case ' ': return { "     ", "     ", "     ", "     ", "     ", "     ", "     " };
-    default: return { " ### ", "#   #", "    #", "   # ", "  #  ", "     ", "  #  " };
-    }
-}
-
-// The 5x7 pixel font (the web build has no FreeType), 3x upscaled.
-GlyphBitmap pixelGlyph(uint32_t code)
-{
-    constexpr int gw = 5, gh = 7, px = 3;
-    GlyphBitmap g;
-    g.code = code;
-    g.w = gw * px; g.h = gh * px; g.left = 0; g.top = g.h;
-    g.advance = float((gw + 1) * px);
-    g.pixels.assign(g.w * g.h, 0);
-    const GlyphRows rows = glyphRows(code < 128 ? char(code) : '?');
-    for (int y = 0; y < gh; ++y)
-        for (int x = 0; x < gw; ++x) {
-            if (rows[y][x] == ' ') continue;
-            for (int py = 0; py < px; ++py)
-                for (int pxx = 0; pxx < px; ++pxx) g.pixels[(y * px + py) * g.w + x * px + pxx] = 255;
-        }
-    return g;
-}
-}
-#endif
 
 static const int kMaxPolyVerts = 16;
 static const float kNominal = 24.0f;   // text scale 1 = a 24 px font
@@ -254,12 +170,6 @@ void TextRenderer::LoadFace(int face, const std::string& fontPath, unsigned int 
 {
     if (face < 0 || face >= kFaces) return;
     std::vector<GlyphBitmap> glyphs;
-#ifdef __EMSCRIPTEN__
-    (void)fontPath;
-    (void)pixelSize;
-    for (uint32_t c = 32; c < 127; ++c) glyphs.push_back(pixelGlyph(c));
-    const float norm = kNominal / 21.0f;   // the pixel font's capitals are 21 px
-#else
     FT_Library ft;
     if (FT_Init_FreeType(&ft)) { std::cout << "ERROR::FREETYPE: Could not init FreeType Library\n"; return; }
     FT_Face ftFace;
@@ -286,7 +196,6 @@ void TextRenderer::LoadFace(int face, const std::string& fontPath, unsigned int 
     FT_Done_Face(ftFace);
     FT_Done_FreeType(ft);
     const float norm = kNominal / float(pixelSize);
-#endif
 
     // Shelf-pack into one texture, with padding so mip levels do not bleed.
     const int pad = 8;
@@ -326,14 +235,9 @@ void TextRenderer::LoadFace(int face, const std::string& fontPath, unsigned int 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, atlasW, atlasH, 0, GL_RED, GL_UNSIGNED_BYTE, sheet.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-#ifdef __EMSCRIPTEN__
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-#else
     glGenerateMipmap(GL_TEXTURE_2D);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-#endif
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

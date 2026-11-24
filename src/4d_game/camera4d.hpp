@@ -89,6 +89,12 @@ struct Camera4D {
     float distance = kDefaultDistance;
     float offset = 0.0f;                 // along the slice normal
     float fovY = glm::radians(45.0f);
+    // Narrower than this (a portrait phone), the lens widens vertically so the
+    // view keeps the horizontal field it has at this aspect.
+    static constexpr float kNarrowAspect = 0.75f;
+    float tanHalfFov(float aspect) const {
+        return std::tan(fovY * 0.5f) * std::max(1.0f, kNarrowAspect / std::max(aspect, 0.01f));
+    }
 
     static constexpr float kDefaultPitch = -0.30f;
     static constexpr float kDefaultDistance = 8.8f;
@@ -113,7 +119,7 @@ struct Camera4D {
     }
     // World-space ray through a pixel; ndc in [-1, 1]^2, y up.
     void worldRay(glm::vec2 ndc, float aspect, glm::vec4& origin, glm::vec4& dir) const {
-        float t = std::tan(fovY * 0.5f);
+        float t = tanHalfFov(aspect);
         glm::vec4 local(ndc.x * t * aspect, ndc.y * t, -1.0f, 0.0f);
         origin = position();
         dir = glm::normalize(basis() * local);
@@ -123,7 +129,7 @@ struct Camera4D {
     bool project(const glm::vec4& world, float aspect, glm::vec2& ndc) const {
         glm::vec4 local = glm::transpose(basis()) * (world - position());
         if (local.z >= -1e-4f) return false;
-        float t = std::tan(fovY * 0.5f);
+        float t = tanHalfFov(aspect);
         ndc = glm::vec2(local.x / (-local.z * t * aspect), local.y / (-local.z * t));
         return true;
     }

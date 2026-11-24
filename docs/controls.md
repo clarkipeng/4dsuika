@@ -13,6 +13,23 @@ The game plays with one hand on the mouse. The keyboard still works for everythi
 | Wheel | turn the slice through w (xw, about 5 degrees a notch, eased) | set the w of the drop (0.5 a notch, within the bowl) |
 | Shift + wheel | zoom | zoom |
 
+## Touch
+
+The browser build (docs/web.md) plays on phones and tablets.
+Gestures become the same mouse and wheel input (`src/4d_game/touch_input.hpp`), so touch and mouse never drift apart.
+
+| Gesture | Does |
+|---|---|
+| One finger | aim the drop while it moves, drop when it lifts; on a button or in a menu, a tap |
+| Two-finger drag | orbit the camera (right-drag) |
+| Pinch | zoom (Shift + wheel) |
+| Twist | the wheel: turn the slice (5 degrees per 5 degrees of twist), or set the drop's w in 4D eye |
+| Three-finger drag | turn freely into 4D (middle-drag) |
+
+- Lifting drops, not touching: the player sees the aim before committing, as with a mouse hover.
+- Pinch and twist start only past a threshold (12% spread, 10 degrees), so a plain two-finger orbit does not also zoom or turn.
+- On a touch screen the HUD chips, the Controls page and the tutorial name gestures instead of keys, key hints are hidden, and a portrait Controls page shows one column of touch gestures. Any mouse wheel switches back to the mouse hints.
+
 ## Views
 
 **M** (or Settings > View) switches between Slice (default) and 4D eye. A pill under the next-drop panel (top right) names the current view and the key, clicking it switches, and the choice is saved for the next run.

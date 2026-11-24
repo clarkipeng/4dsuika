@@ -34,3 +34,4 @@ recordings/
 
 # itch.io uploader, downloaded per project (docs/release.md)
 tools/butler/
+tools/emsdk/

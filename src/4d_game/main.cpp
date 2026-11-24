@@ -12,12 +12,12 @@
 #define GLFW_FOCUS_ON_SHOW 0x0002000C
 #endif
 
-#ifndef __EMSCRIPTEN__
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <SDL_mixer.h>
-#else
+#ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
 #endif
 
 #include "game.hpp"
@@ -27,6 +27,7 @@
 
 #include "camera_path.hpp"
 #include "recorder.hpp"
+#include "touch_input.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1200,15 +1201,16 @@ int main(int argc, char* argv[])
             glfwInitHint(GLFW_COCOA_MENUBAR, GLFW_FALSE);
 #endif
         }
+#endif
         if (opt.muted()) {
             SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
         }
-#endif
         if (!glfwInit()) {
             std::cerr << "Failed to initialize GLFW" << std::endl;
             return -1;
         }
 #ifdef __EMSCRIPTEN__
+        glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);   // framebuffer at devicePixelRatio
         glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
@@ -1237,7 +1239,6 @@ int main(int argc, char* argv[])
 
         bool sdlReady = false;
         bool audioReady = false;
-#ifndef __EMSCRIPTEN__
         if (!opt.muted()) {
             if (SDL_Init(SDL_INIT_AUDIO) < 0) {
                 std::cerr << "Warning: SDL_Init error: " << SDL_GetError() << std::endl;
@@ -1250,7 +1251,6 @@ int main(int argc, char* argv[])
                 }
             }
         }
-#endif
 
 #ifndef __EMSCRIPTEN__
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -1266,6 +1266,36 @@ int main(int argc, char* argv[])
         glfwSetMouseButtonCallback(window, mouseButtonCallback);
         glfwSetCursorPosCallback(window, cursorPosCallback);
         glfwSetScrollCallback(window, scrollCallback);
+#ifdef __EMSCRIPTEN__
+        static GLFWwindow* touchWindow = window;
+        static TouchInput touch;
+        // Emscripten's GLFW turns the first touch into a left click (a drop the
+        // moment a finger lands); TouchInput handles touch on its own instead.
+        EM_ASM({
+            var c = Module.canvas;
+            c.removeEventListener('touchmove', GLFW.onMousemove, true);
+            c.removeEventListener('touchstart', GLFW.onMouseButtonDown, true);
+            c.removeEventListener('touchcancel', GLFW.onMouseButtonUp, true);
+            c.removeEventListener('touchend', GLFW.onMouseButtonUp, true);
+        });
+        // Phones and tablets start with touch hints; the first touch or
+        // wheel turn switches them either way.
+        game.SetTouchUI(EM_ASM_INT({ return matchMedia('(pointer: coarse)').matches ? 1 : 0; }) != 0);
+        touch.attach({
+            [](double x, double y) { cursorPosCallback(touchWindow, x, y); },
+            [](int b, int action) {
+                static const int buttons[] = {GLFW_MOUSE_BUTTON_LEFT, GLFW_MOUSE_BUTTON_RIGHT, GLFW_MOUSE_BUTTON_MIDDLE};
+                mouseButtonCallback(touchWindow, buttons[b], action ? GLFW_PRESS : GLFW_RELEASE, 0);
+            },
+            [](double notches, bool shift) {
+                if (game.State == GAME_ACTIVE) game.OnScroll(notches, shift, false);
+            },
+            [] { return game.State == GAME_ACTIVE; },
+            [] { return game.WantsHandCursor(); },
+            [] { return game.renderer.viewMode == ViewMode::Eye; },
+            [] { game.SetTouchUI(true); },
+        });
+#endif
 
         game.SetAudioState(sdlReady, audioReady, opt.muted());
         game.Init(window);
@@ -1304,7 +1334,16 @@ int main(int argc, char* argv[])
                 emscripten_cancel_main_loop();
                 return;
             }
+            // The canvas fills the page (web_template.html); follow the page's
+            // size. (The canvas's own CSS size is what GLFW last set, not this.)
+            const double cw = EM_ASM_DOUBLE({ return window.innerWidth; });
+            const double ch = EM_ASM_DOUBLE({ return window.innerHeight; });
+            int ww = 0, wh = 0;
+            glfwGetWindowSize(ctx->window, &ww, &wh);
+            if (cw >= 1 && ch >= 1 && (int(cw) != ww || int(ch) != wh)) glfwSetWindowSize(ctx->window, int(cw), int(ch));
             runInteractiveFrame(ctx->window, ctx->fixedUpdateAccumulator, ctx->lastFrame, false);
+            static bool shown = false;
+            if (!shown) { shown = true; EM_ASM({ if (Module.onFirstFrame) Module.onFirstFrame(); }); }
         }, &loop, 0, 1);
         return 0;
 #else
@@ -1377,6 +1416,7 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     if (!game.state.initialized) game.state.Init(window);
+    game.SetTouchUI(false);
     if (game.State != GAME_ACTIVE) return;
     auto down = [&](int a, int b) { return glfwGetKey(window, a) == GLFW_PRESS || glfwGetKey(window, b) == GLFW_PRESS; };
     game.OnScroll(yoffset, down(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_RIGHT_SHIFT), down(GLFW_KEY_LEFT_CONTROL, GLFW_KEY_RIGHT_CONTROL));

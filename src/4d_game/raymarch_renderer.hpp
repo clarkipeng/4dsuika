@@ -115,25 +115,25 @@ public:
         glGenQueries(kQueries, queries_);
 #endif
         setQuality(quality_);
-        return scene_[0] && present_;
+        return present_ && ((scene_[1] && scene_[2] && scene_[3]) || singlePass());
     }
 
     Quality quality() const { return quality_; }
     void setQuality(Quality q) {
         quality_ = q;
-        std::string defs = "#define QUALITY " + std::to_string(int(q)) + "\n" + extraDefines;
-        if (GLuint b = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/bake4d.fs", extraDefines)) {
+        // Start every program before checking any, so drivers that compile in
+        // the background (every browser, via ANGLE) build them in parallel.
+        // The single-pass fallback (PASS 0) is built only if a frame needs it.
+        Pending pending[4] = {startProgram("resources/shaders/raymarch4d.vs", "resources/shaders/bake4d.fs", extraDefines)};
+        for (int pass = 1; pass < 4; ++pass)
+            pending[pass] = startProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs", sceneDefines(pass));
+        if (GLuint b = finishProgram(pending[0])) {
             if (bake_) glDeleteProgram(bake_);
             bake_ = b;
         }
-        for (int pass = 0; pass < 4; ++pass) {
-            GLuint p = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs",
-                                    defs + "#define PASS " + std::to_string(pass) + "\n");
-            if (p) {
-                if (scene_[pass]) glDeleteProgram(scene_[pass]);
-                scene_[pass] = p;
-            }
-        }
+        for (GLuint& s : scene_) { if (s) glDeleteProgram(s); s = 0; }
+        for (int pass = 1; pass < 4; ++pass) scene_[pass] = finishProgram(pending[pass]);
+        singleFailed_ = false;
         renderScale = 1.0f; // re-clamped against the new cap next frame
         cacheValid_ = false;
         for (GLuint& e : eye_) { if (e) glDeleteProgram(e); e = 0; } // rebuilt when next shown
@@ -204,7 +204,9 @@ public:
         // compose) when float targets are available, else in one.
         glm::mat4 basis = cam.basis();
         glm::vec4 pos = cam.position();
-        bool deferred = useDeferred && gbufOk_ && extraDefines.find("COST_MAP") == std::string::npos;
+        bool deferred = useDeferred && gbufOk_ && scene_[1] && scene_[2] && scene_[3] &&
+                        extraDefines.find("COST_MAP") == std::string::npos;
+        if (!deferred && !singlePass()) return;
         int lw = (rw + 1) / 2, lh = (rh + 1) / 2;
         beginTimer();
         if (deferred) {
@@ -233,6 +235,20 @@ public:
     }
 
 private:
+    std::string sceneDefines(int pass) const {
+        return "#define QUALITY " + std::to_string(int(quality_)) + "\n" + extraDefines + "#define PASS " +
+               std::to_string(pass) + "\n";
+    }
+
+    // The single-pass scene program, built on first use; false if it fails.
+    bool singlePass() {
+        if (!scene_[0] && !singleFailed_) {
+            scene_[0] = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs", sceneDefines(0));
+            singleFailed_ = !scene_[0];
+        }
+        return scene_[0] != 0;
+    }
+
     // Upscales the scene target (rw x rh) to the output and draws the indicator.
     void present(const Camera4D& cam, GLint target, int width, int height, int rw, int rh) {
         glm::mat4 basis = cam.basis();
@@ -271,9 +287,7 @@ private:
         if (eyeUnsupported_) return false;
         if (!eye_[0]) {
             for (int k = 0; k < 2; ++k)
-                eye_[k] = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs",
-                                       "#define QUALITY " + std::to_string(int(quality_)) + "\n" + extraDefines +
-                                           "#define PASS " + std::to_string(4 + k) + "\n");
+                eye_[k] = buildProgram("resources/shaders/raymarch4d.vs", "resources/shaders/raymarch4d.fs", sceneDefines(4 + k));
             if (!eye_[0] || !eye_[1]) { eyeUnsupported_ = true; return false; }
         }
         int nu, nv, ns;
@@ -298,7 +312,7 @@ private:
         glUniform3f(loc(eye_[0], "uRetinaSize"), float(nu), float(nv), float(ns));
         // A narrower lens than the slice view's: the retina's few texels go to
         // the bowl, and +-s still spans most of the bowl's extent in w.
-        glUniform1f(loc(eye_[0], "uTanHalfFov"), kEyeZoom * std::tan(cam.fovY * 0.5f));
+        glUniform1f(loc(eye_[0], "uTanHalfFov"), kEyeZoom * cam.tanHalfFov(float(rw) / float(std::max(rh, 1))));
         GLint layerLoc = loc(eye_[0], "uLayer");
         const GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2,
                                 GL_COLOR_ATTACHMENT3};
@@ -347,6 +361,7 @@ private:
     // Deferred targets: G-buffer (hit, normal) at the scene size, light at half.
     GLuint gbufFbo_ = 0, geomTex_ = 0, normalTex_ = 0, lightFbo_ = 0, lightTex_ = 0;
     bool gbufOk_ = false;
+    bool singleFailed_ = false; // PASS 0 failed to build for this quality
     // Slice cache.
     GLuint cacheTex_ = 0, cacheFbo_ = 0, bakeQuery_ = 0;
     int cacheRes_ = 0;      // texture size
@@ -526,7 +541,7 @@ private:
         uniform(p, "uResolution", glm::vec2(rw, rh));
         glUniform4fv(loc(p, "uCameraPos"), 1, glm::value_ptr(pos));
         glUniformMatrix4fv(loc(p, "uCameraBasis"), 1, GL_FALSE, glm::value_ptr(basis));
-        glUniform1f(loc(p, "uTanHalfFov"), std::tan(cam.fovY * 0.5f));
+        glUniform1f(loc(p, "uTanHalfFov"), cam.tanHalfFov(float(rw) / float(std::max(rh, 1))));
         glUniform1f(loc(p, "uTime"), time);
         glUniform4fv(loc(p, "uSunDir"), 1, glm::value_ptr(sunDir));
         glUniform1f(loc(p, "uFacet"), facet);
@@ -726,41 +741,53 @@ private:
         return out;
     }
 
-    static GLuint compile(GLenum type, const std::string& src, const char* name) {
+    // A program whose compile and link were issued but not yet checked.
+    // Querying any status waits for the driver, so callers start every
+    // program they need first and finish them afterwards.
+    struct Pending { GLuint program = 0, vs = 0, fs = 0; const char* name = ""; };
+
+    static GLuint shader(GLenum type, const std::string& src) {
         GLuint s = glCreateShader(type);
         const char* c = src.c_str();
         glShaderSource(s, 1, &c, nullptr);
         glCompileShader(s);
-        GLint ok = 0;
-        glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-        if (!ok) {
-            char log[4096];
-            glGetShaderInfoLog(s, sizeof log, nullptr, log);
-            std::cerr << "Shader compile error in " << name << ":\n" << log << "\n";
-            glDeleteShader(s);
-            return 0;
-        }
         return s;
     }
 
-    static GLuint buildProgram(const char* vsPath, const char* fsPath, const std::string& defines) {
-        GLuint vs = compile(GL_VERTEX_SHADER, preprocess(readFile(vsPath), defines), vsPath);
-        GLuint fs = compile(GL_FRAGMENT_SHADER, preprocess(readFile(fsPath), defines), fsPath);
-        if (!vs || !fs) return 0;
-        GLuint p = glCreateProgram();
-        glAttachShader(p, vs);
-        glAttachShader(p, fs);
-        glLinkProgram(p);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
+    static Pending startProgram(const char* vsPath, const char* fsPath, const std::string& defines) {
+        Pending p;
+        p.name = fsPath;
+        p.vs = shader(GL_VERTEX_SHADER, preprocess(readFile(vsPath), defines));
+        p.fs = shader(GL_FRAGMENT_SHADER, preprocess(readFile(fsPath), defines));
+        p.program = glCreateProgram();
+        glAttachShader(p.program, p.vs);
+        glAttachShader(p.program, p.fs);
+        glLinkProgram(p.program);
+        return p;
+    }
+
+    static GLuint finishProgram(const Pending& p) {
         GLint ok = 0;
-        glGetProgramiv(p, GL_LINK_STATUS, &ok);
+        glGetProgramiv(p.program, GL_LINK_STATUS, &ok);
         if (!ok) {
             char log[4096];
-            glGetProgramInfoLog(p, sizeof log, nullptr, log);
-            std::cerr << "Shader link error (" << fsPath << "):\n" << log << "\n";
-            return 0;
+            for (GLuint s : {p.vs, p.fs}) {
+                GLint compiled = 0;
+                glGetShaderiv(s, GL_COMPILE_STATUS, &compiled);
+                if (compiled) continue;
+                glGetShaderInfoLog(s, sizeof log, nullptr, log);
+                std::cerr << "Shader compile error in " << p.name << ":\n" << log << "\n";
+            }
+            glGetProgramInfoLog(p.program, sizeof log, nullptr, log);
+            std::cerr << "Shader link error (" << p.name << "):\n" << log << "\n";
+            glDeleteProgram(p.program);
         }
-        return p;
+        glDeleteShader(p.vs);
+        glDeleteShader(p.fs);
+        return ok ? p.program : 0;
+    }
+
+    static GLuint buildProgram(const char* vsPath, const char* fsPath, const std::string& defines) {
+        return finishProgram(startProgram(vsPath, fsPath, defines));
     }
 };

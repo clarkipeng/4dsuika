@@ -16,10 +16,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#ifndef __EMSCRIPTEN__
 #include <SDL.h>
 #include <SDL_mixer.h>
-#endif
 
 #include "globals.h"
 #include "learnopengl/shader.h"
@@ -82,7 +80,6 @@ public:
     PhysicSolver *physics_solver;
     tp::ThreadPool *thread_pool;
 
-#ifndef __EMSCRIPTEN__
     Mix_Chunk* mergeSound = nullptr;
     Mix_Chunk* loseSound = nullptr;
     Mix_Chunk* placeSound = nullptr;
@@ -94,7 +91,6 @@ public:
     bool sdlReady = false;
     bool audioReady = false;
     bool audioMuted = false;
-#endif
 
     HemisphereBoundary boundary;
     Fruit nextFruit;
@@ -134,6 +130,10 @@ public:
     // Scripted mouse (reels): a visible cursor and a caption naming the input.
     bool showCursor = false;
     int heldButtons = 0;              // bit 0 left, 1 right, 2 middle
+    // Hints name touch gestures instead of mouse buttons (touch_input.hpp):
+    // set by the first touch, cleared by the mouse wheel.
+    bool touchUI = false;
+    void SetTouchUI(bool on) { if (touchUI != on) { touchUI = on; menuBuiltFor = -1; } }
     std::string inputCaption;
     glm::vec2 orbitVel{0.0f};         // mouse-orbit glide after release (rad/s)
     float time = 0.0f;
@@ -206,7 +206,6 @@ public:
         total_points = 0;
     }
     ~Game(){
-#ifndef __EMSCRIPTEN__
         if (mergeSound) Mix_FreeChunk(mergeSound);
         if (loseSound) Mix_FreeChunk(loseSound);
         if (placeSound) Mix_FreeChunk(placeSound);
@@ -216,7 +215,6 @@ public:
         if (bestSound) Mix_FreeChunk(bestSound);
         if (audioReady) Mix_CloseAudio();
         if (sdlReady) SDL_Quit();
-#endif
         delete t_rend;
         delete text_shader;
         delete shape_shader;
@@ -224,15 +222,9 @@ public:
         delete thread_pool;
     }
     void SetAudioState(bool sdlInitialized, bool mixerInitialized, bool muted) {
-#ifndef __EMSCRIPTEN__
         sdlReady = sdlInitialized;
         audioReady = mixerInitialized;
         audioMuted = muted;
-#else
-        (void)sdlInitialized;
-        (void)mixerInitialized;
-        (void)muted;
-#endif
     }
     void Reset(){
         for (int i = 0; i < MAX_OBJECTS; ++i) {
@@ -277,7 +269,6 @@ public:
         nextFruit = fm.getRandomFruit();
         state.Init(win);
 
-#ifndef __EMSCRIPTEN__
         if (audioReady && !audioMuted) {
             mergeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/drop.wav").c_str());
             if (!mergeSound) std::cerr << "Warning: Could not load drop.wav: " << Mix_GetError() << std::endl;
@@ -285,7 +276,7 @@ public:
             if (!loseSound) std::cerr << "Warning: Could not load game_over.wav: " << Mix_GetError() << std::endl;
             placeSound = Mix_LoadWAV(FileSystem::getPath("resources/audio/click.wav").c_str());
             if (!placeSound) std::cerr << "Warning: Could not load click.wav: " << Mix_GetError() << std::endl;
-            themeMusic = Mix_LoadMUS(FileSystem::getPath("resources/audio/theme.wav").c_str());
+            themeMusic = Mix_LoadMUS(FileSystem::getPath("resources/audio/theme.ogg").c_str());
             if (!themeMusic) std::cerr << "Mix_LoadMUS error: " << Mix_GetError() << std::endl;
             Mix_AllocateChannels(24);
             for (int i = 0; i < 3; ++i) uiSounds[i] = synth::uiSound(i);
@@ -295,13 +286,10 @@ public:
             else if (logEvents) std::cerr << "EV synth sounds ready\n";
             ApplyVolumeSettings();
         }
-#endif
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-#ifndef __EMSCRIPTEN__
         if (audioReady && !audioMuted && themeMusic) Mix_PlayMusic(themeMusic, -1);
-#endif
     }
 
     bool keyDown(int key) const { return key >= 0 && key < 1024 && Keys[key]; }
@@ -414,52 +402,30 @@ public:
 
     // Best score file (interactive runs only, so headless stills stay reproducible).
     bool bestFileOn = false;
-    static std::string BestFile() {
-#ifdef __EMSCRIPTEN__
-        return "";
-#else
-        const char* home = std::getenv("HOME");
-        if (!home) home = std::getenv("USERPROFILE");
-        return home ? std::string(home) + "/.4dsuika-best" : "";
-#endif
-    }
     void LoadBest() {
         if (!bestFileOn) return;
-        std::ifstream in(BestFile());
+        std::ifstream in(FileSystem::userFile("best"));
         int b = 0;
         if (in >> b) high_score = std::max(high_score, b);
         bestAtStart = high_score;
     }
     void SaveBest() const {
         if (!bestFileOn) return;
-        std::string f = BestFile();
-        if (!f.empty()) std::ofstream(f) << high_score << "\n";
+        FileSystem::writeUserFile("best", std::to_string(high_score) + "\n");
     }
 
     void PlaySfx(Mix_Chunk* c) {
-#ifndef __EMSCRIPTEN__
         if (audioReady && !audioMuted && soundOn && c) Mix_PlayChannel(-1, c, 0);
-#else
-        (void)c;
-#endif
     }
     // UI feedback sounds: 0 focus moved, 1 pressed, 2 value changed.
     void UiSound(int k) {
-#ifndef __EMSCRIPTEN__
         if (k >= 0 && k < 3) PlaySfx(uiSounds[k]);
-#else
-        (void)k;
-#endif
     }
     // One chime per frame for the biggest fruit merged; a running combo
     // climbs the ladder a step per merge (up to three), so chains rise.
     void MergeChime(int fruit, int comboCount) {
-#ifndef __EMSCRIPTEN__
         int i = std::clamp(fruit - std::min(std::max(comboCount - 1, 0), 3), 0, 11);
         PlaySfx(mergeChimes[i]);
-#else
-        (void)fruit; (void)comboCount;
-#endif
     }
 
     void UpdateMenuInput(float dt) {
@@ -482,7 +448,6 @@ public:
 
     void ApplyVolumeSettings()
     {
-#ifndef __EMSCRIPTEN__
         if (!audioReady || audioMuted) return;
         float master = soundOn ? 1.0f : 0.0f;
         Mix_VolumeMusic(static_cast<int>(master * musicVolume * MIX_MAX_VOLUME));
@@ -493,7 +458,6 @@ public:
         for (Mix_Chunk* c : uiSounds) if (c) Mix_VolumeChunk(c, sfx_volume_sdl);
         for (Mix_Chunk* c : mergeChimes) if (c) Mix_VolumeChunk(c, sfx_volume_sdl);
         if (bestSound) Mix_VolumeChunk(bestSound, sfx_volume_sdl);
-#endif
     }
 
     // Render scale choices: 0 = adaptive, otherwise a fixed fraction of the window
@@ -513,17 +477,13 @@ public:
         Height = state.windowHeight;
         Sound();
         if (bestSoundIn > 0.0f && (bestSoundIn -= dt) <= 0.0f) {
-#ifndef __EMSCRIPTEN__
             PlaySfx(bestSound);
-#endif
         }
 
         switch (State)
         {
             case GAME_ACTIVE:
-#ifndef __EMSCRIPTEN__
                 if (audioReady && !audioMuted && Mix_PausedMusic() == 1) Mix_ResumeMusic();
-#endif
                 if (photo) UpdatePhoto(dt);
                 else {
                     UpdateGameActive(dt);
@@ -534,15 +494,11 @@ public:
             case GAME_OVER:
                 UpdateGameOver(dt);
                 ApplyVolumeSettings();
-#ifndef __EMSCRIPTEN__
                 if (audioReady && !audioMuted && State == GAME_OVER) Mix_PauseMusic();
-#endif
                 break;
             case GAME_MENU:
             case GAME_PAUSED:
-#ifndef __EMSCRIPTEN__
                 if (audioReady && !audioMuted && Mix_PausedMusic() == 1) Mix_ResumeMusic();
-#endif
                 ApplyVolumeSettings();
                 break;
         }
@@ -556,10 +512,8 @@ public:
             if (!physics_solver->has_obj[i]) continue;
             if (physics_solver->objects[i].position.y < -3) {
                 if (total_points > high_score) { high_score = total_points; SaveBest(); }
-#ifndef __EMSCRIPTEN__
                 if (State == GAME_ACTIVE) PlaySfx(loseSound);
                 if (State == GAME_ACTIVE && total_points > bestAtStart && total_points > 0) bestSoundIn = 1.1f;
-#endif
                 if (logEvents && State == GAME_ACTIVE) fprintf(stderr, "EV t=%.2f gameover\n", time);
                 State = GAME_OVER;
                 return;
@@ -687,19 +641,9 @@ public:
 
     // ---------------------------------------------------------------- tutorial
 
-    static std::string TutorialFile() {
-#ifdef __EMSCRIPTEN__
-        return "";
-#else
-        const char* home = std::getenv("HOME");
-        if (!home) home = std::getenv("USERPROFILE");
-        return home ? std::string(home) + "/.4dsuika-tutorial-done" : "";
-#endif
-    }
-
     // Interactive runs only: the tutorial opens the first time the player presses Play.
     void LoadTutorialState() {
-        std::string f = TutorialFile();
+        std::string f = FileSystem::userFile("tutorial-done");
         std::ifstream in(f);
         tutorialSeen = f.empty() ? false : in.good();
     }
@@ -717,8 +661,7 @@ public:
     void EndTutorial() {
         tutorialActive = false;
         tutorialSeen = true;
-        std::string f = TutorialFile();
-        if (!f.empty()) std::ofstream(f) << "1\n";
+        FileSystem::writeUserFile("tutorial-done", "1\n");
     }
 
     void NextTutorialStep() {
@@ -794,11 +737,9 @@ public:
     }
 
     int Sound(){
-#ifndef __EMSCRIPTEN__
         if (!audioReady || audioMuted) return 0;
         if (physics_solver->just_merged > 0 && mergeSound != nullptr) Mix_PlayChannel(-1, mergeSound, 0);
         if (ballPlaced && placeSound != nullptr) Mix_PlayChannel(-1, placeSound, 0);
-#endif
         return 0;
     }
 
@@ -939,7 +880,9 @@ public:
 
     // HUD scale: 1 up to 720 lines, then grows with the window so panels,
     // text and the w strip stay big and clean at 1080p and 4K.
-    float UiScale() const { return std::max(1.0f, Height / 720.0f); }
+    // A narrow (portrait phone) window scales by width instead, so the HUD
+    // keeps about 400 units across.
+    float UiScale() const { return std::max(1.0f, std::min(Height / 720.0f, Width / 400.0f)); }
     float DepthStripHeight() const { return std::clamp(Height * 0.125f, 54.0f, 104.0f * UiScale()); }
 
 
@@ -1186,7 +1129,9 @@ public:
         float vw;
         {
             FaceScope f(t, TextRenderer::Display);
-            vw = 2.0f * br * 0.9f + t.GetTextWidth(label, 0.6f * u) + 10.0f * u + ui::keycapWidth(t, "M", 22.0f * u) + 16.0f * u;
+            // The key letters are left out for touch.
+            vw = 2.0f * br * 0.9f + t.GetTextWidth(label, 0.6f * u) + 16.0f * u +
+                 (touchUI ? 6.0f * u : 10.0f * u + ui::keycapWidth(t, "M", 22.0f * u));
         }
         hudRect[HudView] = {x - vw, y, vw, 2.0f * br};
         hudVisible[HudView] = hudVisible[HudHelp] = hudVisible[HudPause] = true;
@@ -1202,7 +1147,7 @@ public:
             float s = 0.6f * u;
             float lx = v.x + 2.0f * br * 0.9f;
             t.RenderText(label, lx, v.y + (v.h - t.CapHeight(s)) * 0.5f + sink, s, ui::kInk);
-            ui::keycap(t, "M", lx + t.GetTextWidth(label, s) + 10.0f * u, v.y + (v.h - 22.0f * u) * 0.5f - 1.0f * u + sink, 22.0f * u);
+            if (!touchUI) ui::keycap(t, "M", lx + t.GetTextWidth(label, s) + 10.0f * u, v.y + (v.h - 22.0f * u) * 0.5f - 1.0f * u + sink, 22.0f * u);
         }
         // Tooltip for the round buttons.
         if (hover == HudHelp || hover == HudPause) {
@@ -1225,7 +1170,7 @@ public:
         const float u = UiScale();
         float h = 34.0f * u;
         float bottom = (showDepthStrip && FourDUnlocked()) ? Height - DepthStripHeight() - HudMargin() - 16.0f * u : Height - HudMargin();
-        ui::keyChipRow(*t_rend, StarterChips(), Width * 0.5f, bottom - h, h, a);
+        ui::keyChipRow(*t_rend, StarterChips(), Width * 0.5f, bottom - h, h, a, Width - 2.0f * HudMargin());
     }
 
     // Bottom-left: how far the slice is turned and moved, the view, and a home button.
@@ -1268,7 +1213,7 @@ public:
             hudVisible[HudHome] = homeShown > 0.5f;
             float pop = ui::easeOutBack(homeShown);
             ui::iconButton(t, bc, br * pop, ui::Icon::Home, u, hudHover[HudHome], hudPress[HudHome], homeShown, homing);
-            ui::keycap(t, "H", bc.x - 11.0f * u, bc.y + br + 10.0f * u, 22.0f * u, homeShown);
+            if (!touchUI) ui::keycap(t, "H", bc.x - 11.0f * u, bc.y + br + 10.0f * u, 22.0f * u, homeShown);
         }
     }
 
@@ -1300,20 +1245,44 @@ public:
         if (!tutorialActive || sheetMode) return;
         TextRenderer& t = *t_rend;
         static const char* titles[] = {"Aim and drop", "Merge", "The bowl is 4D", "Fruit hide in w"};
-        static const char* lines[][2] = {
+        static const char* mouseLines[][2] = {
             {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
             {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
             {"Everything here is a slice of a 4D world.", "Scroll the wheel, middle-drag, or hold A or D to turn the slice."},
             {"Fruit just off the slice show as dotted rings; the track below places every fruit in w.", "Press H or Space to come back to the default slice."},
         };
+        static const char* touchLines[][2] = {
+            {"Drag over the bowl and lift your finger to drop a fruit.", "Drag with two fingers to turn the camera around the bowl."},
+            {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
+            {"Everything here is a slice of a 4D world.", "Twist two fingers to turn the slice."},
+            {"Fruit just off the slice show as dotted rings; the track below places every fruit in w.", "Twist back, or tap the home button, to return to the default slice."},
+        };
+        const auto& lines = touchUI ? touchLines : mouseLines;
         const int s = std::min(tutorialStep, kTutorialSteps - 1);
         const float u = UiScale();
-        const float w = std::min(Width - 2.0f * HudMargin(), 640.0f * u), h = 128.0f * u;
+        const float w = std::min(Width - 2.0f * HudMargin(), 640.0f * u);
+        const float pad = 24.0f * u;
+        // Body lines wrap on narrow screens; the card grows to fit them and,
+        // if the last line runs under it, a row for Skip.
+        FaceScope body(t, TextRenderer::Body);
+        const float ls = 0.62f * u;
+        struct Line { std::string text; float y; int para; };
+        std::vector<Line> body_;
+        float ly = 58.0f * u;
+        for (int i = 0; i < 2; ++i) {
+            for (auto& l : ui::wrap(t, lines[s][i], ls, w - 2.0f * pad)) { body_.push_back({l, ly, i}); ly += 24.0f * u; }
+            ly += 4.0f * u;
+        }
+        const float kh = 24.0f * u, ks = 0.5f * u;
+        const char* skipLabel = touchUI ? "Skip" : "skip";
+        const float lw = t.GetTextWidth(skipLabel, ks);
+        const float skipW = lw + (touchUI ? 0.0f : 8.0f * u + ui::keycapWidth(t, "F1", kh));
+        float h = ly + 14.0f * u;
+        if (body_.size() > 2 && t.GetTextWidth(body_.back().text, ls) + skipW + 24.0f * u > w - 2.0f * pad) h += 30.0f * u;
         const float bottom = (showDepthStrip && FourDUnlocked()) ? Height - DepthStripHeight() - HudMargin() - 18.0f * u
                                                                  : Height - HudMargin() - 8.0f * u;
         ui::Rect r{(Width - w) * 0.5f, bottom - h, w, h};
         ui::glazePanel(t, r, u, 1.0f, 22.0f * u);
-        const float pad = 24.0f * u;
         {
             FaceScope f(t, TextRenderer::Display);
             float ts = 0.8f * u;
@@ -1325,22 +1294,17 @@ public:
             else t.Shape(UiShape::circle(d, 4.5f * u).fill(i < s ? ui::kGoldBottom : ui::kClay, i < s ? 1.0f : 0.5f));
         }
         {
-            FaceScope f(t, TextRenderer::Body);
-            for (int i = 0; i < 2; ++i) {
-                float ls = ui::fit(t, lines[s][i], 0.62f * u, r.w - 2.0f * pad);
-                t.RenderText(lines[s][i], r.x + pad, r.y + 58.0f * u + 28.0f * u * float(i), ls, i == 0 ? ui::kInk : ui::kClayDeep);
-            }
-            // "F1 skip" is also a button.
-            float kh = 24.0f * u, ks = 0.5f * u;
-            float lw = t.GetTextWidth("skip", ks);
-            float kx = r.x + r.w - pad - lw - 8.0f * u - ui::keycapWidth(t, "F1", kh);
+            for (auto& l : body_)
+                t.RenderText(l.text, r.x + pad, r.y + l.y, ls, l.para == 0 ? ui::kInk : ui::kClayDeep);
+            // "F1 skip" (touch: a "Skip" pill) is also a button.
+            float kx = r.x + r.w - pad - skipW;
             float ky = r.y + r.h - kh - 14.0f * u;
             hudRect[HudSkip] = {kx - 10.0f * u, ky - 7.0f * u, r.x + r.w - pad + 10.0f * u - (kx - 10.0f * u), kh + 14.0f * u};
             hudVisible[HudSkip] = true;
-            const float hv = hudHover[HudSkip];
+            const float hv = std::max(hudHover[HudSkip], touchUI ? 0.6f : 0.0f);
             if (hv > 0.01f) t.Shape(UiShape::rect(hudRect[HudSkip].x, hudRect[HudSkip].y, hudRect[HudSkip].w, hudRect[HudSkip].h, hudRect[HudSkip].h * 0.5f).fill(ui::kClay, 0.25f * hv));
-            ui::keycap(t, "F1", kx, ky, kh);
-            t.RenderText("skip", r.x + r.w - pad - lw, ky + kh * 0.5f - t.CapHeight(ks) * 0.5f, ks, glm::mix(ui::kClayDeep, ui::kInk, hv));
+            if (!touchUI) ui::keycap(t, "F1", kx, ky, kh);
+            t.RenderText(skipLabel, r.x + r.w - pad - lw, ky + kh * 0.5f - t.CapHeight(ks) * 0.5f, ks, glm::mix(ui::kClayDeep, ui::kInk, hv));
         }
     }
 
@@ -1374,9 +1338,14 @@ public:
         {   // legend
             FaceScope f(t, TextRenderer::Body);
             float s = 0.5f * u;
-            t.RenderText("w track: where each fruit sits in the 4th dimension", x + 16.0f * u, y + 9.0f * u, s, ui::kCream, 0.85f);
+            // A narrow track (phone) keeps the short forms that fit.
             const std::string r = "faded = off your slice";
-            t.RenderText(r, x + w - 16.0f * u - t.GetTextWidth(r, s), y + 9.0f * u, s, ui::kCream, 0.6f);
+            const float room = w - 32.0f * u, rw = t.GetTextWidth(r, s) + 24.0f * u;
+            std::string l = "w track: where each fruit sits in the 4th dimension";
+            if (t.GetTextWidth(l, s) + rw > room) l = "w track";
+            t.RenderText(l, x + 16.0f * u, y + 9.0f * u, s, ui::kCream, 0.85f);
+            if (t.GetTextWidth(l, s) + rw <= room)
+                t.RenderText(r, x + w - 16.0f * u - t.GetTextWidth(r, s), y + 9.0f * u, s, ui::kCream, 0.6f);
         }
         // Rail, coloured from coral (-w) through gold (the slice) to sky (+w).
         const int seg = 40;
@@ -1537,24 +1506,13 @@ public:
     int ViewIndex() const { return renderer.viewMode == ViewMode::Eye ? 1 : 0; }
     std::string ViewLabel() const { return viewModeName(renderer.viewMode); }
     void SetView(ViewMode m) { renderer.viewMode = m; }
-    static std::string ViewFile() {
-#ifdef __EMSCRIPTEN__
-        return "";
-#else
-        const char* home = std::getenv("HOME");
-        if (!home) home = std::getenv("USERPROFILE");
-        return home ? std::string(home) + "/.4dsuika-view" : "";
-#endif
-    }
     void SaveView() const {
-        std::string f = ViewFile();
-        if (f.empty()) return;
-        std::ofstream(f) << (renderer.viewMode == ViewMode::Eye ? "eye" : "slice") << "\n";
+        FileSystem::writeUserFile("view", renderer.viewMode == ViewMode::Eye ? "eye\n" : "slice\n");
     }
     // Interactive runs only: Slice unless the player chose 4D eye last time
     // (an old "thick" choice falls back to Slice).
     void LoadView() {
-        std::ifstream in(ViewFile());
+        std::ifstream in(FileSystem::userFile("view"));
         std::string name;
         if (!(in >> name)) return;
         SetView(name == "eye" ? ViewMode::Eye : ViewMode::Slice);
@@ -1564,9 +1522,13 @@ public:
         SaveView();
     }
 
+    // A menu's key hints; on touch there is no keyboard to show.
+    using Hints = std::vector<std::pair<std::string, std::string>>;
+    Hints KeyHints(Hints keys) const { return touchUI ? Hints{} : keys; }
+
     // Rebuilds the menu when the screen it shows changes.
     void EnsureMenu() {
-        int key = int(State) * 4 + int(page);
+        int key = (int(State) * 4 + int(page)) * 2 + int(Width < Height);
         if (key == menuBuiltFor) return;
         menuBuiltFor = key;
         if (page == Page::Settings) BuildSettingsMenu();
@@ -1584,7 +1546,8 @@ public:
     }
 
     // Key chips at the bottom of the title screen: the three inputs that matter, and where the rest are.
-    static std::vector<std::pair<std::string, std::string>> StarterChips() {
+    std::vector<std::pair<std::string, std::string>> StarterChips() const {
+        if (touchUI) return {{"Lift", "drop"}, {"2 fingers", "orbit"}, {"Twist", "turn into 4D"}, {"?", "all controls"}};
         return {{"Click", "drop"}, {"Right drag", "orbit"}, {"Wheel", "turn into 4D"}, {"?", "all controls"}};
     }
 
@@ -1629,7 +1592,7 @@ public:
         MenuStyle st;
         st.title = "Paused";
         st.width = 400.0f;
-        st.keys = {{"Esc", "resume"}, {"Enter", "select"}};
+        st.keys = KeyHints({{"Esc", "resume"}, {"Enter", "select"}});
         st.headerHeight = 86.0f;
         st.header = [this](TextRenderer& t, const ui::Rect& r, float u, float a) { DrawScorePair(t, r, u, a, false); };
         menu.set({
@@ -1703,7 +1666,7 @@ public:
         MenuStyle st;
         st.title = "Bowl overflowed!";
         st.width = 420.0f;
-        st.keys = {{"R", "play again"}, {"Enter", "select"}};
+        st.keys = KeyHints({{"R", "play again"}, {"Enter", "select"}});
         st.headerHeight = 214.0f;
         st.header = [this](TextRenderer& t, const ui::Rect& r, float u, float a) { DrawGameOverHeader(t, r, u, a); };
         menu.set({
@@ -1724,7 +1687,7 @@ public:
         MenuStyle st;
         st.title = "Settings";
         st.width = 600.0f;
-        st.keys = {{"Esc", "back"}, {"Enter", "change"}};
+        st.keys = KeyHints({{"Esc", "back"}, {"Enter", "change"}});
         std::vector<MenuItem> items;
         auto onOff = [](bool v) { return std::string(v ? "On" : "Off"); };
         items.push_back(MenuItem::header("Picture"));
@@ -1739,21 +1702,28 @@ public:
         items.push_back(MenuItem::choice("View", [this] { return ViewLabel(); }, [this](int d) { CycleViewMode(d); }));
         items.push_back(MenuItem::choice("W track", [=] { return onOff(showDepthStrip); }, [this](int) { showDepthStrip = !showDepthStrip; }));
         items.push_back(MenuItem::choice("Snap drops to w lanes", [=] { return onOff(laneSnap); }, [this](int) { laneSnap = !laneSnap; }));
-#ifndef __EMSCRIPTEN__
         items.push_back(MenuItem::header("Sound"));
         items.push_back(MenuItem::choice("Sound", [this] { return std::string(soundOn ? "On" : "Muted"); },
             [this](int) { soundOn = !soundOn; ApplyVolumeSettings(); }));
         items.push_back(MenuItem::slider("Music", [this] { return musicVolume; }, [this](float v) { musicVolume = v; ApplyVolumeSettings(); }));
         items.push_back(MenuItem::slider("Sound effects", [this] { return sfxVolume; }, [this](float v) { sfxVolume = v; ApplyVolumeSettings(); }));
-#endif
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }).withIcon(ui::Icon::Back));
         items.push_back(MenuItem::button("Controls", [this] { Open(Page::Controls); }).withIcon(ui::Icon::Keys).sameRow());
         menu.set(std::move(items), std::move(st));
     }
 
     // Every binding, grouped, keys drawn as keycaps, two per line.
-    static std::vector<MenuItem> ControlsItems() {
-        return {
+    std::vector<MenuItem> ControlsItems() const {
+        std::vector<MenuItem> touch = {
+            MenuItem::header("Touch"),
+            MenuItem::info("Drag", "aim the drop"),
+            MenuItem::info("Lift", "drop the fruit").sameRow(),
+            MenuItem::info("2 fingers", "drag to orbit the camera"),
+            MenuItem::info("Pinch", "zoom in and out").sameRow(),
+            MenuItem::info("Twist", "turn the slice through w"),
+            MenuItem::info("3 fingers", "drag to turn freely into 4D").sameRow(),
+        };
+        std::vector<MenuItem> keys = {
             MenuItem::header("Play"),
             MenuItem::info("Click", "drop the fruit"),
             MenuItem::info("Right drag", "orbit the camera").sameRow(),
@@ -1781,6 +1751,12 @@ public:
             MenuItem::info("", "band: a fruit your slice cuts").withSwatch(3),
             MenuItem::info("", "band colour: -w, on slice, +w").withSwatch(4).sameRow(),
         };
+        if (!touchUI) return keys;
+        // A portrait phone has room for one column and no keyboard: show only
+        // the touch gestures and the legend.
+        if (Width < Height) keys.erase(keys.begin(), keys.end() - 5);
+        keys.insert(keys.begin(), touch.begin(), touch.end());
+        return keys;
     }
 
     void BuildControlsMenu() {
@@ -1788,8 +1764,13 @@ public:
         st.title = "Controls";
         st.width = 860.0f;
         st.keyColumn = 172.0f;
-        st.keys = {{"Esc", "back"}};
+        st.keys = KeyHints({{"Esc", "back"}});
         std::vector<MenuItem> items = ControlsItems();
+        if (Width < Height) { // portrait: one column, so the text stays readable
+            st.width = 380.0f;
+            st.keyColumn = 130.0f;
+            for (auto& m : items) m.joinRow = false;
+        }
         items.push_back(MenuItem::button("Back", [this] { ClosePage(); }).withIcon(ui::Icon::Back));
         menu.set(std::move(items), std::move(st));
         menu.focus = int(menu.itemCount()) - 1;

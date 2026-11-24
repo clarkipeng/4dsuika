@@ -64,6 +64,18 @@ uniform float uFogStart;             // distance where fog begins (just past the
 uniform float uFacet;                // low-poly facet strength, 0 = smooth
 uniform float uNearCut;              // world surfaces closer to the camera than this are cut away
 
+// Loop bounds the D3D11 compiler (FXC, which ANGLE uses in Windows browsers)
+// cannot see. It unrolls loops with constant bounds and inlines every call,
+// so a march with a fruit or world SDF inside becomes hundreds of copies of
+// it and the program takes minutes to link. Never set, so always 0.
+// Desktop GL compilers unroll well, so they keep constant bounds.
+#ifdef GL_ES
+uniform int uNoUnroll;
+#define NO_UNROLL(n) ((n) + uNoUnroll)
+#else
+#define NO_UNROLL(n) (n)
+#endif
+
 // Slice cache (docs/4D.md): worldStaticSDF baked over a cube in slice
 // coordinates. x in [0, uCacheSize]^3 maps to uCacheOrigin + uCacheBasis * x.
 uniform int       uCacheMode;        // 0 = no cache (march the analytic SDF), 1 = cache
@@ -150,39 +162,47 @@ vec4 fruitWorldVector(int i, vec4 v) {
     return transpose(uFruitWorldToLocal[i]) * v;
 }
 
-// Sphere-trace a fruit's own SDF between t0 and t1 (its bound glome). At
-// lod 0 the fruit is its physics glome, hit analytically.
-float fruitMarch(vec4 ro, vec4 rd, vec4 d, float t0, float t1, float lod) {
+// Sphere-trace a fruit's own SDF between t0 and t1 (its bound glome), then
+// take the local normal at the hit by differences on the five vertices of a
+// 4-simplex. At lod 0 the fruit is its physics glome, hit analytically.
+// Returns (t, part at the hit), t = -1 on a miss, and the local normal n.
+// March and normal share one loop and one fruitSDFPart call: compilers inline
+// every call, and D3D11 (ANGLE in Windows browsers) takes minutes over a
+// shader with many copies of the fruit.
+vec2 fruitTrace(vec4 ro, vec4 rd, vec4 d, float t0, float t1, float lod, out vec4 n) {
+    n = vec4(0.0);
     if (lod <= 0.0) {
         float th = glomeHit(ro, rd, vec4(0.0), d.x);
-        return th > 0.0 ? th : -1.0;
+        n = normalize(ro + rd * max(th, 0.0));
+        return vec2(th > 0.0 ? th : -1.0, FRUIT_SKIN);
     }
-    float t = t0;
-    for (int k = 0; k < 24; ++k) {
-        float h = fruitSDF(ro + rd * t, d.x, d.y, lod);
-        COST_FRUIT(1);
-        if (h < 0.002 * d.x) return t;
-        t += h;
-        if (t > t1) break;
-    }
-    return -1.0;
-}
-
-vec4 fruitLocalNormal(vec4 q, vec4 d, float lod) {
     float h = 0.002 * d.x;
     const float s = 0.4472136;
-    const vec4 k0 = vec4( 1.0,  1.0,  1.0, -s);
-    const vec4 k1 = vec4( 1.0, -1.0, -1.0, -s);
-    const vec4 k2 = vec4(-1.0,  1.0, -1.0, -s);
-    const vec4 k3 = vec4(-1.0, -1.0,  1.0, -s);
-    const vec4 k4 = vec4( 0.0,  0.0,  0.0, 4.0 * s);
-    return normalize(k0 * fruitSDF(q + h * k0, d.x, d.y, lod) + k1 * fruitSDF(q + h * k1, d.x, d.y, lod) +
-                     k2 * fruitSDF(q + h * k2, d.x, d.y, lod) + k3 * fruitSDF(q + h * k3, d.x, d.y, lod) +
-                     k4 * fruitSDF(q + h * k4, d.x, d.y, lod));
-}
-
-vec4 fruitWorldNormal(int i, vec4 q, vec4 d, float lod) {
-    return normalize(fruitWorldVector(i, fruitLocalNormal(q, d, lod)));
+    const vec4 K[5] = vec4[5](vec4( 1.0,  1.0,  1.0, -s), vec4( 1.0, -1.0, -1.0, -s),
+                              vec4(-1.0,  1.0, -1.0, -s), vec4(-1.0, -1.0,  1.0, -s),
+                              vec4( 0.0,  0.0,  0.0, 4.0 * s));
+    float t = t0, part = FRUIT_SKIN;
+    int probe = -1; // >= 0 once hit: the normal sample being taken
+    for (int k = 0; k < NO_UNROLL(24 + 5); ++k) {
+        vec4 q = ro + rd * t;
+        if (probe >= 0) q += h * K[probe];
+        vec2 f = fruitSDFPart(q, d.x, d.y, lod);
+        COST_FRUIT(1);
+        if (probe >= 0) {
+            n += K[probe] * f.x;
+            if (++probe == 5) {
+                n = normalize(n);
+                return vec2(t, part);
+            }
+        } else if (f.x < 0.002 * d.x) {
+            probe = 0;
+            part = f.y;
+        } else {
+            t += f.x;
+            if (t > t1 || k >= 23) break;
+        }
+    }
+    return vec2(-1.0, FRUIT_SKIN);
 }
 
 // Nearest positive hit of ray (ro, rd) with the glome |p - c| = r.
@@ -264,21 +284,23 @@ vec4 facetNormal(vec4 n, float density, float seed) {
 // and shadows both work in the slice, so the part of the gradient along the
 // slice normal is not needed.
 // Static hits differentiate only the parts of their material
-// (worldStaticSDFFor), so f0 is re-evaluated for that same function.
+// (worldStaticSDFFor), so f0 is re-evaluated for that same function; moving
+// hits (clouds) differentiate the moving parts. The evaluations share one
+// loop so each SDF is inlined once (see marchStatic).
 vec4 worldNormal(vec4 p, float f0, float mat, bool dynamic) {
     const float h = 0.002;
-    vec4 e0 = h * uCameraBasis[0], e1 = h * uCameraBasis[1], e2 = h * uCameraBasis[2];
-    vec3 f;
-    if (dynamic) {
-        COST_DYNAMIC(3);
-        f = vec3(worldSDF(p + e0).x, worldSDF(p + e1).x, worldSDF(p + e2).x);
-    } else {
-        COST(4); // part-only evaluations, each far cheaper than the whole world
-        f0 = worldStaticSDFFor(p, mat).x;
-        f = vec3(worldStaticSDFFor(p + e0, mat).x, worldStaticSDFFor(p + e1, mat).x,
-                 worldStaticSDFFor(p + e2, mat).x);
+    vec4 f = vec4(f0);
+    for (int k = dynamic ? 1 : 0; k < NO_UNROLL(4); ++k) {
+        vec4 q = k == 0 ? p : p + h * uCameraBasis[k - 1];
+        if (dynamic) {
+            f[k] = worldDynamicSDF(q, 6.0).x;
+            COST_DYNAMIC(1);
+        } else {
+            f[k] = worldStaticSDFFor(q, mat).x; // part-only, far cheaper than the whole world
+            COST(1);
+        }
     }
-    return normalize(uCameraBasis[0] * (f.x - f0) + uCameraBasis[1] * (f.y - f0) + uCameraBasis[2] * (f.z - f0));
+    return normalize(uCameraBasis[0] * (f.y - f.x) + uCameraBasis[1] * (f.z - f.x) + uCameraBasis[2] * (f.w - f.x));
 }
 
 // ---------------------------------------------------------------- slice cache
@@ -307,48 +329,42 @@ bool cacheSpan(vec3 o, vec3 d, out float t0, out float t1) {
 
 // Static world along an in-slice ray: (t, material, distance at t),
 // material 0 = miss.
+// One loop with one worldStaticSDF call: compilers inline every call, and
+// D3D11 (ANGLE in Windows browsers) takes minutes over a shader with many.
 vec3 marchStatic(vec4 ro, vec4 rd, float tMax) {
-    if (uCacheMode == 0) {
-        float t = uNearCut; // cutaway, as below
-        for (int i = 0; i < 24 && worldStaticSDF(ro + rd * t).x < 0.02; ++i) t += 0.1;
-        for (int i = 0; i < MAX_STEPS; ++i) {
-            vec4 p = ro + rd * t;
-            vec2 h = worldStaticSDF(p);
-            COST(1);
-            if (h.x < 0.001 * t) return vec3(t, h.y, h.x);
-            t += h.x;
-            if (t > tMax) break;
-        }
-        return vec3(tMax, 0.0, 0.0);
-    }
+    bool cached = uCacheMode != 0;
     vec3 o = toCache(ro), d = dirToCache(rd);
-    float t, t1;
-    if (!cacheSpan(o, d, t, t1)) return vec3(tMax, 0.0, 0.0);
-    t1 = min(t1, tMax);
+    float t = 0.0, t1 = tMax;
+    if (cached) {
+        if (!cacheSpan(o, d, t, t1)) return vec3(tMax, 0.0, 0.0);
+        t1 = min(t1, tMax);
+    }
     // Cutaway: in a turned slice a hill that lives at some w can rise around
     // the camera. Nothing nearer than uNearCut is drawn; a ray that starts
-    // inside a solid there walks out of it before tracing.
-    if (t < uNearCut) {
-        t = uNearCut;
-        for (int i = 0; i < 24; ++i) {
-            vec4 p = ro + rd * t;
-            float c = cacheDist(o + d * t);
-            float h = c < uCacheVoxel ? worldStaticSDF(p).x : c;
-            if (h > 0.02) break;
-            t += max(-h, 0.0) + 0.05;
-        }
-    }
-    float margin = 0.9 * uCacheVoxel + 0.01;
-    for (int i = 0; i < MAX_STEPS; ++i) {
+    // inside a solid there walks out of it (up to 24 steps) before tracing.
+    int walk = t < uNearCut || !cached ? 24 : 0;
+    t = max(t, uNearCut);
+    // With the cache, steps read the cached distance less a safe margin and
+    // fall back to the analytic SDF within a voxel of a surface.
+    float margin = cached ? 0.9 * uCacheVoxel + 0.01 : 0.0;
+    for (int i = 0; i < NO_UNROLL(MAX_STEPS + 24); ++i) {
         vec4 p = ro + rd * t;
-        float adv = cacheDist(o + d * t) - margin;
-        if (adv < uCacheVoxel) {
-            vec2 h = worldStaticSDF(p);
+        vec2 h = vec2(cached ? cacheDist(o + d * t) - margin : 0.0, MAT_NONE);
+        bool exact = !cached || h.x < uCacheVoxel;
+        if (exact) {
+            h = worldStaticSDF(p);
             COST(1);
-            if (h.x < 0.001 * t) return vec3(t, h.y, h.x);
-            adv = h.x;
         }
-        t += adv;
+        if (walk > 0) {
+            if (h.x <= 0.02) {
+                t += cached ? max(-h.x, 0.0) + 0.05 : 0.1;
+                --walk;
+                continue;
+            }
+            walk = 0;
+        }
+        if (exact && h.x < 0.001 * t) return vec3(t, h.y, h.x);
+        t += h.x;
         if (t > t1) break;
     }
     return vec3(tMax, 0.0, 0.0);
@@ -358,7 +374,7 @@ vec3 marchStatic(vec4 ro, vec4 rd, float tMax) {
 // bounds skip most of the work.
 vec3 marchDynamic(vec4 ro, vec4 rd, float tMax) {
     float t = 0.0;
-    for (int i = 0; i < 48; ++i) {
+    for (int i = 0; i < NO_UNROLL(48); ++i) {
         vec2 h = worldDynamicSDF(ro + rd * t, 6.0);
         COST_DYNAMIC(1);
         if (h.x < 0.001 * t + 0.002) return h.y > 0.0 ? vec3(t, h.y, h.x) : vec3(tMax, 0.0, 0.0);
@@ -381,14 +397,14 @@ float occluderSDF(vec4 p) { return worldSDF(p).x; }
 // the cached distances.
 float softShadow(vec4 ro, vec4 rd) {
     float res = 1.0;
-    for (int i = 0; i < MAX_FRUIT; ++i) {
+    for (int i = 0; i < NO_UNROLL(MAX_FRUIT); ++i) {
         if (i >= uFruitCount) break;
         res = min(res, glomeShadow(ro, rd, uFruitCenters[i], uFruitData[i].x));
     }
     if (uCacheMode != 0) {
         vec3 o = toCache(ro), d = dirToCache(rd);
         float t = uCacheVoxel;
-        for (int i = 0; i < SHADOW_STEPS; ++i) {
+        for (int i = 0; i < NO_UNROLL(SHADOW_STEPS); ++i) {
             vec3 x = o + d * t;
             if (res < 0.01 || t > 25.0 || !inCache(x)) break;
             float h = cacheDist(x);
@@ -398,7 +414,7 @@ float softShadow(vec4 ro, vec4 rd) {
         return clamp(res, 0.0, 1.0);
     }
     float t = 0.05;
-    for (int i = 0; i < SHADOW_STEPS; ++i) {
+    for (int i = 0; i < NO_UNROLL(SHADOW_STEPS); ++i) {
         if (res < 0.01) break;
         float h = occluderSDF(ro + rd * t);
         COST(1);
@@ -415,7 +431,7 @@ float ambientOcclusion(vec4 p, vec4 n) {
     vec3 o = toCache(p), d = dirToCache(n);
     bool cached = uCacheMode != 0 && dot(d, d) > 0.01;
     d = cached ? normalize(d) : d;
-    for (int i = 1; i <= AO_SAMPLES; ++i) {
+    for (int i = 1; i <= NO_UNROLL(AO_SAMPLES); ++i) {
         float h = 0.3 * float(i * i) / float(AO_SAMPLES * AO_SAMPLES) * 5.0;
         vec3 x = o + d * h;
         float dist = cached ? (inCache(x) ? cacheDist(x) : h) : occluderSDF(p + n * h);
@@ -424,7 +440,7 @@ float ambientOcclusion(vec4 p, vec4 n) {
         w *= 0.6;
     }
     float ao = clamp(1.0 - 1.4 * occ, 0.0, 1.0);
-    for (int i = 0; i < MAX_FRUIT; ++i) {
+    for (int i = 0; i < NO_UNROLL(MAX_FRUIT); ++i) {
         if (i >= uFruitCount) break;
         ao *= 1.0 - clamp(glomeOcclusion(p, n, uFruitCenters[i], uFruitData[i].x), 0.0, 1.0);
     }
@@ -482,7 +498,7 @@ vec3 depthColor(float offset) { return depthColor(offset, 1.5); }
 
 vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
-    for (int i = 0; i < MAX_HINTS; ++i) {
+    for (int i = 0; i < NO_UNROLL(MAX_HINTS); ++i) {
         if (i >= uHintCount) break;
         vec4 c = uHintCenters[i];
         vec4 d = uHintData[i];
@@ -522,7 +538,7 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
 
 vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
-    for (int i = 0; i < MAX_BURSTS; ++i) {
+    for (int i = 0; i < NO_UNROLL(MAX_BURSTS); ++i) {
         if (i >= uBurstCount) break;
         vec4 d = uBurstData[i];
         float t = d.z;
@@ -562,10 +578,10 @@ vec3 drawDropGhost(vec3 col, vec4 ro, vec4 rd, float dist, vec4 center, float al
     float lod = fruitLod(d.x, t0, pixel);
     vec4 lro = uPreviewWorldToLocal * (ro - center);
     vec4 lrd = uPreviewWorldToLocal * rd;
-    float t = fruitMarch(lro, lrd, d, t0, min(t1, dist), lod);
+    vec4 nl;
+    float t = fruitTrace(lro, lrd, d, t0, min(t1, dist), lod, nl).x;
     if (t <= 0.0) return col;
-    vec4 ns = lod > 0.0 ? normalize(transpose(uPreviewWorldToLocal) * fruitLocalNormal(lro + lrd * t, d, lod))
-                        : normalize(ro + rd * t - center);
+    vec4 ns = normalize(transpose(uPreviewWorldToLocal) * nl);
     float facing = abs(dot(ns, rd));
     float rim = pow(1.0 - facing, 2.0);
     float shade = 0.75 + 0.25 * dot(ns.xyz, normalize(vec3(0.4, 0.8, 0.3)));
@@ -590,6 +606,7 @@ struct Hit {
     float lod;      // fruit detail
     vec4 ns;        // smooth normal
     float cut;      // 1: a fruit seen through the cutaway in the near wall
+    float part;     // fruit part at the hit (FRUIT_SKIN ...)
 };
 
 float gCutEdge = 0.0; // compose pass: 0..1 on the near wall's cut face
@@ -609,17 +626,20 @@ Hit traceScene(vec4 ro, vec4 rd) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
     float tHit = FAR;
     int fruit = -1;
-    float fruitLodHit = 0.0;
-    for (int i = 0; i < MAX_FRUIT; ++i) {
+    float fruitLodHit = 0.0, fruitPartHit = FRUIT_SKIN;
+    vec4 fruitN = vec4(0.0);
+    for (int i = 0; i < NO_UNROLL(MAX_FRUIT); ++i) {
         if (i >= uFruitCount) break;
         vec4 d = uFruitData[i];
         float t0, t1;
         if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= tHit) continue;
         float lod = fruitLod(d.x, t0, pixel);
-        vec4 localRo = fruitLocalPoint(i, ro);
-        vec4 localRd = fruitLocalVector(i, rd);
-        float t = fruitMarch(localRo, localRd, d, t0, min(t1, tHit), lod);
-        if (t > 0.0 && t < tHit) { tHit = t; fruit = i; fruitLodHit = lod; }
+        vec4 n;
+        vec2 tp = fruitTrace(fruitLocalPoint(i, ro), fruitLocalVector(i, rd), d, t0, min(t1, tHit), lod, n);
+        if (tp.x > 0.0 && tp.x < tHit) {
+            tHit = tp.x; fruit = i; fruitLodHit = lod; fruitPartHit = tp.y;
+            fruitN = n;
+        }
     }
 
     // World, stopped early at the nearest fruit.
@@ -635,26 +655,25 @@ Hit traceScene(vec4 ro, vec4 rd) {
         glomeSpan(ro, rd, vec4(0.0), BOWL_IN, enter, exit) &&
         hw.x < enter && tHit >= enter && tHit <= exit;
     if (fruit >= 0 && (tHit <= hw.x || cutaway)) {
-        vec4 c = uFruitCenters[fruit];
-        vec4 d = uFruitData[fruit];
-        vec4 p = ro + rd * tHit;
-        vec4 q = fruitLocalPoint(fruit, p);
         h.t = tHit;
         h.kind = -float(fruit + 1);
         h.lod = fruitLodHit;
         h.cut = tHit > hw.x ? 1.0 : 0.0;
-        h.ns = fruitLodHit > 0.0 ? fruitWorldNormal(fruit, q, d, fruitLodHit) : normalize(p - c);
+        h.part = fruitPartHit;
+        h.ns = normalize(fruitWorldVector(fruit, fruitN));
     } else if (hw.y > 0.0) {
         h.t = hw.x;
         h.kind = hw.y;
         h.lod = 0.0;
         h.cut = 0.0;
+        h.part = 0.0;
         h.ns = worldNormal(ro + rd * hw.x, hw.z, hw.y, hd.y > 0.0);
     } else {
         h.t = FAR;
         h.kind = 0.0;
         h.lod = 0.0;
         h.cut = 0.0;
+        h.part = 0.0;
         h.ns = vec4(0.0);
     }
     return h;
@@ -714,7 +733,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
         // A little self-light keeps each fruit's colour identifiable even
         // when it is back-lit by the low sun.
-        vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(fruit, ns)), d.x, d.y, d.w, h.lod);
+        vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(fruit, ns)), d.x, d.y, h.part, h.lod);
         // Plus a soft fill from the viewer, so the side we see is never just
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
@@ -791,8 +810,9 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         float limit = dist;   // x-ray through the bowl's near wall, 
         float t0, t1;
         if (h.kind == MAT_BOWL && glomeSpan(ro, rd, vec4(0.0), BOWL_R + BOWL_HALF, t0, t1)) limit = max(limit, t1);
-        if (uLandCenter.w > -1e5) col = drawDropGhost(col, ro, rd, limit, uLandCenter, 0.45);
-        col = drawDropGhost(col, ro, rd, limit, uPreviewCenter, 0.55);
+        // Landing ghost first, then the one in the air; one call site (see marchStatic).
+        for (int g = uLandCenter.w > -1e5 ? 0 : 1; g < NO_UNROLL(2); ++g)
+            col = drawDropGhost(col, ro, rd, limit, g == 0 ? uLandCenter : uPreviewCenter, g == 0 ? 0.45 : 0.55);
     }
 
 #ifndef TURNTABLE
@@ -812,7 +832,8 @@ Hit readGeometry(ivec2 texel) {
     h.t = g.x;
     h.kind = g.y;
     h.lod = g.z;
-    h.cut = g.w;
+    h.cut = mod(g.w, 2.0);
+    h.part = floor(g.w * 0.5);
     h.ns = texelFetch(uNormal, texel, 0);
     return h;
 }
@@ -827,7 +848,7 @@ float cutEdge(ivec2 texel) {
     for (int y = -r; y <= r; ++y)
         for (int x = -r; x <= r; ++x) {
             vec4 g = texelFetch(uGeom, clamp(texel + ivec2(x, y), ivec2(0), hi), 0);
-            if (g.w > 0.5) e = max(e, 1.0 - length(vec2(x, y)) / float(r + 1));
+            if (mod(g.w, 2.0) > 0.5) e = max(e, 1.0 - length(vec2(x, y)) / float(r + 1));
         }
     return e;
 }
@@ -844,7 +865,7 @@ vec2 upsampleLight(ivec2 texel, float t) {
     float wsum = 0.0;
     vec2 nearest = vec2(1.0);
     float best = 1e9;
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < NO_UNROLL(4); ++k) {
         ivec2 o = ivec2(k & 1, k >> 1);
         vec4 l = texelFetch(uLight, clamp(base + o, ivec2(0), size), 0);
         float dz = abs(l.z - t) / max(t, 1.0);
@@ -869,13 +890,14 @@ vec2 upsampleLight(ivec2 texel, float t) {
 
 const float EYE_WORLD = 0.008, EYE_BOWL = 0.02; // densities (fruit 1)
 
-vec4 eyeFruitColour(int i, vec4 ro, vec4 rd, float t, float lod) {
+// nl, part: the local normal and part from fruitTrace.
+vec4 eyeFruitColour(int i, vec4 ro, vec4 rd, float t, float lod, vec4 nl, float part) {
     vec4 p = ro + rd * t;
     vec4 d = uFruitData[i];
     vec4 q = fruitLocalPoint(i, p);
-    vec4 ns = lod > 0.0 ? fruitWorldNormal(i, q, d, lod) : normalize(p - uFruitCenters[i]);
+    vec4 ns = normalize(fruitWorldVector(i, nl));
     vec4 n = facetBlend(ns, 2.5 + 2.5 * sqrt(d.x), d.w);
-    vec3 albedo = fruitAlbedo(q, normalize(fruitLocalVector(i, ns)), d.x, d.y, d.w, lod);
+    vec3 albedo = fruitAlbedo(q, normalize(nl), d.x, d.y, part, lod);
     float fill = 0.35 * max(dot(n, -rd), 0.0);
     return vec4(shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, vec2(1.0)) + albedo * (0.18 + fill) +
                 d.z * vec3(1.0, 0.9, 0.7), 1.0);
@@ -886,32 +908,38 @@ vec4 eyeRay(vec4 ro, vec4 rd) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
     float tHit = FAR;
     int fruit = -1;
-    float lodHit = 0.0;
-    for (int i = 0; i < MAX_FRUIT; ++i) {
+    float lodHit = 0.0, partHit = FRUIT_SKIN;
+    vec4 nHit = vec4(0.0);
+    for (int i = 0; i < NO_UNROLL(MAX_FRUIT); ++i) {
         if (i >= uFruitCount) break;
         vec4 d = uFruitData[i];
         float t0, t1;
         if (!glomeSpan(ro, rd, uFruitCenters[i], d.x * FRUIT_BOUND, t0, t1) || t0 >= tHit) continue;
         float lod = fruitLod(d.x, t0, pixel);
-        float t = fruitMarch(fruitLocalPoint(i, ro), fruitLocalVector(i, rd), d, t0, min(t1, tHit), lod);
-        if (t > 0.0 && t < tHit) { tHit = t; fruit = i; lodHit = lod; }
+        vec4 n;
+        vec2 tp = fruitTrace(fruitLocalPoint(i, ro), fruitLocalVector(i, rd), d, t0, min(t1, tHit), lod, n);
+        if (tp.x > 0.0 && tp.x < tHit) { tHit = tp.x; fruit = i; lodHit = lod; partHit = tp.y; nHit = n; }
     }
     // The world's coarse surface, stopped at the fruit.
     float t = 0.0, tw = -1.0;
-    for (int k = 0; k < 64; ++k) {
+    for (int k = 0; k < NO_UNROLL(64); ++k) {
         float h = occluderSDF(ro + rd * t);
         if (h < 0.004 * t + 0.01) { tw = t; break; }
         t += h;
         if (t > min(tHit, 45.0)) break;
     }
-    vec4 fc = fruit >= 0 ? eyeFruitColour(fruit, ro, rd, tHit, lodHit) : vec4(0.0);
+    vec4 fc = fruit >= 0 ? eyeFruitColour(fruit, ro, rd, tHit, lodHit, nHit, partHit) : vec4(0.0);
     if (tw < 0.0) return fruit >= 0 ? vec4(grade(fc.rgb), 1.0) : vec4(0.0);
     vec4 p = ro + rd * tw;
     float mat = worldSDF(p).y;
     const float e = 0.02;
-    float f0 = occluderSDF(p);
-    vec4 n = normalize(vec4(occluderSDF(p + vec4(e, 0, 0, 0)), occluderSDF(p + vec4(0, e, 0, 0)),
-                            occluderSDF(p + vec4(0, 0, e, 0)), occluderSDF(p + vec4(0, 0, 0, e))) - f0);
+    float f[5]; // at p, then a step along each axis; one call site (see marchStatic)
+    for (int k = 0; k < NO_UNROLL(5); ++k) {
+        vec4 o = vec4(0.0);
+        if (k > 0) o[k - 1] = e;
+        f[k] = occluderSDF(p + o);
+    }
+    vec4 n = normalize(vec4(f[1], f[2], f[3], f[4]) - f[0]);
     vec3 wc = shade(p, n, n, rd, materialColor(mat, p, n), 0.0, wrapOf(mat), vec2(1.0));
     // The experimental retina volume uses a translucent bowl.
     if (mat == MAT_BOWL && fruit >= 0) return vec4(grade(mix(fc.rgb, wc, 0.3)), 1.0);
@@ -959,7 +987,7 @@ vec3 eyeDisplay(vec2 px) {
     float alpha = 0.0;
     // Per-pixel jitter (interleaved gradient noise) turns the layers' banding into fine grain.
     float jitter = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
-    for (int k = 0; k < STEPS; ++k) {
+    for (int k = 0; k < NO_UNROLL(STEPS); ++k) {
         vec3 x = ro + rd * (t0 + (float(k) + jitter) * dt);
         vec4 c = texture(uRetina, x / uEyeBox * 0.5 + 0.5);
         float a = 1.0 - exp(-c.a * sigma * dt);
@@ -980,7 +1008,7 @@ void main() {
     vec4 ro = uCameraPos;
 #if PASS == 1
     Hit h = traceScene(ro, rayDir(px));
-    gGeom = vec4(h.t, h.kind, h.lod, h.cut);
+    gGeom = vec4(h.t, h.kind, h.lod, h.cut + 2.0 * h.part);
     gNormal = h.ns;
 #elif PASS == 2
     // Each half-resolution texel lights the top-left pixel of its 2x2 block.
@@ -989,10 +1017,12 @@ void main() {
     vec2 light = lightHit(ro, rayDir(vec2(texel) + 0.5), h);
     fragColor = vec4(light, h.t, 1.0);
 #elif PASS == 4
-    out0 = eyeRay(ro, eyeDir(vec3(px, uLayer + 0.5)));
-    out1 = eyeRay(ro, eyeDir(vec3(px, uLayer + 1.5)));
-    out2 = eyeRay(ro, eyeDir(vec3(px, uLayer + 2.5)));
-    out3 = eyeRay(ro, eyeDir(vec3(px, uLayer + 3.5)));
+    vec4 layer[4]; // one eyeRay call site (see marchStatic)
+    for (int k = 0; k < NO_UNROLL(4); ++k) layer[k] = eyeRay(ro, eyeDir(vec3(px, uLayer + float(k) + 0.5)));
+    out0 = layer[0];
+    out1 = layer[1];
+    out2 = layer[2];
+    out3 = layer[3];
 #elif PASS == 5
     fragColor = vec4(eyeDisplay(px), 1.0);
 #elif PASS == 3
