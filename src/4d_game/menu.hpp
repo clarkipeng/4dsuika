@@ -459,7 +459,7 @@ private:
             float x = r.x + 4.0f * u;
             float keyW = style_.keyColumn * u;
             std::string rest = m.swatch ? std::string() : m.label;
-            if (m.swatch) ui::cueSwatch(t, m.swatch, {x + kh * (m.swatch == 4 ? 1.1f : 0.7f), r.y + r.h * 0.5f}, kh * 0.5f, u, alpha);
+            if (m.swatch) ui::cueSwatch(t, m.swatch, {x + kh * (m.swatch == 3 ? 1.1f : 0.7f), r.y + r.h * 0.5f}, kh * 0.5f, u, alpha);
             while (!rest.empty()) {
                 size_t sep = rest.find(" / ");
                 std::string tok = rest.substr(0, sep);

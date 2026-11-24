@@ -65,13 +65,11 @@ inline const char* qualityName(Quality q) {
 class RaymarchRenderer {
 public:
     static constexpr int kMaxFruit = 64;
-    static constexpr int kMaxHints = 16;
     static constexpr int kMaxBursts = 8;
-    static constexpr float kHintRange = 1.5f; // how far off the slice a fruit still hints
     int viewportX = 0;                        // where in the target the frame is presented (photo mode draws two side by side)
     bool showGizmo = true;                    // false: no corner axis gizmo (--no-ui captures)
     float bgSoft = 0.8;                       // 0..1, softened background (sky and world away from the bowl)
-    bool cues4D = true;                       // false: no depth rings, hints, glow or slice indicator (the 3D start of the tutorial)
+    bool cues4D = true;                       // false: no depth rings, glow or slice indicator (the 3D start of the tutorial)
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
 
@@ -612,20 +610,17 @@ private:
 
     void uploadFruit(GLuint prog, const glm::vec4& camPos, const glm::vec4& normal) {
         // Rays never leave the slice, so a fruit is visible only if its glome
-        // crosses the slice hyperplane; fruit within kHintRange beyond that
-        // become depth hints. Nearest (to the camera, then the slice) first.
+        // crosses the slice hyperplane. Nearest to the camera first.
         using Entry = std::pair<float, const FruitInstance*>;
-        std::vector<Entry> visible, nearby; // (not "near": a Windows macro)
+        std::vector<Entry> visible;
         for (const auto& f : fruit_) {
             float off = glm::dot(f.center - camPos, normal);
             float gap = std::abs(off) - f.radius;
-            if (viewMode == ViewMode::Eye) visible.push_back({glm::length(f.center - camPos), &f}); // 4D rays see all
-            else if (gap < 0.0f) visible.push_back({glm::length(f.center - camPos), &f});
-            else if (gap < kHintRange) nearby.push_back({gap, &f});
+            if (viewMode == ViewMode::Eye || gap < 0.0f) // 4D rays see all
+                visible.push_back({glm::length(f.center - camPos), &f});
         }
         auto byKey = [](const Entry& a, const Entry& b) { return a.first < b.first; };
         std::sort(visible.begin(), visible.end(), byKey);
-        std::sort(nearby.begin(), nearby.end(), byKey);
 
         int n = std::min<int>(int(visible.size()), kMaxFruit);
         std::vector<glm::vec4> centers(n), data(n);
@@ -644,22 +639,6 @@ private:
             glUniform4fv(loc(prog, "uFruitData"), n, glm::value_ptr(data[0]));
             glUniform1fv(loc(prog, "uFruitGlow"), n, glow.data());
             glUniformMatrix4fv(loc(prog, "uFruitWorldToLocal"), n, GL_FALSE, glm::value_ptr(world_to_local[0]));
-        }
-
-        int h = std::min<int>(int(nearby.size()), kMaxHints);
-        std::vector<glm::vec4> hc(h), hd(h);
-        for (int i = 0; i < h; ++i) {
-            const FruitInstance& f = *nearby[i].second;
-            float off = glm::dot(f.center - camPos, normal);
-            float gap = nearby[i].first;
-            hc[i] = f.center - off * normal; // projected into the slice
-            float strength = 1.0f - gap / kHintRange;
-            hd[i] = glm::vec4(f.radius, float(f.type), off, std::max(strength, 0.9f * glowOf(f)));
-        }
-        glUniform1i(loc(prog, "uHintCount"), h);
-        if (h > 0) {
-            glUniform4fv(loc(prog, "uHintCenters"), h, glm::value_ptr(hc[0]));
-            glUniform4fv(loc(prog, "uHintData"), h, glm::value_ptr(hd[0]));
         }
     }
 
@@ -724,7 +703,6 @@ private:
         std::string out = "#version 330 core\n";
 #endif
         out += "#define MAX_FRUIT " + std::to_string(kMaxFruit) + "\n";
-        out += "#define MAX_HINTS " + std::to_string(kMaxHints) + "\n";
         out += "#define MAX_BURSTS " + std::to_string(kMaxBursts) + "\n";
         out += defines;
         std::istringstream in(src);

@@ -95,5 +95,5 @@ Clean captures for a portfolio site (3:2 hover clips and a 16:9 long cut): `--no
 
 `docs/recording/paths/site-a.path` (hover clips, 18 s cycle of drift and 4D turns), `site-b.path` (the same at distance 12), `site-c.path` (site-b raised to pitch -34 so the fruit reads over the rim) and `site-long.path` (long cut, six 7 s scenes, all at distance 12) are those paths.
 - `--bg-soft 0` turns the background softening off (no haze).
-- Round 4 and 5 hover clips (round 5 re-rendered the same run after burst and hint rings stopped drawing over the bowl's near wall): `site-c.path --play 0.8 --warmup 10 --fps 30 --size 2400x1600 --lane-snap --no-ui --bg-soft 0`, downscaled to 1200x800 with no crop.
+- Round 4 and 5 hover clips (round 5 re-rendered the same run after burst rings stopped drawing over the bowl's near wall): `site-c.path --play 0.8 --warmup 10 --fps 30 --size 2400x1600 --lane-snap --no-ui --bg-soft 0`, downscaled to 1200x800 with no crop.
 - Long cut: `site-long.path --play 1.3 --warmup 10 --fps 30 --size 2560x1440 --lane-snap --no-ui --bg-soft 0 --seconds 60`.
