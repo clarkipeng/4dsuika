@@ -285,7 +285,7 @@ public:
         if (!style_.sceneChips.empty()) {
             float h = std::clamp(H * 0.036f, 26.0f, 54.0f);
             ui::keyChipRow(t, style_.sceneChips, W * 0.5f, H - h - std::max(18.0f, H * 0.03f),
-                           h, ui::easeOutCubic((age_ - 0.3f) / 0.4f));
+                           h, ui::easeOutCubic((age_ - 0.3f) / 0.4f), W * 0.92f);
         }
     }
 
@@ -410,7 +410,9 @@ private:
         float Wd = std::max(style_.width, titleW) + (style_.hero ? 0.0f : 2.0f * kPad);
         float Hd = kPad + titleBlock + headerBlock + rowsH + 8.0f + footer + kPad * 0.6f;
         float roomH = style_.sceneChips.empty() ? H : H - std::clamp(H * 0.036f, 26.0f, 54.0f) - 40.0f;
-        u_ = std::clamp(std::min(0.92f * W / Wd, 0.9f * roomH / Hd), 0.3f, std::max(1.0f, H / 720.0f) * 1.05f);
+        // The hero's backing panel reaches 30 units past its column on each side.
+        float fitW = Wd + (style_.hero ? 60.0f : 0.0f);
+        u_ = std::clamp(std::min(0.92f * W / fitW, 0.9f * roomH / Hd), 0.3f, std::max(1.0f, H / 720.0f) * 1.05f);
         float u = u_;
         float px = style_.hero ? std::max(W * 0.075f, 24.0f) : (W - Wd * u) * 0.5f;
         if (style_.hero && px + Wd * u > W * 0.95f) px = (W - Wd * u) * 0.5f;

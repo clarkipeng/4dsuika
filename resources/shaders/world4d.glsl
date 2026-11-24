@@ -580,8 +580,10 @@ vec2 worldStaticSDFFor(vec4 p, float mat) {
         vec2 sn = stonesSDF(p, r.x);
         return sn.x < r.x ? sn : r;
     }
-    if (mat == MAT_BARK || mat == MAT_LEAVES) return treesSDF(p, vec2(best, MAT_NONE));
-    return worldStaticSDF(p);
+    // MAT_BARK or MAT_LEAVES, the only static materials left. No fallback to
+    // worldStaticSDF: every call is inlined, and a second copy of the world
+    // makes D3D11 shader compiles take minutes.
+    return treesSDF(p, vec2(best, MAT_NONE));
 }
 
 vec2 worldDynamicSDF(vec4 p, float best) {

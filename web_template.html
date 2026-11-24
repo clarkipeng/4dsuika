@@ -1,82 +1,97 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>4D Game</title>
-    <link rel="icon" href="data:,">
-    <style>
-        html,
-        body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #000;
-            overflow: hidden;
-            font-family: Arial, sans-serif;
-        }
-        
-        #game-container {
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            width: 100vw;
-            height: 100vh;
-        }
-        
-        #game-canvas {
-            display: block;
-            width: min(100vw, 177.78vh);
-            height: min(100vh, 56.25vw);
-            background-color: #111;
-        }
-        
-        #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: white;
-            font-size: 18px;
-            z-index: 10;
-        }
-        
-        .hidden {
-            display: none;
-        }
-        
-        #error {
-            color: #ff4444;
-            margin-top: 10px;
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2a1826">
+<title>4D Suika</title>
+<link rel="icon" href="data:,">
+<style>
+  /* v1.0 theme tokens (src/4d_game/ui_kit.hpp): dusk plum, gold edge, cream ink. */
+  :root { --plum: #2a1826; --glaze: #3e2537; --gold: #ffc24a; --ink: #fff3e3; }
+  html, body { margin: 0; height: 100%; background: var(--plum); overflow: hidden;
+    overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  /* The game owns every pointer and touch: no scrolling, zoom or long-press menu. */
+  /* !important: GLFW writes the window size into the canvas's inline style. */
+  canvas { position: fixed; inset: 0; width: 100% !important; height: 100% !important; display: block;
+    touch-action: none; outline: none; }
+  #boot { position: fixed; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(ellipse at 50% 80%, #6b3a4c 0%, var(--plum) 70%);
+    transition: opacity .5s ease; font: 600 16px system-ui, sans-serif; color: var(--ink); }
+  #boot.done { opacity: 0; pointer-events: none; }
+  .card { width: min(320px, 80vw); padding: 22px 24px; background: var(--glaze);
+    border: 1px solid rgba(255, 194, 74, .6);
+    clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px); }
+  .title { color: var(--gold); font-size: 26px; letter-spacing: .02em; margin-bottom: 14px; }
+  .bar { height: 8px; background: rgba(255, 243, 227, .15); }
+  .fill { height: 100%; width: 0; background: var(--gold); transition: width .2s linear; }
+  /* While the shaders compile the page's main thread is blocked; a transform
+     animation still runs on the compositor, so the bar keeps moving. */
+  .bar { position: relative; overflow: hidden; }
+  .bar.busy::after { content: ''; position: absolute; inset: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255, 243, 227, .75), transparent);
+    animation: sweep 1.1s ease-in-out infinite; will-change: transform; }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) { .bar.busy::after { animation-duration: 3s; } }
+  .msg { margin-top: 10px; font-size: 14px; opacity: .85; min-height: 1.2em; }
+</style>
 </head>
 <body>
-    <div id="game-container">
-        <div id="loading">Loading 4D Game...</div>
-        <canvas id="game-canvas" class="hidden"></canvas>
-        <div id="error"></div>
-    </div>
-
-    <script>
-        // Emscripten module configuration
-        var Module = {
-            canvas: document.getElementById('game-canvas'),
-            onRuntimeInitialized: function() {
-                console.log('4D Game loaded successfully!');
-                document.getElementById('loading').classList.add('hidden');
-                document.getElementById('game-canvas').classList.remove('hidden');
-            },
-            onError: function(error) {
-                console.error('Error loading 4D Game:', error);
-                document.getElementById('loading').textContent = 'Error loading game';
-                document.getElementById('error').textContent = 'Failed to load the game. Please check your browser supports WebGL2.';
-            }
-        };
-
-    </script>
-    {{{ SCRIPT }}}
+<canvas id="canvas" tabindex="-1"></canvas>
+<div id="boot"><div class="card">
+  <div class="title">4D Suika</div>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <div class="msg" id="msg">Loading</div>
+</div></div>
+<script>
+  var canvas = document.getElementById('canvas');
+  var fill = document.getElementById('fill'), msg = document.getElementById('msg');
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  canvas.addEventListener('webglcontextlost', function (e) {
+    e.preventDefault(); msg.textContent = 'The graphics context was lost. Reload to play again.';
+    document.getElementById('boot').classList.remove('done');
+  });
+  if (!document.createElement('canvas').getContext('webgl2'))
+    msg.textContent = 'This browser has no WebGL2, which the game needs.';
+  var holding = false, painted = false;
+  var Module = {
+    canvas: canvas,
+    // Saves (best score, tutorial, view) live in IndexedDB under /persist,
+    // loaded before main runs; FileSystem::writeUserFile syncs after each write.
+    preRun: [function () {
+      FS.mkdir('/persist');
+      FS.mount(IDBFS, {}, '/persist');
+      addRunDependency('persist');
+      FS.syncfs(true, function () { removeRunDependency('persist'); });
+      // Held until everything else has loaded, so the page can show that the
+      // game is compiling its shaders (which blocks it for a few seconds).
+      addRunDependency('paint');
+      holding = true;
+    }],
+    monitorRunDependencies: function (left) {
+      if (left !== 1 || !holding || painted) return;
+      painted = true;
+      fill.style.width = '100%';
+      msg.textContent = 'Preparing graphics';
+      fill.parentNode.classList.add('busy');
+      requestAnimationFrame(function () { requestAnimationFrame(function () { removeRunDependency('paint'); }); });
+    },
+    setStatus: function (s) {
+      var m = s.match(/\((\d+(?:\.\d+)?)\/(\d+)\)/);
+      if (m) fill.style.width = (100 * m[1] / m[2]) + '%';
+      if (s && !painted) msg.textContent = m ? 'Loading' : s.replace(/\.\.\.$/, '');
+    },
+    // Called by the game after it has drawn its first frame.
+    onFirstFrame: function () {
+      canvas.focus();
+      document.getElementById('boot').classList.add('done');
+    },
+    onAbort: function () { msg.textContent = 'The game stopped with an error. Reload to try again.'; }
+  };
+  // Keys go to the game even after a click elsewhere on the page (itch frame).
+  window.addEventListener('pointerdown', function () { canvas.focus(); });
+</script>
+{{{ SCRIPT }}}
 </body>
 </html>

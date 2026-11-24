@@ -76,6 +76,23 @@ inline float fit(TextRenderer& t, const std::string& s, float scale, float maxW)
     float w = t.GetTextWidth(s, scale);
     return w > maxW && w > 0.0f ? scale * maxW / w : scale;
 }
+// Greedy word wrap of s into lines no wider than maxW (a single long word
+// stays on its own line).
+inline std::vector<std::string> wrap(TextRenderer& t, const std::string& s, float scale, float maxW) {
+    std::vector<std::string> lines;
+    std::string line, word;
+    auto flush = [&] {
+        if (word.empty()) return;
+        std::string next = line.empty() ? word : line + " " + word;
+        if (!line.empty() && t.GetTextWidth(next, scale) > maxW) { lines.push_back(line); line = word; }
+        else line = next;
+        word.clear();
+    };
+    for (char c : s) { if (c == ' ') flush(); else word += c; }
+    flush();
+    if (!line.empty()) lines.push_back(line);
+    return lines;
+}
 // Text over the scene: a soft dark halo under it so it reads on sky and grass.
 inline void textOnScene(TextRenderer& t, const std::string& s, float x, float y, float scale, glm::vec3 col, float alpha = 1.0f) {
     float o = std::max(1.0f, scale * 1.6f);
@@ -327,14 +344,23 @@ inline float keyChip(TextRenderer& t, const std::string& key, const std::string&
     return w;
 }
 
-// A row of key chips centred on cx. Returns the total width.
-inline float keyChipRow(TextRenderer& t, const std::vector<std::pair<std::string, std::string>>& chips, float cx, float y, float h,
-                        float alpha) {
-    float gap = h * 0.25f, total = 0.0f;
-    for (auto& c : chips) total += keyChip(t, c.first, c.second, 0, 0, h, alpha, false) + gap;
-    total -= gap;
-    float x = cx - total * 0.5f;
-    for (auto& c : chips) x += keyChip(t, c.first, c.second, x, y, h, alpha) + gap;
-    return total;
+// A row of key chips centred on cx, wrapped to rows no wider than maxW
+// (narrow phone screens); extra rows stack upwards, so y is the last row.
+// Returns the number of rows.
+inline int keyChipRow(TextRenderer& t, const std::vector<std::pair<std::string, std::string>>& chips, float cx, float y, float h,
+                      float alpha, float maxW = 1e9f) {
+    const float gap = h * 0.25f;
+    std::vector<std::pair<size_t, float>> rows; // first chip of each row, row width
+    for (size_t i = 0; i < chips.size(); ++i) {
+        float w = keyChip(t, chips[i].first, chips[i].second, 0, 0, h, alpha, false);
+        if (rows.empty() || rows.back().second + gap + w > maxW) rows.push_back({i, w});
+        else rows.back().second += gap + w;
+    }
+    for (size_t r = 0; r < rows.size(); ++r) {
+        size_t end = r + 1 < rows.size() ? rows[r + 1].first : chips.size();
+        float x = cx - rows[r].second * 0.5f, ry = y - float(rows.size() - 1 - r) * (h + gap);
+        for (size_t i = rows[r].first; i < end; ++i) x += keyChip(t, chips[i].first, chips[i].second, x, ry, h, alpha) + gap;
+    }
+    return int(rows.size());
 }
 }  // namespace ui

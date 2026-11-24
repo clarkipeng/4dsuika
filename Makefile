@@ -5,7 +5,7 @@ CMAKE = cmake
 NICE = nice -n 10
 JOBS = 4
 
-.PHONY: all build run clean package video gameplay turntable view-compare
+.PHONY: all build run clean package video gameplay turntable view-compare web web-serve
 
 all: build
 
@@ -21,6 +21,20 @@ clean:
 
 package: build
 	cd $(BUILD_DIR) && cpack -C Release
+
+# Browser build (docs/web.md): build-web/ holds index.html, .js, .wasm and
+# .data, the files itch takes as the HTML5 build. Uses tools/emsdk when present
+# (gitignored, `git clone https://github.com/emscripten-core/emsdk tools/emsdk`
+# then `./emsdk install 3.1.74 && ./emsdk activate 3.1.74`), else emcmake on PATH.
+EMCMAKE = $(or $(wildcard tools/emsdk/upstream/emscripten/emcmake),emcmake)
+
+web:
+	$(NICE) $(EMCMAKE) $(CMAKE) -S . -B build-web -DCMAKE_BUILD_TYPE=Release
+	$(NICE) $(CMAKE) --build build-web -j $(JOBS)
+	cd build-web && $(CMAKE) -E tar cf web.zip --format=zip index.html index.js index.wasm index.data
+
+web-serve: web
+	cd build-web && python3 -m http.server 8642
 
 # Stitch recorded frames into an mp4: `make video` (see docs/recording.md).
 FRAMES ?= recordings/frames
