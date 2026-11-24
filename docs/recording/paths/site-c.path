@@ -1,0 +1,69 @@
+# Site round 4 (3:2): site-b raised from pitch -26 to -34 so the fruit reads over the opaque bowl's
+# rim. Distance 12; slow drift, then the slice turns through xw/yw/zw and back, every 18 s.
+# Scout (--no-capture) and render with the same --play 0.8 --warmup 10 --fps 30 --size 2400x1600
+# --lane-snap --no-ui --calm-flash --bg-soft 0.
+t=0 yaw=-12 pitch=-34 distance=12
+t=8 yaw=12 pitch=-34 distance=12 ease=linear
+t=12 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=15 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=18 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=26 yaw=12 pitch=-34 distance=12 ease=linear
+t=30 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=33 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=36 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=44 yaw=12 pitch=-34 distance=12 ease=linear
+t=48 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=51 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=54 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=62 yaw=12 pitch=-34 distance=12 ease=linear
+t=66 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=69 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=72 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=80 yaw=12 pitch=-34 distance=12 ease=linear
+t=84 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=87 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=90 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=98 yaw=12 pitch=-34 distance=12 ease=linear
+t=102 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=105 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=108 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=116 yaw=12 pitch=-34 distance=12 ease=linear
+t=120 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=123 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=126 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=134 yaw=12 pitch=-34 distance=12 ease=linear
+t=138 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=141 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=144 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=152 yaw=12 pitch=-34 distance=12 ease=linear
+t=156 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=159 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=162 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=170 yaw=12 pitch=-34 distance=12 ease=linear
+t=174 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=177 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=180 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=188 yaw=12 pitch=-34 distance=12 ease=linear
+t=192 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=195 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=198 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=206 yaw=12 pitch=-34 distance=12 ease=linear
+t=210 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=213 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=216 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=224 yaw=12 pitch=-34 distance=12 ease=linear
+t=228 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=231 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=234 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=242 yaw=12 pitch=-34 distance=12 ease=linear
+t=246 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=249 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=252 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=260 yaw=12 pitch=-34 distance=12 ease=linear
+t=264 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=267 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=270 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
+t=278 yaw=12 pitch=-34 distance=12 ease=linear
+t=282 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear
+t=285 yaw=-10 pitch=-34 distance=12 xw=85 yw=-45 zw=40 ease=linear
+t=288 yaw=-12 pitch=-34 distance=12 xw=0 yw=0 zw=0 ease=linear
