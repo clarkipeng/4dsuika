@@ -1253,13 +1253,13 @@ public:
             {"Move the mouse over the bowl and click to drop a fruit.", "Right-drag turns the camera around the bowl."},
             {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
             {"Everything here is a slice of a 4D world.", "Scroll the wheel, middle-drag, or hold A or D to turn the slice."},
-            {"Fruit off your slice are hidden; the track below places every fruit in w.", "Press H or Space to come back to the default slice."},
+            {"Fruit just off the slice show as dotted rings; the track below places every fruit in w.", "Press H or Space to come back to the default slice."},
         };
         static const char* touchLines[][2] = {
             {"Drag over the bowl and lift your finger to drop a fruit.", "Drag with two fingers to turn the camera around the bowl."},
             {"Two of the same fruit merge into the next one.", "Drop a match next to one already in the bowl."},
             {"Everything here is a slice of a 4D world.", "Twist two fingers to turn the slice."},
-            {"Fruit off your slice are hidden; the track below places every fruit in w.", "Twist back, or tap the home button, to return to the default slice."},
+            {"Fruit just off the slice show as dotted rings; the track below places every fruit in w.", "Twist back, or tap the home button, to return to the default slice."},
         };
         const auto& lines = touchUI ? touchLines : mouseLines;
         const int s = std::min(tutorialStep, kTutorialSteps - 1);
@@ -1751,13 +1751,14 @@ public:
             MenuItem::info("F3", "debug info").sameRow(),
             MenuItem::header("What you see"),
             MenuItem::info("", "solid outline: your next fruit").withSwatch(1),
-            MenuItem::info("", "band: a fruit your slice cuts").withSwatch(2).sameRow(),
-            MenuItem::info("", "band colour: -w, on slice, +w").withSwatch(3),
+            MenuItem::info("", "dots: a fruit just off your slice").withSwatch(2).sameRow(),
+            MenuItem::info("", "band: a fruit your slice cuts").withSwatch(3),
+            MenuItem::info("", "band colour: -w, on slice, +w").withSwatch(4).sameRow(),
         };
         if (!touchUI) return keys;
         // A portrait phone has room for one column and no keyboard: show only
         // the touch gestures and the legend.
-        if (Width < Height) keys.erase(keys.begin(), keys.end() - 4);
+        if (Width < Height) keys.erase(keys.begin(), keys.end() - 5);
         keys.insert(keys.begin(), touch.begin(), touch.end());
         return keys;
     }

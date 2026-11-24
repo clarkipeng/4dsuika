@@ -9,7 +9,7 @@
 //   0  everything in one pass (fallback without float render targets)
 //   1  geometry: trace fruit and world, write hit and normal (G-buffer)
 //   2  lighting at half resolution: shadow and AO of the G-buffer hits
-//   3  compose: materials, light, sky, fog, overlays, grade; lighting is
+//   3  compose: materials, light, sky, fog, hints, grade; lighting is
 //      upsampled from pass 2 with depth-aware weights
 //   4  4D eye retina: four layers of the 3D retina per draw, each texel the
 //      colour and density seen along one 4D ray from the camera
@@ -47,10 +47,13 @@ uniform vec4  uFruitCenters[MAX_FRUIT];
 uniform vec4  uFruitData[MAX_FRUIT]; // radius, type, flash, facet seed
 uniform float uFruitGlow[MAX_FRUIT]; // 0..1, a same-kind fruit is close in 4D
 uniform mat4  uFruitWorldToLocal[MAX_FRUIT]; // rotates (p - centre) into the fruit frame
+uniform int   uHintCount;            // fruit just off the slice
+uniform vec4  uHintCenters[MAX_HINTS]; // centre projected into the slice
+uniform vec4  uHintData[MAX_HINTS];  // radius, type, signed offset from the slice, same-kind glow 0..1
 uniform int   uBurstCount;           // merge bursts
 uniform vec4  uBurstCenters[MAX_BURSTS]; // world centre of the merge
 uniform vec4  uBurstData[MAX_BURSTS]; // fruit radius, type, progress 0..1, power
-uniform float uCues;                // 0 hides depth rings and glow (tutorial, 3D phase)
+uniform float uCues;                // 0 hides depth rings, hints and glow (tutorial, 3D phase)
 uniform float uDanger;               // 0..1, the pile is near the rim
 uniform float uBgSoft;               // 0..1, how much the background is softened (present pass blurs it)
 uniform vec4  uPreviewCenter;        // ghost of the next drop
@@ -480,9 +483,15 @@ vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wra
     return col;
 }
 
-// ---------------------------------------------------------------- overlays
+// ---------------------------------------------------------------- hints
 //
-// How much of an overlay sphere (a merge burst: centre tc along the ray,
+// Fruit just off the slice show as a faint ring where they would appear,
+// in their own colour, tinted cool on the +normal side and warm on the -
+// side, fading with distance from the slice. Rings and a thin fill read as
+// hints, never as solid fruit; behind scene geometry they are fainter, and
+// behind the bowl (which is opaque) they do not show.
+
+// How much of an overlay sphere (a hint or a burst: centre tc along the ray,
 // radius r, the ray passing miss from its centre) shows at this pixel. It sits
 // where the ray meets the sphere, at its silhouette tc for the ring. The bowl
 // is opaque like a real one: nothing shows behind it, nor where the overlay
@@ -498,6 +507,61 @@ float overlayVisible(vec4 ro, vec4 rd, float tc, float miss, float r, float scen
 vec3 depthColor(float offset, float span) {
     vec3 side = offset < 0.0 ? vec3(1.0, 0.31, 0.18) : vec3(0.20, 0.68, 1.0);
     return mix(vec3(1.0, 0.76, 0.32), side, smoothstep(0.0, span, abs(offset)));
+}
+vec3 depthColor(float offset) { return depthColor(offset, 1.5); }
+
+// The hints' look (tuning knobs): how far off the slice a fruit still hints
+// (at most the renderer's kHintRange), dot size and spacing in px, overall
+// strength by distance and for a fruit with a same-kind partner close in 4D,
+// the dark halo and centre fill, and how much shows behind other geometry.
+// The PI's middle ground (2026-11-24): small faint dots, stronger for a fruit
+// with a merge partner, never over a fruit. The old look was 1.5, 4.5, 20,
+// 1, 1, 1, 1, 0.6.
+#define HINT_RANGE 1.5
+#define HINT_DOT_PX 3.5
+#define HINT_SPACING_PX 18.0
+#define HINT_GAIN 0.45
+#define HINT_GLOW_GAIN 1.0
+#define HINT_HALO 0.3
+#define HINT_FILL 0.0
+#define HINT_BEHIND 0.0
+
+vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
+    float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    for (int i = 0; i < NO_UNROLL(MAX_HINTS); ++i) {
+        if (i >= uHintCount) break;
+        vec4 c = uHintCenters[i];
+        vec4 d = uHintData[i];
+        float r = d.x;
+        float tc = dot(c - ro, rd);
+        if (tc <= 0.0) continue;
+        float miss = length(c - ro - rd * tc);
+        // A ring of round dots (never a solid line, which is the held fruit's
+        // ghost outline): dots about 9 px across, one every ~20 px, plus a
+        // whisper of fill.
+        float dotR = max(HINT_DOT_PX * pixel * tc, 0.03 * r);
+        float nDots = clamp(floor(6.2831853 * r / (HINT_SPACING_PX * pixel * tc)), 8.0, 72.0);
+        vec4 delta = ro + rd * tc - c;
+        vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
+        float ang = atan(plane.y, plane.x + 1e-6);
+        float cell = fract(ang * nDots / 6.2831853) - 0.5;
+        vec2 q = vec2(cell * 6.2831853 / nDots * r, miss - r);
+        float dotD = length(q) / dotR;
+        float ring = 1.0 - smoothstep(0.75, 1.0, dotD);
+        float halo = HINT_HALO * 0.5 * exp(-dotD * dotD * 0.6);
+        float fill = HINT_FILL * 0.035 * (1.0 - smoothstep(r - dotR, r, miss));
+        float occluded = overlayVisible(ro, rd, tc, miss, r, sceneDist, bowl, HINT_BEHIND);
+        // Fades to zero HINT_RANGE beyond the slice; a fruit with a same-kind
+        // partner close in 4D hints at up to 90% anywhere within kHintRange.
+        float gap = abs(d.z) - r;
+        float fade = max(1.0 - gap / HINT_RANGE, 0.0);
+        float strength = max(HINT_GAIN * fade, HINT_GLOW_GAIN * 0.9 * d.w);
+        float k = strength * occluded * uCues;
+        vec3 tint = depthColor(d.z);
+        col = mix(col, tint * 0.35, clamp(k * halo * 0.6, 0.0, 0.6));        // dark halo: reads on light fruit
+        col = mix(col, mix(tint, vec3(1.0), 0.25), clamp(k * (ring + fill) * 1.2, 0.0, 0.95));
+    }
+    return col;
 }
 
 // ---------------------------------------------------------------- merge bursts
@@ -539,8 +603,8 @@ vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
         float e = (miss - ringR) / max((2.4 - 1.4 * t) * px, 0.015 * R);
         float ring = abs(off) < R ? exp(-e * e) * BURST_RING : 0.0;
 
-        // Sparks: short radial streaks whose head flies out to S while the
-        // tail catches up.
+        // Sparks: short radial streaks (never round dots, which are the depth
+        // hints) whose head flies out to S while the tail catches up.
         float sparkR = sqrt(S * S - off * off);
         float tailR = sqrt(max(R * R - off * off, 0.0)) * (0.92 + 0.08 * t);
         vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
@@ -576,7 +640,8 @@ vec3 drawDropGhost(vec3 col, vec4 ro, vec4 rd, float dist, vec4 center, float al
     vec3 c = fruitBaseColor(uPreviewData.y) * 1.3 * shade;
     c = mix(c, vec3(1.0, 0.97, 0.9), 0.3 * rim);
     vec3 body = mix(col, c, alpha * (0.6 + 0.3 * rim));
-    // A crisp cream silhouette about 2.5 px wide.
+    // A crisp cream silhouette about 2.5 px wide: the held fruit's outline is
+    // solid, the off-slice hints are dotted, so the two never read alike.
     float radPx = d.x / (pixel * t);
     float k = clamp(sqrt(7.0 / max(radPx, 1.0)), 0.05, 0.9);
     float line = 1.0 - smoothstep(0.55 * k, k, facing);
@@ -777,6 +842,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     vec3 beforeOverlay = col;
 #endif
 
+    col = drawHints(col, ro, rd, dist, h.kind == MAT_BOWL);
     col = drawBursts(col, ro, rd, dist, h.kind == MAT_BOWL);
 
     // Ghosts of the next drop (in the air) and where it lands: the fruit's own
@@ -788,7 +854,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
     }
 
 #ifndef TURNTABLE
-    // Bursts and the drop ghosts drawn over the background stay sharp.
+    // Hints, bursts and the drop ghosts drawn over the background stay sharp.
     if (dot(abs(col - beforeOverlay), vec3(1.0)) > 0.01) gSoft = 0.0;
 #endif
     // The cover art's darker edges.

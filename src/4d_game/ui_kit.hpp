@@ -172,18 +172,23 @@ inline float keycapScale(TextRenderer& t, float h) {
     return h * 0.62f / std::max(t.CapHeight(1.0f), 1.0f);
 }
 // Samples of the 4D cues for the Controls page, radius r around c:
-// 1 the held fruit's ghost (solid cream outline), 2 a fruit the slice cuts
-// (depth band), 3 the band's colours.
+// 1 the held fruit's ghost (solid cream outline), 2 a fruit just off the slice
+// (dotted ring), 3 a fruit the slice cuts (depth band), 4 the band's colours.
 inline void cueSwatch(TextRenderer& t, int kind, glm::vec2 c, float r, float u, float alpha) {
     const glm::vec3 gold(1.0f, 0.76f, 0.32f), coral(1.0f, 0.42f, 0.30f), sky(0.30f, 0.68f, 1.0f), cream(1.0f, 0.96f, 0.86f);
     // On a dark chip, as they appear over the bowl.
-    float cw = kind == 3 ? 2.1f * r : 1.35f * r;
+    float cw = kind == 4 ? 2.1f * r : 1.35f * r;
     t.Shape(UiShape::rect(c.x - cw, c.y - 1.35f * r, 2.0f * cw, 2.7f * r, 1.35f * r).grad(glm::vec3(0.36f, 0.27f, 0.27f), glm::vec3(0.25f, 0.18f, 0.19f), alpha));
     r *= 0.92f;
     if (kind == 1) {
         t.Shape(UiShape::circle(c, r).fill(glm::vec3(0.93f, 0.55f, 0.28f), 0.45f * alpha));
         t.Shape(UiShape::circle(c, r).ring(2.2f * u).fill(cream, alpha));
-    } else if (kind == 2) {
+            } else if (kind == 2) {
+        for (int i = 0; i < 12; ++i) {
+            float a = 6.2832f * i / 12.0f;
+            t.Shape(UiShape::circle(c + r * glm::vec2(std::cos(a), std::sin(a)), 2.4f * u).fill(coral, alpha));
+        }
+    } else if (kind == 3) {
         t.Shape(UiShape::circle(c, r).fill(glm::vec3(0.55f, 0.66f, 0.22f), alpha));
         t.Shape(UiShape::circle(c, r).ring(3.4f * u).fill(gold, alpha));
         t.Shape(UiShape::circle(c, r - 3.4f * u).ring(1.0f * u).fill(kOnGold, 0.5f * alpha));

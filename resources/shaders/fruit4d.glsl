@@ -17,7 +17,7 @@
 //   float fruitSDF(vec4 q, float r, float type, float lod)
 //   vec2  fruitSDFPart(vec4 q, float r, float type, float lod)   distance and the part there (FRUIT_SKIN ...)
 //   vec3  fruitAlbedo(vec4 q, vec4 n, float r, float type, float part, float lod)   linear RGB; n is local
-//   vec3  fruitBaseColor(float type)   one colour per fruit, for bursts and the drop preview
+//   vec3  fruitBaseColor(float type)   one colour per fruit, for hints and the drop preview
 //   float fruitGloss(float type)       specular strength 0..1 for the skin
 //
 // Stems, leaves and crowns are real 4D shapes reaching into w, so they change
@@ -388,7 +388,7 @@ vec3 fruitAlbedo(vec4 q, vec4 n, float r, float type, float part, float lod) {
     return toLinear(c);
 }
 
-// One colour per fruit (the skin's mean), for merge bursts and the drop preview.
+// One colour per fruit (the skin's mean), for depth hints and the drop preview.
 vec3 fruitBaseColor(float type) {
     int t = int(type + 0.5);
     vec3 c = t == 0 ? vec3(0.50, 0.03, 0.09)
