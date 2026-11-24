@@ -97,3 +97,5 @@ Clean captures for a portfolio site (3:2 hover clips and a 16:9 long cut): `--no
 - `--calm-flash` softens the merge flash on the new fruit and caps the summed glow of merge bursts, so a long chain never whites out the bowl; `--bg-soft 0` turns the background softening off (no haze). The game's own look is unchanged without them.
 - Round 4 hover clips: `site-c.path --play 0.8 --warmup 10 --fps 30 --size 2400x1600 --lane-snap --no-ui --calm-flash --bg-soft 0`, downscaled to 1200x800 with no crop.
 - Long cut: `site-long.path --play 1.3 --warmup 10 --fps 30 --size 2560x1440 --lane-snap --no-ui --calm-flash --bg-soft 0 --seconds 60`.
+
+`tools/before-after.sh out.mp4 before1.mp4 after1.mp4 [...]` stacks clips of the same run side by side, labelled, each pair at full speed and then half speed, with crossfades between pairs: the before/after for a visual change to the clips.
