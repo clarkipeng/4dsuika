@@ -1,43 +1,44 @@
-# Site long cut (16:9), framed wide (distance 9-12, like site-b) so the whole bowl and the
-# drop zone show. Six scenes of 7 s (5 s of slow constant move, then 2 s to the next scene),
-# repeated. Scenes: wide, close, turn (xw, yw), high angle, turn (xw, yw, zw), island.
+# Site long cut (16:9): one framing throughout (distance 12, target at the bowl) so the whole
+# bowl and the drop zone show the same size in every scene. Six scenes of 7 s (5 s of slow
+# constant move, then 2 s to the next scene), repeated. Scenes: wide drift, low angle, turn
+# (xw, yw), high angle, turn (xw, yw, zw), drift from the other side.
 # Shots are cut from inside the 5 s moves. The scripted player aims through the camera, so
 # scout and render must use this file with the same --play: --warmup 10 --fps 30 --lane-snap
-# --no-ui, 2560x1440. Times are recording time (game time minus the 10 s warm-up).
+# --no-ui --bg-soft 0, 2560x1440. Times are recording time (game time minus the 10 s warm-up).
 t=0 yaw=-15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
 t=5 yaw=15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=7 yaw=28 pitch=-16 distance=9 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=12 yaw=0 pitch=-16 distance=9 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=14 yaw=10 pitch=-24 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=19 yaw=10 pitch=-24 distance=11.5 ty=0 xw=85 yw=20 zw=0 ease=linear
-t=21 yaw=10 pitch=-50 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=26 yaw=45 pitch=-50 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=28 yaw=-10 pitch=-22 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=33 yaw=-10 pitch=-22 distance=11.5 ty=0 xw=40 yw=-60 zw=35 ease=linear
-t=35 yaw=-35 pitch=-20 distance=26 ty=-1.5 xw=0 yw=0 zw=0 ease=linear
-t=40 yaw=-5 pitch=-20 distance=26 ty=-1.5 xw=0 yw=0 zw=0 ease=linear
+t=7 yaw=28 pitch=-16 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=12 yaw=0 pitch=-16 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=14 yaw=10 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=19 yaw=10 pitch=-24 distance=12 ty=0 xw=85 yw=20 zw=0 ease=linear
+t=21 yaw=10 pitch=-50 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=26 yaw=45 pitch=-50 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=28 yaw=-10 pitch=-22 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=33 yaw=-10 pitch=-22 distance=12 ty=0 xw=40 yw=-60 zw=35 ease=linear
+t=35 yaw=-50 pitch=-26 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=40 yaw=-25 pitch=-26 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
 t=42 yaw=-15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
 t=47 yaw=15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=49 yaw=28 pitch=-16 distance=9 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=54 yaw=0 pitch=-16 distance=9 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=56 yaw=10 pitch=-24 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=61 yaw=10 pitch=-24 distance=11.5 ty=0 xw=85 yw=20 zw=0 ease=linear
-t=63 yaw=10 pitch=-50 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=68 yaw=45 pitch=-50 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=70 yaw=-10 pitch=-22 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=75 yaw=-10 pitch=-22 distance=11.5 ty=0 xw=40 yw=-60 zw=35 ease=linear
-t=77 yaw=-35 pitch=-20 distance=26 ty=-1.5 xw=0 yw=0 zw=0 ease=linear
-t=82 yaw=-5 pitch=-20 distance=26 ty=-1.5 xw=0 yw=0 zw=0 ease=linear
+t=49 yaw=28 pitch=-16 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=54 yaw=0 pitch=-16 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=56 yaw=10 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=61 yaw=10 pitch=-24 distance=12 ty=0 xw=85 yw=20 zw=0 ease=linear
+t=63 yaw=10 pitch=-50 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=68 yaw=45 pitch=-50 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=70 yaw=-10 pitch=-22 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=75 yaw=-10 pitch=-22 distance=12 ty=0 xw=40 yw=-60 zw=35 ease=linear
+t=77 yaw=-50 pitch=-26 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=82 yaw=-25 pitch=-26 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
 t=84 yaw=-15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
 t=89 yaw=15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=91 yaw=28 pitch=-16 distance=9 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=96 yaw=0 pitch=-16 distance=9 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=98 yaw=10 pitch=-24 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=103 yaw=10 pitch=-24 distance=11.5 ty=0 xw=85 yw=20 zw=0 ease=linear
-t=105 yaw=10 pitch=-50 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=110 yaw=45 pitch=-50 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=112 yaw=-10 pitch=-22 distance=11.5 ty=0 xw=0 yw=0 zw=0 ease=linear
-t=117 yaw=-10 pitch=-22 distance=11.5 ty=0 xw=40 yw=-60 zw=35 ease=linear
-t=119 yaw=-35 pitch=-20 distance=26 ty=-1.5 xw=0 yw=0 zw=0 ease=linear
-t=124 yaw=-5 pitch=-20 distance=26 ty=-1.5 xw=0 yw=0 zw=0 ease=linear
+t=91 yaw=28 pitch=-16 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=96 yaw=0 pitch=-16 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=98 yaw=10 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=103 yaw=10 pitch=-24 distance=12 ty=0 xw=85 yw=20 zw=0 ease=linear
+t=105 yaw=10 pitch=-50 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=110 yaw=45 pitch=-50 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=112 yaw=-10 pitch=-22 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=117 yaw=-10 pitch=-22 distance=12 ty=0 xw=40 yw=-60 zw=35 ease=linear
+t=119 yaw=-50 pitch=-26 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
+t=124 yaw=-25 pitch=-26 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear
 t=126 yaw=-15 pitch=-24 distance=12 ty=0 xw=0 yw=0 zw=0 ease=linear

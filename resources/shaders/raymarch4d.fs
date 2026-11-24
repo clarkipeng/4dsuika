@@ -56,6 +56,7 @@ uniform vec4  uBurstData[MAX_BURSTS]; // fruit radius, type, progress 0..1, powe
 uniform float uCues;                // 0 hides depth rings, hints and glow (tutorial, 3D phase)
 uniform float uDanger;               // 0..1, the pile is near the rim
 uniform float uBgSoft;               // 0..1, how much the background is softened (present pass blurs it)
+uniform float uCalmFlash;            // 1: capture-only softer merge flash and burst sum (--calm-flash)
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform mat4  uPreviewWorldToLocal;  // the next fruit's real orientation
@@ -539,6 +540,7 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
 
 vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
+    vec3 glow = vec3(0.0);
     for (int i = 0; i < NO_UNROLL(MAX_BURSTS); ++i) {
         if (i >= uBurstCount) break;
         vec4 d = uBurstData[i];
@@ -564,9 +566,18 @@ vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
         float fade = pow(1.0 - t, 1.4) * d.w;
         float occluded = tc - section > sceneDist ? (bowl ? 0.0 : 0.35) : 1.0;
         vec3 tint = mix(fruitBaseColor(d.y) * 1.6, vec3(1.0, 0.95, 0.78), 0.55);
-        col += tint * (1.1 * ring + 0.55 * sparks + 1.2 * flash) * fade * occluded;
+        // --calm-flash: a combo brightens the ring and sparks only; the centre
+        // flash stays at a single merge's strength so it never hides the fruit.
+        float flashFade = uCalmFlash > 0.5 ? pow(1.0 - t, 1.4) * min(d.w, 1.0) * 0.3 : fade;
+        glow += tint * ((1.1 * ring + 0.55 * sparks) * fade + 1.2 * flash * flashFade) * occluded;
     }
-    return col;
+    if (uCalmFlash < 0.5) return col + glow;
+    // --calm-flash: overlapping bursts (a chain) add up; a soft knee (linear up
+    // to 0.25, easing to 0.45) and a screen blend keep their sum from washing
+    // the bowl and the new fruit out to white.
+    float m = max(glow.r, max(glow.g, glow.b));
+    if (m > 0.25) glow *= (0.25 + 0.2 * (1.0 - exp(-(m - 0.25) / 0.2))) / m;
+    return col + glow * (1.0 - clamp(col, 0.0, 1.0));
 }
 
 // A translucent copy of the next fruit (same model and SDF, same orientation)
@@ -727,7 +738,8 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         // Plus a soft fill from the viewer, so the side we see is never just
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
-        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill) + d.z * vec3(1.0, 0.9, 0.7);
+        col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill)
+            + d.z * (uCalmFlash > 0.5 ? 0.3 * mix(albedo, vec3(1.0, 0.9, 0.7), 0.5) : vec3(1.0, 0.9, 0.7));
         // Same-kind glow: a pulsing light rim on the fruit itself (so it follows
         // the real silhouette), faster the closer its partner is in 4D.
         float glow = uFruitGlow[fruit] * uCues;
