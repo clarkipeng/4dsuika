@@ -492,6 +492,19 @@ vec3 shade(vec4 p, vec4 n, vec4 ns, vec4 rd, vec3 albedo, float gloss, float wra
 // hints, never as solid fruit; behind scene geometry they are fainter, and
 // behind the bowl (which is opaque) they do not show.
 
+// How much of an overlay sphere (a hint or a burst: centre tc along the ray,
+// radius r, the ray passing miss from its centre) shows at this pixel. It sits
+// where the ray meets the sphere, at its silhouette tc for the ring. The bowl
+// is opaque like a real one: nothing shows behind it, nor where the overlay
+// reaches out through the wall below the lip; behind other geometry it keeps
+// `behind`.
+float overlayVisible(vec4 ro, vec4 rd, float tc, float miss, float r, float sceneDist, bool bowl, float behind) {
+    float t = tc - sqrt(max(r * r - miss * miss, 0.0));
+    vec4 p = ro + rd * t;
+    float outside = smoothstep(BOWL_IN - 0.02, BOWL_IN + 0.02, length(p)) * (1.0 - smoothstep(0.0, 0.16, p.y));
+    return (1.0 - outside) * (t > sceneDist ? (bowl ? 0.0 : behind) : 1.0);
+}
+
 vec3 depthColor(float offset, float span) {
     vec3 side = offset < 0.0 ? vec3(1.0, 0.31, 0.18) : vec3(0.20, 0.68, 1.0);
     return mix(vec3(1.0, 0.76, 0.32), side, smoothstep(0.0, span, abs(offset)));
@@ -522,7 +535,7 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
         float ring = 1.0 - smoothstep(0.75, 1.0, dotD);
         float halo = 0.5 * exp(-dotD * dotD * 0.6);
         float fill = 0.035 * (1.0 - smoothstep(r - dotR, r, miss));
-        float occluded = tc - r > sceneDist ? (bowl ? 0.0 : 0.6) : 1.0;
+        float occluded = overlayVisible(ro, rd, tc, miss, r, sceneDist, bowl, 0.6);
         float k = d.w * occluded * uCues;
         vec3 tint = depthColor(d.z);
         col = mix(col, tint * 0.35, clamp(k * halo * 0.6, 0.0, 0.6));        // dark halo: reads on light fruit
@@ -564,7 +577,7 @@ vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
                        * (1.0 - smoothstep(section * 0.75, section * 1.05, miss));
         float flash = exp(-miss * miss / (d.x * d.x * 0.9)) * (1.0 - smoothstep(0.0, 0.4, t));
         float fade = pow(1.0 - t, 1.4) * d.w;
-        float occluded = tc - section > sceneDist ? (bowl ? 0.0 : 0.35) : 1.0;
+        float occluded = overlayVisible(ro, rd, tc, miss, section, sceneDist, bowl, 0.35);
         vec3 tint = mix(fruitBaseColor(d.y) * 1.6, vec3(1.0, 0.95, 0.78), 0.55);
         // --calm-flash: a combo brightens the ring and sparks only; the centre
         // flash stays at a single merge's strength so it never hides the fruit.
