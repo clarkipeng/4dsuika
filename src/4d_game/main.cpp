@@ -97,7 +97,6 @@ Game game(SCREEN_WIDTH, SCREEN_HEIGHT);
 //   --tutorial N           start the tutorial at step N (0 aim, 1 merge, 2 turn, 3 return), for stills
 //   --photo N              enter photo mode once N frames are recorded, replaying from the start (P in game)
 //   --no-ui                scene only: no HUD, depth strip, labels or caption (site clips)
-//   --calm-flash           softer merge flash and capped burst glow, so a chain never whites out (site clips)
 //   --log-events           print merges and danger as EV lines on stderr (to pick moments)
 //   --no-capture           with --record: write no frames (scout a play run for moments with --log-events)
 //   --capture-from s       with --record: simulate from the start but write frames only from s (recording time)
@@ -153,7 +152,7 @@ struct Options {
     bool noGlow = false;
     float bgSoft = -1.0f;
     float targetY = Camera4D::kDefaultTargetY;
-    bool noUi = false, logEvents = false, noCapture = false, calmFlash = false;
+    bool noUi = false, logEvents = false, noCapture = false;
     float captureFrom = 0.0f;
     std::vector<std::pair<float, float>> captureRanges;   // --capture-ranges a-b,c-d
     bool noFx = false;
@@ -225,7 +224,6 @@ static Options parseOptions(int argc, char* argv[]) {
         else if (a == "--bg-soft") o.bgSoft = float(std::atof(next().c_str()));
         else if (a == "--no-fx") o.noFx = true;
         else if (a == "--no-ui") o.noUi = true;
-        else if (a == "--calm-flash") o.calmFlash = true;
         else if (a == "--log-events") o.logEvents = true;
         else if (a == "--capture-ranges") {
             std::stringstream ss(next());
@@ -860,7 +858,6 @@ static int runHeadless(GLFWwindow* window, const Options& o) {
     if (o.bgSoft >= 0.0f) game.renderer.bgSoft = std::min(o.bgSoft, 1.0f);
     game.effectsOn = !o.noFx;
     game.hideUI = o.noUi;
-    game.renderer.calmFlash = o.calmFlash;
     game.renderer.showGizmo = false;  // F3 shows it (Game::RenderScene)
     game.logEvents = o.logEvents;
     game.dangerOverride = o.danger;

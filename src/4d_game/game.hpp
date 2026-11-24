@@ -175,7 +175,7 @@ public:
     float comboTimer = 0.0f, comboPop = 0.0f;
     float danger = 0.0f;
     float dangerOverride = -1.0f;      // --danger v: hold the level for review stills
-    static constexpr float kComboWindow = 0.7f, kBurstSeconds = 1.0f, kRimY = 0.1f;
+    static constexpr float kComboWindow = 0.7f, kBurstSeconds = 0.4f, kRimY = 0.1f;
     bool showDepthStrip = true;        // V: bottom strip of depth along the slice normal
 
     // Fruit sheet (headless --fruit-sheet): fixed fruit instead of physics, labelled.
@@ -806,7 +806,11 @@ public:
         for (int i = 0; i < MAX_OBJECTS; i++) {
             if (!physics_solver->has_obj[i] || physics_solver->objects[i].hidden) continue;
             const PhysicsObject& obj = physics_solver->objects[i];
-            fruit.push_back({obj.position, obj.radius, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
+            // A merged fruit pops: it overshoots its size by up to 8% and
+            // settles as its merge flash fades (drawn only; physics is unchanged).
+            float u = 1.0f - obj.flash;
+            float pop = 1.0f + 0.12f * std::sin(3.14159265f * u) * (1.0f - u);
+            fruit.push_back({obj.position, obj.radius * pop, int(obj.fruit), obj.flash, i, obj.worldToLocalFrame()});
         }
         return fruit;
     }

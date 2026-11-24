@@ -1,7 +1,7 @@
 # Site round 4 (3:2): site-b raised from pitch -26 to -34 so the fruit reads over the opaque bowl's
 # rim. Distance 12; slow drift, then the slice turns through xw/yw/zw and back, every 18 s.
 # Scout (--no-capture) and render with the same --play 0.8 --warmup 10 --fps 30 --size 2400x1600
-# --lane-snap --no-ui --calm-flash --bg-soft 0.
+# --lane-snap --no-ui --bg-soft 0.
 t=0 yaw=-12 pitch=-34 distance=12
 t=8 yaw=12 pitch=-34 distance=12 ease=linear
 t=12 yaw=12 pitch=-34 distance=12 xw=85 yw=20 ease=linear

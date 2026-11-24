@@ -56,7 +56,6 @@ uniform vec4  uBurstData[MAX_BURSTS]; // fruit radius, type, progress 0..1, powe
 uniform float uCues;                // 0 hides depth rings, hints and glow (tutorial, 3D phase)
 uniform float uDanger;               // 0..1, the pile is near the rim
 uniform float uBgSoft;               // 0..1, how much the background is softened (present pass blurs it)
-uniform float uCalmFlash;            // 1: capture-only softer merge flash and burst sum (--calm-flash)
 uniform vec4  uPreviewCenter;        // ghost of the next drop
 uniform vec4  uPreviewData;          // radius (0 = none), type
 uniform mat4  uPreviewWorldToLocal;  // the next fruit's real orientation
@@ -546,10 +545,17 @@ vec3 drawHints(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
 
 // ---------------------------------------------------------------- merge bursts
 //
-// A merge sends out a shell in 4D, from the fruit's radius to about 2.6 times
-// it. The slice sees the shell's cross-section, a ring that grows, thins and
-// fades, with sparks along it and a flash at the middle early on. A shell
-// the slice misses does not show, which is the point: turn to where it went.
+// A merge pops: a 4D shell snaps out from the new fruit's surface to
+// 1 + BURST_REACH times its radius and is gone (the game runs it over
+// kBurstSeconds), with BURST_SPARKS short streaks flying a little further. The slice sees the shell's cross-section, a thin ring; a shell the
+// slice misses does not show, which is the point: turn to where it went. A
+// combo brightens it a little, never grows it, and the glow is screen-blended
+// so overlapping bursts never wash out to white.
+#ifndef BURST_REACH
+#define BURST_REACH 0.45
+#define BURST_RING 1.0
+#define BURST_SPARKS 10.0
+#endif
 
 vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
     float pixel = 2.0 * uTanHalfFov / uResolution.y;
@@ -558,39 +564,39 @@ vec3 drawBursts(vec3 col, vec4 ro, vec4 rd, float sceneDist, bool bowl) {
         if (i >= uBurstCount) break;
         vec4 d = uBurstData[i];
         float t = d.z;
-        float grow = 1.0 - (1.0 - t) * (1.0 - t);
-        float R = d.x * (1.0 + 1.6 * grow);
+        float ease = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+        float R = d.x * (1.0 + BURST_REACH * ease);         // ring
+        float S = d.x * (1.0 + 1.5 * BURST_REACH * ease);   // sparks
         float off = dot(uBurstCenters[i] - ro, uCameraBasis[3]);
-        if (abs(off) >= R) continue;
+        if (abs(off) >= S) continue;
         vec4 c = uBurstCenters[i] - off * uCameraBasis[3];
         float tc = dot(c - ro, rd);
         if (tc <= 0.0) continue;
-        float section = sqrt(R * R - off * off);
+        float px = pixel * tc;
         vec4 delta = ro + rd * tc - c;
         float miss = length(delta);
-        float width = max((3.5 - 2.0 * t) * pixel * tc, 0.04 * R);
-        float e = (miss - section) / width;
-        float ring = exp(-e * e);
+        float fade = (1.0 - t) * (1.0 - t) * (0.75 + 0.25 * min(d.w, 2.0));
+        vec3 tint = mix(fruitBaseColor(d.y) * 1.4, vec3(1.0, 0.95, 0.8), 0.5);
+
+        float ringR = sqrt(max(R * R - off * off, 0.0));
+        float e = (miss - ringR) / max((2.4 - 1.4 * t) * px, 0.015 * R);
+        float ring = abs(off) < R ? exp(-e * e) * BURST_RING : 0.0;
+
+        // Sparks: short radial streaks (never round dots, which are the depth
+        // hints) whose head flies out to S while the tail catches up.
+        float sparkR = sqrt(S * S - off * off);
+        float tailR = sqrt(max(R * R - off * off, 0.0)) * (0.92 + 0.08 * t);
         vec2 plane = vec2(dot(delta, uCameraBasis[0]), dot(delta, uCameraBasis[1]));
         float ang = atan(plane.y, plane.x + 1e-6);
-        float sparks = exp(-4.0 * pow(abs(sin(7.0 * ang + 3.0 * t)), 0.5)) * smoothstep(-section * 0.1, section * 0.5, miss)
-                       * (1.0 - smoothstep(section * 0.75, section * 1.05, miss));
-        float flash = exp(-miss * miss / (d.x * d.x * 0.9)) * (1.0 - smoothstep(0.0, 0.4, t));
-        float fade = pow(1.0 - t, 1.4) * d.w;
-        float occluded = overlayVisible(ro, rd, tc, miss, section, sceneDist, bowl, 0.35);
-        vec3 tint = mix(fruitBaseColor(d.y) * 1.6, vec3(1.0, 0.95, 0.78), 0.55);
-        // --calm-flash: a combo brightens the ring and sparks only; the centre
-        // flash stays at a single merge's strength so it never hides the fruit.
-        float flashFade = uCalmFlash > 0.5 ? pow(1.0 - t, 1.4) * min(d.w, 1.0) * 0.3 : fade;
-        glow += tint * ((1.1 * ring + 0.55 * sparks) * fade + 1.2 * flash * flashFade) * occluded;
+        float cell = fract(ang * BURST_SPARKS / 6.2831853 + fract(d.y * 0.37)) - 0.5;
+        float across = abs(cell * 6.2831853 / BURST_SPARKS * miss) / max(1.4 * px, 0.012 * d.x);
+        float along = smoothstep(tailR, mix(tailR, sparkR, 0.3), miss) * (1.0 - smoothstep(sparkR - px, sparkR + px, miss));
+        float sparks = BURST_SPARKS > 0.0 ? (1.0 - smoothstep(0.5, 1.0, across)) * along * 1.2 : 0.0;
+
+        glow += tint * fade * (ring * overlayVisible(ro, rd, tc, miss, ringR, sceneDist, bowl, 0.35)
+                             + sparks * overlayVisible(ro, rd, tc, miss, sparkR, sceneDist, bowl, 0.35));
     }
-    if (uCalmFlash < 0.5) return col + glow;
-    // --calm-flash: overlapping bursts (a chain) add up; a soft knee (linear up
-    // to 0.25, easing to 0.45) and a screen blend keep their sum from washing
-    // the bowl and the new fruit out to white.
-    float m = max(glow.r, max(glow.g, glow.b));
-    if (m > 0.25) glow *= (0.25 + 0.2 * (1.0 - exp(-(m - 0.25) / 0.2))) / m;
-    return col + glow * (1.0 - clamp(col, 0.0, 1.0));
+    return col + min(glow, vec3(1.0)) * (1.0 - clamp(col, 0.0, 1.0));
 }
 
 // A translucent copy of the next fruit (same model and SDF, same orientation)
@@ -752,7 +758,7 @@ vec3 compose(vec2 px, vec4 ro, vec4 rd, Hit h, vec2 light) {
         // the shadow side of a back-lit fruit.
         float fill = 0.35 * max(dot(n, -rd), 0.0);
         col = shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, light) + albedo * (0.18 + fill)
-            + d.z * (uCalmFlash > 0.5 ? 0.3 * mix(albedo, vec3(1.0, 0.9, 0.7), 0.5) : vec3(1.0, 0.9, 0.7));
+            + d.z * 0.35 * mix(albedo, vec3(1.0, 0.9, 0.7), 0.5);
         // Same-kind glow: a pulsing light rim on the fruit itself (so it follows
         // the real silhouette), faster the closer its partner is in 4D.
         float glow = uFruitGlow[fruit] * uCues;
@@ -895,7 +901,7 @@ vec4 eyeFruitColour(int i, vec4 ro, vec4 rd, float t, float lod, vec4 nl, float 
     vec3 albedo = fruitAlbedo(q, normalize(nl), d.x, d.y, part, lod);
     float fill = 0.35 * max(dot(n, -rd), 0.0);
     return vec4(shade(p, n, ns, rd, albedo, fruitGloss(d.y), 0.0, vec2(1.0)) + albedo * (0.18 + fill) +
-                d.z * vec3(1.0, 0.9, 0.7), 1.0);
+                d.z * 0.35 * mix(albedo, vec3(1.0, 0.9, 0.7), 0.5), 1.0);
 }
 
 // Colour (display space) and density seen along a 4D ray.
