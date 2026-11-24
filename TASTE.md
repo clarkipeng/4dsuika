@@ -14,3 +14,4 @@ Read `~/.agentworld/lab/taste.md` first; this file refines it for this repo.
 - Keep the v1.0 in-theme UI language.
 - Nothing shows through the bowl that shouldn't.
 - Put a before/after on the wall for every visual change.
+- The site card's resting image is Clark's original illustrated cover (#4), not gameplay; gameplay clips play only on hover.
