@@ -93,7 +93,7 @@ site-clips:
 		--no-ui --bg-soft 0 --seconds 261 --capture-ranges $(SITE_RANGES) --log-events 2> $(SITE_DIR)/events.log
 	for c in $(SITE_CLIPS); do set -- $$(echo $$c | tr : ' '); \
 		$(FFMPEG) -nostdin -loglevel error -y -framerate 30 -start_number $$2 -i $(SITE_DIR)/frames/frame_%06d.png -frames:v $$3 \
-			-vf scale=1200:800:flags=lanczos,format=yuv420p -an -c:v libx264 -profile:v high -preset slow -crf 23 \
+			-vf scale=1200:800:flags=lanczos,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709 -an -c:v libx264 -profile:v high -preset slow -crf 23 \
 			-maxrate 2M -bufsize 4M -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
 			-movflags +faststart $(SITE_DIR)/$$1.mp4 || exit 1; \
 	done
