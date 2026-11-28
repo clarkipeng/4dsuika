@@ -71,7 +71,6 @@ public:
     int viewportX = 0;                        // where in the target the frame is presented (photo mode draws two side by side)
     bool showGizmo = true;                    // false: no corner axis gizmo (--no-ui captures)
     float bgSoft = 0.8;                       // 0..1, softened background (sky and world away from the bowl)
-    bool calmFlash = false;                   // --calm-flash (captures): softer merge flash and burst sum
     bool cues4D = true;                       // false: no depth rings, hints, glow or slice indicator (the 3D start of the tutorial)
     bool sameKindGlow = true;                 // Settings > Merge glow, --no-glow
     static constexpr float kGlowRange = 1.0f; // 4D gap between same-kind fruit where the glow starts
@@ -608,7 +607,6 @@ private:
         }
         glUniform1f(loc(prog, "uDanger"), danger_);
         glUniform1f(loc(prog, "uBgSoft"), bgSoft);
-        glUniform1f(loc(prog, "uCalmFlash"), calmFlash ? 1.0f : 0.0f);
         glUniform1f(loc(prog, "uCues"), cues4D ? 1.0f : 0.0f);
     }
 
@@ -655,8 +653,7 @@ private:
             float off = glm::dot(f.center - camPos, normal);
             float gap = nearby[i].first;
             hc[i] = f.center - off * normal; // projected into the slice
-            float strength = 1.0f - gap / kHintRange;
-            hd[i] = glm::vec4(f.radius, float(f.type), off, std::max(strength, 0.9f * glowOf(f)));
+            hd[i] = glm::vec4(f.radius, float(f.type), off, glowOf(f)); // the shader sets the strength
         }
         glUniform1i(loc(prog, "uHintCount"), h);
         if (h > 0) {
